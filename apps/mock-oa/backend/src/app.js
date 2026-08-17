@@ -4,6 +4,7 @@ import session from 'express-session';
 import { SESSION } from './constants.js';
 import { getCsrfToken } from './middleware/csrf.js';
 import { apiDelay } from './middleware/delay.js';
+import { createBusinessRouter } from './routes/business.js';
 
 const PUBLIC_API_PATHS = new Set(['/api/login', '/api/session', '/api/csrf']);
 
@@ -66,6 +67,8 @@ export function createApp() {
   app.get('/api/_debug/forbidden', (_request, response) => {
     response.status(403).json({ code: 403, msg: '无权限' });
   });
+
+  app.use('/api', createBusinessRouter());
 
   return app;
 }
