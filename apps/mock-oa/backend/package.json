@@ -1,0 +1,16 @@
+{
+  "name": "mock-oa-backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "build": "node --check src/app.js && node --check src/server.js",
+    "test": "vitest run --root ../../.. apps/mock-oa/backend/src"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "express-session": "^1.18.1"
+  }
+}
