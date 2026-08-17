@@ -9,5 +9,9 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --root ../.. packages/core/src --passWithNoTests",
     "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76"
   }
 }
