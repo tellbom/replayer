@@ -5,7 +5,8 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo",
     "paths": {
-      "@dsh/core": ["packages/core/dist/index.d.ts"]
+      "@dsh/core": ["packages/core/dist/index.d.ts"],
+      "@dsh/replayer": ["packages/replayer/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts"]

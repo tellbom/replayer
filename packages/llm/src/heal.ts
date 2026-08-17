@@ -1,5 +1,6 @@
-import { LocatorStrategySchema, RETRY } from '@dsh/core';
-import type { HealCandidate, ILLMProvider, LocatorStrategy, Step } from '@dsh/core';
+import { commitHeal, LocatorStrategySchema, RETRY } from '@dsh/core';
+import type { ExecContext, HealCandidate, ILLMProvider, LocatorStrategy, Skill, Step, StepResult } from '@dsh/core';
+import { executePostcondition, executeUiStep, runAssertions } from '@dsh/replayer';
 import type { Page } from 'playwright';
 import { z } from 'zod';
 
@@ -16,6 +17,17 @@ export interface ProposeHealContext {
   step: Step;
   error: Error;
   snapshot: string;
+}
+
+export interface ExecuteHealContext {
+  page: Page;
+  skill: Skill;
+  skillPath: string;
+  candidate: HealCandidate;
+  context: ExecContext;
+  reason: string;
+  onConfirm?: (step: Step, context: ExecContext) => Promise<boolean>;
+  assertionRaw?: StepResult['raw'];
 }
 
 /** Propose and verify a replacement locator without executing the associated action. */
@@ -60,6 +72,43 @@ export async function proposeHeal(ctx: ProposeHealContext): Promise<HealCandidat
     };
   }
   return null;
+}
+
+/** Confirm, execute, verify and finally persist a resolve-verified repair. */
+export async function executeHeal(ctx: ExecuteHealContext): Promise<HealCandidate | null> {
+  if (!ctx.candidate.resolveVerified || ctx.candidate.actionVerified) {
+    throw new Error('自愈执行要求仅完成定位验证的候选');
+  }
+  const original = ctx.skill.steps.find((step) => step.id === ctx.candidate.stepId);
+  if (!original?.ui) throw new Error(`技能中不存在可执行的 UI 步骤: ${ctx.candidate.stepId}`);
+  const requiresConfirm = original.riskLevel !== 'read' || original.hasSideEffect;
+  if (ctx.candidate.requiresConfirm !== requiresConfirm) {
+    throw new Error('自愈候选的确认标记与步骤风险不一致');
+  }
+  if (requiresConfirm) {
+    const accepted = ctx.onConfirm ? await ctx.onConfirm(original, ctx.context) : false;
+    if (!accepted) return null;
+  }
+  const healedStep: Step = {
+    ...original,
+    ui: { ...original.ui, target: ctx.candidate.newTarget },
+  };
+  const result = await executeUiStep(ctx.page, healedStep, ctx.context, ctx.skill.params);
+  if (!result.ok) return null;
+
+  const postcondition = original.postcondition ?? ctx.skill.postcondition;
+  if (original.hasSideEffect) {
+    if (!postcondition) throw new Error(`副作用步骤 ${original.id} 缺少 postcondition`);
+    const resolution = await executePostcondition(ctx.page, postcondition, ctx.context, ctx.skill.params);
+    if (resolution.found !== resolution.expectFound) return null;
+  }
+  if (ctx.skill.assertions.length > 0) {
+    if (!ctx.assertionRaw) throw new Error('技能包含断言，但自愈执行没有可供断言的响应');
+    runAssertions(ctx.skill.assertions, ctx.assertionRaw, ctx.context);
+  }
+  const verified = { ...ctx.candidate, actionVerified: true };
+  await commitHeal(ctx.skillPath, verified, ctx.reason);
+  return verified;
 }
 
 function stepTarget(step: Step): LocatorStrategy | null {
