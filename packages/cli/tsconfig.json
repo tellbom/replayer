@@ -5,6 +5,7 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo",
     "paths": {
+      "@dsh/analyzer": ["packages/analyzer/dist/index.d.ts"],
       "@dsh/browser": ["packages/browser/dist/index.d.ts"],
       "@dsh/core": ["packages/core/dist/index.d.ts"],
       "@dsh/recorder": ["packages/recorder/dist/index.d.ts"]

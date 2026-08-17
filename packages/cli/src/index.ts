@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 
+import { configureAnalyzeCommand } from './analyze.js';
 import { runDoctor } from './doctor.js';
 import { configureDiffCommand } from './diff.js';
 import { configureRecordCommand } from './record.js';
@@ -9,6 +10,7 @@ import { configureRecordCommand } from './record.js';
 const program = new Command();
 
 program.name('dsh').description('DSH Recorder CLI');
+configureAnalyzeCommand(program);
 program
   .command('doctor')
   .description('检查浏览器载体与内网迁移前置条件')
