@@ -76,6 +76,21 @@ export async function ensureLoggedIn(page: Page, auth: AuthConfig): Promise<void
   throw new LoginTimeoutError(`等待用户登录超时: ${auth.loginTimeoutMs}ms`);
 }
 
+export async function recoverAuthentication(page: Page, auth: AuthConfig): Promise<void> {
+  await ensureLoggedIn(page, auth);
+}
+
+export function classifyAuthFromResponse(
+  status: number,
+  url: string,
+  auth: AuthConfig,
+): AuthState | null {
+  if (status === 403) return 'forbidden';
+  if (status === 401) return 'unauthenticated';
+  if (auth.loginUrlPatterns.some((pattern) => url.includes(pattern))) return 'unauthenticated';
+  return null;
+}
+
 async function showLoginHint(page: Page): Promise<void> {
   await page.evaluate(() => {
     const hint = document.createElement('div');
