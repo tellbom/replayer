@@ -3,6 +3,7 @@ import { StepExecutionError } from '@dsh/core';
 import type { ExecContext, RunResult, Skill, Step } from '@dsh/core';
 
 import { executePreflights } from './preflight.js';
+import { executeNetworkStep } from './channel-network.js';
 
 export interface ReplayOptions {
   // 冻结契约允许任意参数值。
@@ -34,13 +35,34 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
       baseUrl: skill.skill.baseUrl,
     };
     await executePreflights(page, skill.preflight, executionContext);
-    if (skill.steps.length > 0) {
-      throw new StepExecutionError('回放执行器尚未接入当前编排');
+    const stepResults = [];
+    for (const step of skill.steps) {
+      if (step.hasSideEffect && opts.onConfirm) {
+        const confirmed = await opts.onConfirm(step, executionContext);
+        if (!confirmed) {
+          stepResults.push({
+            stepId: step.id,
+            ok: false,
+            outcome: 'not_sent' as const,
+            channelUsed: 'network' as const,
+            durationMs: 0,
+            error: '用户取消执行',
+          });
+          break;
+        }
+      }
+      const channel = opts.forceChannel ?? step.channel;
+      if (channel !== 'network' || !step.network) {
+        throw new StepExecutionError(`当前任务尚未支持通道: ${channel}`);
+      }
+      const result = await executeNetworkStep(page, step, executionContext, skill.params);
+      stepResults.push(result);
+      if (!result.ok) break;
     }
     return {
-      ok: true,
+      ok: stepResults.every((result) => result.ok),
       skillId: skill.skill.id,
-      steps: [],
+      steps: stepResults,
       extracted: executionContext.vars,
     };
   } finally {
