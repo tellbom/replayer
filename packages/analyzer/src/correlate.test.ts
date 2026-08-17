@@ -59,6 +59,51 @@ describe('correlate', () => {
     expect(owners).toHaveLength(1);
     expect(owners[0]?.action?.type).toBe('fill');
   });
+
+  it('detects approverId and approvalToken dependencies and the final submit', () => {
+    const token = '<REDACTED:sha256:123456789abc>';
+    const session = baseSession();
+    session.actions = [{ ts: 1_000, type: 'select' }, { ts: 2_000, type: 'click' }];
+    session.network = [
+      {
+        ...request('approver', 1_100, 1_200),
+        responseBody: JSON.stringify({ approverId: 1023, approvalToken: token }),
+      },
+      {
+        ...request('submit', 2_100, 2_200),
+        postData: JSON.stringify({
+          type: 'workday',
+          approverId: 1023,
+          approvalToken: token,
+        }),
+      },
+    ];
+
+    const steps = correlate(session);
+    const submit = steps.flatMap((step) => step.requests).find((item) => item.requestId === 'submit');
+    expect(submit?.dependsOn).toEqual(
+      expect.arrayContaining([
+        { from: 'approver', path: '$.approverId', to: 'body.approverId' },
+        { from: 'approver', path: '$.approvalToken', to: 'body.approvalToken' },
+      ]),
+    );
+    expect(submit?.isSubmit).toBe(true);
+    expect(steps[1]?.hasSideEffect).toBe(true);
+  });
+
+  it('rejects a dependency discovered from fallback sanitization', () => {
+    const session = baseSession();
+    session.actions = [{ ts: 1_000, type: 'click' }];
+    session.network = [
+      { ...request('source', 1_100, 1_200), responseBody: JSON.stringify({ token: 'same' }) },
+      {
+        ...request('target', 1_300, 1_400),
+        postData: JSON.stringify({ token: 'same' }),
+        sanitizeMode: 'fallback',
+      },
+    ];
+    expect(() => correlate(session)).toThrow(/structured/);
+  });
 });
 
 function baseSession(): RecordSession {
