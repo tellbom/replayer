@@ -57,9 +57,16 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   page.on('domcontentloaded', onDomContentLoaded);
   const networkRecording = startNetworkRecording(page);
 
-  await showRecordingBar(page);
-  if (opts.onReady) await opts.onReady(page);
-  await (opts.stopSignal ?? waitForManualStop(context, page));
+  try {
+    await showRecordingBar(page);
+    if (opts.onReady) await opts.onReady(page);
+    await (opts.stopSignal ?? waitForManualStop(context, page));
+  } catch (error) {
+    page.off('domcontentloaded', onDomContentLoaded);
+    await networkRecording.stop();
+    await context.close();
+    throw error;
+  }
   page.off('domcontentloaded', onDomContentLoaded);
   await Promise.all([...pageTasks]);
   const network = await networkRecording.stop();
