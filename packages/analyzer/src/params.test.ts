@@ -17,7 +17,7 @@ describe('detectParams', () => {
     expect(candidates.find((item) => item.definition.name === 'type')?.definition).toEqual(
       expect.objectContaining({
         type: 'enum',
-        values: [{ label: '工作日加班', value: '工作日加班' }],
+        values: [{ label: '工作日加班', value: 'workday' }],
       }),
     );
     expect(candidates.find((item) => item.definition.name === 'startTime')?.definition.type).toBe(
@@ -34,8 +34,8 @@ describe('detectParams', () => {
 
     expect(type?.confidence).toBe(1);
     expect(type?.definition.values).toEqual([
-      { label: '工作日加班', value: '工作日加班' },
-      { label: '周末加班', value: '周末加班' },
+      { label: '工作日加班', value: 'workday' },
+      { label: '周末加班', value: 'weekend' },
     ]);
   });
 });
@@ -50,7 +50,24 @@ function recording(type: string, reason: string): RecordSession {
       { ts: 4, type: 'fill', label: '事由', value: reason },
       { ts: 5, type: 'fill', label: 'csrfToken', value: 'secret' },
     ],
-    network: [],
+    network: [
+      {
+        requestId: 'approver',
+        requestTs: 1.5,
+        responseTs: 1.8,
+        method: 'POST',
+        url: 'http://oa/api/overtime/approver',
+        resourceType: 'fetch',
+        headers: { 'content-type': 'application/json' },
+        postData: JSON.stringify({
+          type: type === '工作日加班' ? 'workday' : 'weekend',
+        }),
+        status: 200,
+        responseBody: '{}',
+        mutating: true,
+        sanitizeMode: 'structured',
+      },
+    ],
     pages: [],
   };
 }

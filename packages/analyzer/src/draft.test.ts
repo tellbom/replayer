@@ -1,0 +1,127 @@
+import { parseSkill, type RecordSession } from '@dsh/core';
+import { describe, expect, it } from 'vitest';
+
+import { generateDraft } from './draft.js';
+
+describe('generateDraft', () => {
+  it('creates a schema-valid YAML draft with dependency templates and TODO comments', () => {
+    const result = generateDraft(recording(true));
+    const parsed = parseSkill(result.yaml);
+    const approver = parsed.steps.find((step) => step.network?.url.includes('/approver'));
+    const submit = parsed.steps.find((step) => step.network?.url.includes('/submit'));
+
+    expect((result.yaml.match(/# TODO/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(parsed.params.find((param) => param.name === 'type')?.values).toEqual([
+      { label: '工作日加班', value: 'workday' },
+    ]);
+    expect(approver?.network?.extract).toEqual({
+      approverId: '$.approverId',
+      approvalToken: '$.approvalToken',
+    });
+    expect(submit?.network?.body).toEqual(
+      expect.objectContaining({
+        type: '{{type|enumValue}}',
+        reason: '{{reason}}',
+        approverId: `{{${approver?.id}.approverId}}`,
+        approvalToken: `{{${approver?.id}.approvalToken}}`,
+      }),
+    );
+    expect(submit?.riskLevel).toBe('write');
+    expect(parsed.postcondition).toEqual(
+      expect.objectContaining({
+        request: { method: 'GET', url: '/api/overtime/history?limit=5' },
+        match: expect.objectContaining({
+          jsonPath: '$.list[*]',
+          where: { startTime: '{{startTime}}', reason: '{{reason}}' },
+        }),
+      }),
+    );
+    expect(result.yaml).not.toContain('<REDACTED:sha256:123456789abc>');
+  });
+
+  it('writes an explicit safety TODO when no postcondition can be inferred', () => {
+    const result = generateDraft(recording(false));
+    expect(parseSkill(result.yaml).postcondition).toBeUndefined();
+    expect(result.yaml).toContain('TODO: 未能自动推断 postcondition');
+    expect(result.yaml).toContain('响应丢失将中止');
+  });
+});
+
+function recording(withHistory: boolean): RecordSession {
+  const token = '<REDACTED:sha256:123456789abc>';
+  const network: RecordSession['network'] = [
+    {
+      requestId: 'approver',
+      requestTs: 1_100,
+      responseTs: 1_200,
+      method: 'POST',
+      url: 'http://oa/api/overtime/approver',
+      resourceType: 'fetch',
+      headers: { 'content-type': 'application/json' },
+      postData: JSON.stringify({ type: 'workday' }),
+      status: 200,
+      responseBody: JSON.stringify({ approverId: 1023, approvalToken: token }),
+      mutating: true,
+      sanitizeMode: 'structured',
+    },
+    {
+      requestId: 'submit',
+      requestTs: 5_100,
+      responseTs: 5_200,
+      method: 'POST',
+      url: 'http://oa/api/overtime/submit',
+      resourceType: 'fetch',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': 'fingerprint' },
+      postData: JSON.stringify({
+        type: 'workday',
+        startTime: '2026-08-18 18:00:00',
+        endTime: '2026-08-18 21:00:00',
+        reason: '版本上线',
+        approverId: 1023,
+        approvalToken: token,
+      }),
+      status: 200,
+      responseBody: JSON.stringify({ code: 0, no: 'OT-1' }),
+      mutating: true,
+      sanitizeMode: 'structured',
+    },
+  ];
+  if (withHistory) {
+    network.push({
+      requestId: 'history',
+      requestTs: 6_100,
+      responseTs: 6_200,
+      method: 'GET',
+      url: 'http://oa/api/overtime/history?limit=5',
+      resourceType: 'fetch',
+      headers: {},
+      postData: null,
+      status: 200,
+      responseBody: JSON.stringify({ list: [] }),
+      mutating: false,
+      sanitizeMode: 'structured',
+    });
+  }
+  return {
+    meta: {
+      startedAt: '2026-08-18T00:00:00.000Z',
+      endedAt: '2026-08-18T00:01:00.000Z',
+      baseUrl: 'http://oa',
+      userAgent: 'Chrome',
+    },
+    actions: [
+      { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
+      { ts: 2_000, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },
+      { ts: 3_000, type: 'datetime', label: '结束时间', value: '2026-08-18 21:00:00' },
+      { ts: 4_000, type: 'fill', label: '事由', value: '版本上线' },
+      {
+        ts: 5_000,
+        type: 'click',
+        text: '确认提交',
+        target: { strategy: 'role', role: 'button', name: '确认提交' },
+      },
+    ],
+    network,
+    pages: [],
+  };
+}

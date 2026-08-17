@@ -26,7 +26,10 @@ export function detectParams(
       secondAction.value !== undefined &&
       secondAction.value !== action.value;
     const existing = candidates.get(name);
-    const values = action.type === 'select' ? enumValues(action, secondAction) : undefined;
+    const values =
+      action.type === 'select'
+        ? enumValues(action, secondAction, session, secondSession, index, name)
+        : undefined;
     if (existing) {
       existing.sources.push(`action[${index}]`);
       if (changed) existing.confidence = 1;
@@ -63,13 +66,25 @@ function paramType(action: RecordedAction): ParamDefinition['type'] {
 function enumValues(
   action: RecordedAction,
   secondAction: RecordedAction | undefined,
+  session: RecordSession,
+  secondSession: RecordSession | undefined,
+  actionIndex: number,
+  name: string,
 ): Array<{ label: string; value: string }> {
-  const values = [action.value];
-  if (secondAction?.type === 'select') values.push(secondAction.value);
-  return [...new Set(values.filter((value): value is string => value !== undefined))].map((value) => ({
-    label: value,
-    value,
-  }));
+  const values: Array<{ label: string; value: string }> = [];
+  if (action.value !== undefined) {
+    values.push({
+      label: action.value,
+      value: networkFieldForAction(session, actionIndex, name) ?? action.value,
+    });
+  }
+  if (secondAction?.type === 'select' && secondAction.value !== undefined && secondSession) {
+    values.push({
+      label: secondAction.value,
+      value: networkFieldForAction(secondSession, actionIndex, name) ?? secondAction.value,
+    });
+  }
+  return mergeEnumValues([], values);
 }
 
 function mergeEnumValues(
@@ -87,4 +102,26 @@ function paramName(label: string | undefined, type: RecordedAction['type']): str
     '事由': 'reason',
   };
   return (label && names[label]) || label || type;
+}
+
+function networkFieldForAction(
+  session: RecordSession,
+  actionIndex: number,
+  name: string,
+): string | undefined {
+  const action = session.actions[actionIndex];
+  if (!action) return undefined;
+  const windowEnd = Math.min(
+    session.actions[actionIndex + 1]?.ts ?? Number.POSITIVE_INFINITY,
+    action.ts + 2_000,
+  );
+  for (const request of session.network) {
+    if (request.requestTs < action.ts || request.requestTs >= windowEnd || !request.postData) continue;
+    if (!(request.headers['content-type'] ?? '').includes('application/json')) continue;
+    const body: unknown = JSON.parse(request.postData);
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) continue;
+    const value = (body as Record<string, unknown>)[name];
+    if (typeof value === 'string') return value;
+  }
+  return undefined;
 }
