@@ -5,6 +5,10 @@
   "type": "module",
   "exports": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@dsh/core": "0.0.0",
+    "playwright": "^1.50.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --root ../.. packages/recorder/src --passWithNoTests",
