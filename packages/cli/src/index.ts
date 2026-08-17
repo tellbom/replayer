@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 
 import { runDoctor } from './doctor.js';
+import { configureRecordCommand } from './record.js';
 
 const program = new Command();
 
@@ -12,5 +13,6 @@ program
   .description('检查浏览器载体与内网迁移前置条件')
   .option('--probe-frontend <url>', '探测目标页面的 Vue/Element 版本')
   .action(async (options: { probeFrontend?: string }) => runDoctor(options));
+configureRecordCommand(program);
 
 await program.parseAsync();
