@@ -7,18 +7,29 @@ const generatorScript = await readFile('packages/locator/dist/selector-generator
 const probeScript = await readFile('packages/locator/dist/recorder-probe.iife.js', 'utf8');
 
 test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) => {
+  const actions: Array<{ type: string }> = [];
   await page.addInitScript(() => {
-    Reflect.set(window, '__recordedActions', []);
     Reflect.set(window, '__DSH_RECORDING__', true);
-    Reflect.set(window, '__DSH_RECORD__', (action: unknown) => {
-      (Reflect.get(window, '__recordedActions') as unknown[]).push(action);
-    });
   });
   await page.addInitScript({ content: generatorScript });
   await page.addInitScript({ content: probeScript });
   await login(page);
+  await page.exposeBinding('__DSH_RECORD__', (_source, action: { type: string }) => {
+    actions.push(action);
+  });
   await page.goto('/overtime/apply');
   await expect(page.getByRole('heading', { name: '加班申请' })).toBeVisible();
+  await page.evaluate(() => {
+    const bar = document.createElement('div');
+    bar.textContent = 'DSH 正在录制';
+    Object.assign(bar.style, {
+      position: 'fixed',
+      inset: '0 0 auto 0',
+      zIndex: '2147483647',
+      padding: '6px',
+    });
+    document.body.append(bar);
+  });
 
   await page
     .locator('.el-form-item')
@@ -43,8 +54,6 @@ test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) =>
   await expect(page.getByRole('dialog', { name: '确认提交' })).toBeVisible();
   await page.getByRole('button', { name: '确认提交' }).click();
 
-  const types = await page.evaluate(() =>
-    (Reflect.get(window, '__recordedActions') as Array<{ type: string }>).map((action) => action.type),
-  );
+  const types = actions.map((action) => action.type);
   expect(types).toEqual(['navigate', 'select', 'datetime', 'datetime', 'fill', 'click', 'click']);
 });

@@ -16,6 +16,7 @@ export interface RecordOptions {
   channel?: 'chrome' | 'msedge';
   headless?: boolean;
   stopSignal?: Promise<void>;
+  onReady?: (page: Page) => Promise<void>;
 }
 
 /**
@@ -57,6 +58,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const networkRecording = startNetworkRecording(page);
 
   await showRecordingBar(page);
+  if (opts.onReady) await opts.onReady(page);
   await (opts.stopSignal ?? waitForManualStop(context, page));
   page.off('domcontentloaded', onDomContentLoaded);
   await Promise.all([...pageTasks]);
