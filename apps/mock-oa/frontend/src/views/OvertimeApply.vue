@@ -88,7 +88,7 @@ function sleep(milliseconds: number) {
         <el-input v-model="form.reason" type="textarea" />
       </el-form-item>
       <el-form-item label="审批人">
-        <el-input :model-value="approval?.approverName ?? '—'" readonly />
+        <el-input :model-value="approval?.approverName ?? ''" readonly />
       </el-form-item>
       <el-form-item>
         <el-button :class="$style.submitBtn" type="primary" role="button" @click="openConfirm">

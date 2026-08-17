@@ -4,6 +4,7 @@ import type { ExecContext, RunResult, Skill, Step } from '@dsh/core';
 
 import { executePreflights } from './preflight.js';
 import { executeNetworkStep } from './channel-network.js';
+import { executeUiStep } from './channel-ui.js';
 
 export interface ReplayOptions {
   // 冻结契约允许任意参数值。
@@ -52,6 +53,11 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
         }
       }
       const channel = opts.forceChannel ?? step.channel;
+      if (channel === 'ui' && step.ui) {
+        const result = await executeUiStep(page, step, executionContext, skill.params);
+        stepResults.push(result);
+        continue;
+      }
       if (channel !== 'network' || !step.network) {
         throw new StepExecutionError(`当前任务尚未支持通道: ${channel}`);
       }
