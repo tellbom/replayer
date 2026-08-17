@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 
 import { runDoctor } from './doctor.js';
+import { configureDiffCommand } from './diff.js';
 import { configureRecordCommand } from './record.js';
 
 const program = new Command();
@@ -14,5 +15,6 @@ program
   .option('--probe-frontend <url>', '探测目标页面的 Vue/Element 版本')
   .action(async (options: { probeFrontend?: string }) => runDoctor(options));
 configureRecordCommand(program);
+configureDiffCommand(program);
 
 await program.parseAsync();
