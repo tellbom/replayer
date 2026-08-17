@@ -6,7 +6,8 @@
   "exports": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@dsh/core": "0.0.0"
+    "@dsh/core": "0.0.0",
+    "zod": "^3.24.2"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
