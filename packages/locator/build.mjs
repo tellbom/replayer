@@ -6,6 +6,7 @@ import { assertBrowserBundle } from './dist/_guard.js';
 const entries = [
   ['el-locator', 'src/el-locator.ts'],
   ['recorder-probe', 'src/recorder-probe.ts'],
+  ['selector-generator', 'src/selector-generator.ts'],
   ['snapshot', 'src/snapshot.ts'],
 ];
 
