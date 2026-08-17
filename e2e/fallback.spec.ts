@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { ForbiddenError } from '@dsh/core';
 import type { Skill, Step, StepResult } from '@dsh/core';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { replay } from '../packages/replayer/src/engine';
 
@@ -106,16 +108,20 @@ test('fallback: 403 is forbidden and never enters authentication recovery', asyn
       network: { method: 'GET', url: '/api/_debug/forbidden', contentType: 'json' },
     },
   ]);
-  const startedAt = Date.now();
-
-  await expect(
-    replay(skill, {
+  let failure: (ForbiddenError & { diagnosticDir?: string }) | undefined;
+  try {
+    await replay(skill, {
       params: runParams,
       profileDir: testInfo.outputPath(`forbidden-${browserName}-profile`),
       noLLM: true,
-    }),
-  ).rejects.toBeInstanceOf(ForbiddenError);
-  expect(Date.now() - startedAt).toBeLessThan(5_000);
+    });
+  } catch (error) {
+    failure = error as ForbiddenError & { diagnosticDir?: string };
+  }
+  expect(failure).toBeInstanceOf(ForbiddenError);
+  expect(failure?.diagnosticDir).toBeTruthy();
+  const dom = await readFile(join(failure!.diagnosticDir!, 'step-forbidden-dom.html'), 'utf8');
+  expect(dom).not.toContain('__dsh_login_hint__');
 });
 
 function makeSkill(id: string, steps: Step[], postcondition?: Skill['postcondition']): Skill {

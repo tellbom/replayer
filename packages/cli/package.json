@@ -13,6 +13,7 @@
     "@dsh/browser": "0.0.0",
     "@dsh/core": "0.0.0",
     "@dsh/recorder": "0.0.0",
+    "@dsh/replayer": "0.0.0",
     "commander": "^13.1.0"
   },
   "scripts": {

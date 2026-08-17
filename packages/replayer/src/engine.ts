@@ -15,6 +15,7 @@ import type {
 } from '@dsh/core';
 import type { Page } from 'playwright';
 
+import { runAssertions } from './assert.js';
 import { startDiagnosticSession, writeDiagnosticBundle } from './diagnostic.js';
 import { executeNetworkStep } from './channel-network.js';
 import { executeUiStep } from './channel-ui.js';
@@ -97,6 +98,10 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
           continue;
         }
         throw new StepExecutionError(`当前任务尚未支持通道: ${channel}`);
+      }
+      const finalStep = stepResults.at(-1);
+      if (finalStep?.raw && finalStep.outcomeResolvedBy !== 'postcondition') {
+        runAssertions(skill.assertions, finalStep.raw, executionContext);
       }
       const runResult: RunResult = {
         ok: stepResults.every((result) => result.ok),

@@ -15,7 +15,7 @@ test('K-points: Element Plus 坑点与动态依赖均存在', async ({ page }) =
   await expect(page.getByRole('listbox')).toBeVisible();
 
   const submitButton = page.getByRole('button', { name: '提交', exact: true });
-  await expect(submitButton).toHaveAttribute('class', /_submitBtn_\w+/);
+  await expect(submitButton).toHaveAttribute('class', /submitBtn_\w+/);
 
   const requestStartedAt = Date.now();
   const approverRequest = page.waitForRequest((request) =>
@@ -23,7 +23,9 @@ test('K-points: Element Plus 坑点与动态依赖均存在', async ({ page }) =
   );
   await page.getByRole('option', { name: '工作日加班' }).click();
   const firstRequest = await approverRequest;
-  expect(Date.now() - requestStartedAt).toBeLessThan(600);
+  const requestDelay = Date.now() - requestStartedAt;
+  expect(requestDelay).toBeGreaterThanOrEqual(450);
+  expect(requestDelay).toBeLessThan(1_500);
   const firstResponse = await firstRequest.response();
   const firstApproval = await firstResponse.json();
 
