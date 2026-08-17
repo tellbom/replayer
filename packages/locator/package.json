@@ -6,8 +6,11 @@
   "exports": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node build.mjs",
     "test": "vitest run --root ../.. packages/locator/src --passWithNoTests",
     "lint": "eslint src --ext .ts"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
   }
 }
