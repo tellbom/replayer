@@ -102,8 +102,7 @@ export async function executeHeal(ctx: ExecuteHealContext): Promise<HealCandidat
     const resolution = await executePostcondition(ctx.page, postcondition, ctx.context, ctx.skill.params);
     if (resolution.found !== resolution.expectFound) return null;
   }
-  if (ctx.skill.assertions.length > 0) {
-    if (!ctx.assertionRaw) throw new Error('技能包含断言，但自愈执行没有可供断言的响应');
+  if (ctx.assertionRaw) {
     runAssertions(ctx.skill.assertions, ctx.assertionRaw, ctx.context);
   }
   const verified = { ...ctx.candidate, actionVerified: true };

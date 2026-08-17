@@ -34,3 +34,11 @@ export class OutcomeUnknownError extends DSHError {
 export class ForbiddenError extends DSHError {
   readonly code = 'FORBIDDEN';
 }
+
+export class NoMatchingSkillError extends DSHError {
+  readonly code = 'NO_MATCHING_SKILL';
+}
+
+export class TokenBudgetExceededError extends DSHError {
+  readonly code = 'TOKEN_BUDGET_EXCEEDED';
+}

@@ -1,6 +1,7 @@
 import { ensureLoggedIn, launchDSHContext, recoverAuthentication } from '@dsh/browser';
 import {
   ForbiddenError,
+  LocatorNotFoundError,
   OutcomeUnknownError,
   StepExecutionError,
   resolveTemplate,
@@ -30,6 +31,13 @@ export interface ReplayOptions {
   forceChannel?: 'ui' | 'network';
   noLLM?: boolean;
   onConfirm?: (step: Step, context: ExecContext) => Promise<boolean>;
+  onLocatorFailure?: (input: {
+    page: Page;
+    skill: Skill;
+    step: Step;
+    error: LocatorNotFoundError;
+    context: ExecContext;
+  }) => Promise<StepResult | null>;
 }
 
 /** 回放统一入口；各执行器按任务顺序接入此编排。 */
@@ -69,7 +77,20 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
           continue;
         }
         if (channel === 'ui' && step.ui) {
-          stepResults.push(await executeUiStep(page, step, executionContext, skill.params));
+          try {
+            stepResults.push(await executeUiStep(page, step, executionContext, skill.params));
+          } catch (error) {
+            if (!(error instanceof LocatorNotFoundError) || !opts.onLocatorFailure) throw error;
+            const healed = await opts.onLocatorFailure({
+              page,
+              skill,
+              step,
+              error,
+              context: executionContext,
+            });
+            if (!healed) throw error;
+            stepResults.push(healed);
+          }
           continue;
         }
         if ((channel === 'network' || channel === 'auto') && step.network) {

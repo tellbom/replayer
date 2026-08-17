@@ -9,6 +9,7 @@ import { runDoctor } from './doctor.js';
 import { configureDiffCommand } from './diff.js';
 import { configureRecordCommand } from './record.js';
 import { configureReplayCommand } from './replay.js';
+import { configureRunCommand } from './run.js';
 
 export function createProgram(): Command {
   const program = new Command();
@@ -22,6 +23,7 @@ export function createProgram(): Command {
   configureRecordCommand(program);
   configureDiffCommand(program);
   configureReplayCommand(program);
+  configureRunCommand(program);
   return program;
 }
 
