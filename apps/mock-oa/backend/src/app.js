@@ -5,6 +5,7 @@ import { SESSION } from './constants.js';
 import { getCsrfToken } from './middleware/csrf.js';
 import { apiDelay } from './middleware/delay.js';
 import { createBusinessRouter } from './routes/business.js';
+import { createLegacyRouter } from './routes/legacy.js';
 
 const PUBLIC_API_PATHS = new Set(['/api/login', '/api/session', '/api/csrf']);
 
@@ -69,6 +70,7 @@ export function createApp() {
   });
 
   app.use('/api', createBusinessRouter());
+  app.use('/legacy', createLegacyRouter());
 
   return app;
 }
