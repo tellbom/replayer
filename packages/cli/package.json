@@ -8,6 +8,10 @@
   },
   "exports": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@dsh/browser": "0.0.0",
+    "commander": "^13.1.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --root ../.. packages/cli/src --passWithNoTests",

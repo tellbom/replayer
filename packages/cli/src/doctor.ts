@@ -1,0 +1,89 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { launchDSHContext } from '@dsh/browser';
+
+export interface FrontendProbeResult {
+  vue: number | null;
+  ui: 'element-plus' | 'element-ui' | null;
+  evidence: string[];
+}
+
+export async function runDoctor(options: { probeFrontend?: string }): Promise<void> {
+  const profileDir = await mkdtemp(join(tmpdir(), 'dsh-doctor-'));
+  const channel = process.env.DSH_CHANNEL === 'msedge' ? 'msedge' : 'chrome';
+  const context = await launchDSHContext({ profileDir, channel, headless: true });
+  try {
+    const page = await context.newPage();
+    await page.goto('data:text/html,<h1>DSH Doctor</h1>');
+    const runtime = await page.evaluate(() => ({
+      userAgent: navigator.userAgent,
+      locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
+      snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
+      generator: typeof Reflect.get(window, '__DSH_GEN__'),
+    }));
+    const chromeVersion = /(?:Chrome|Edg)\/([\d.]+)/.exec(runtime.userAgent)?.[1] ?? '未知';
+    console.log(`✓ ${channel === 'msedge' ? 'Edge' : 'Chrome'} 已安装        版本 ${chromeVersion}`);
+    console.log('✓ 可启动 persistent context');
+    const injected =
+      runtime.locator === 'object' && runtime.snapshot === 'function' && runtime.generator === 'function';
+    console.log(`${injected ? '✓' : '✗'} IIFE 注入${injected ? '成功' : '失败'}`);
+    console.log('? 认证类型            需人工确认（A: Kerberos / B: 表单 / C: 证书）');
+    console.log(`✓ 代理配置            ${process.env.HTTPS_PROXY || process.env.HTTP_PROXY ? '已设置' : '未设置'}`);
+    console.log('? remote-debugging    需在目标企业策略环境确认');
+    console.log('? 前端框架            需在目标页面执行 --probe-frontend 探测');
+
+    if (options.probeFrontend) {
+      const result = await probeFrontend(page, options.probeFrontend);
+      printFrontendProbe(options.probeFrontend, result);
+    }
+  } finally {
+    await context.close();
+    await rm(profileDir, { recursive: true, force: true });
+  }
+}
+
+export async function probeFrontend(page: import('playwright').Page, url: string): Promise<FrontendProbeResult> {
+  await page.goto(url);
+  return page.evaluate(() => {
+    const result: FrontendProbeResult = { vue: null, ui: null, evidence: [] };
+    const runtimeWindow = window as typeof window & {
+      __VUE__?: unknown;
+      Vue?: { version?: string };
+    };
+    if (runtimeWindow.__VUE__) {
+      result.vue = 3;
+      result.evidence.push('window.__VUE__');
+    } else if (runtimeWindow.Vue?.version) {
+      result.vue = Number.parseInt(runtimeWindow.Vue.version, 10);
+      result.evidence.push(`Vue.version=${runtimeWindow.Vue.version}`);
+    } else if (document.querySelector('[data-v-app]')) {
+      result.vue = 3;
+      result.evidence.push('[data-v-app]');
+    }
+
+    if (document.querySelector('.el-config-provider, .el-overlay')) {
+      result.ui = 'element-plus';
+      result.evidence.push('.el-overlay / .el-config-provider');
+    } else if (document.querySelector('.el-dialog__wrapper, .v-modal')) {
+      result.ui = 'element-ui';
+      result.evidence.push('.el-dialog__wrapper / .v-modal');
+    }
+    return result;
+  });
+}
+
+export function frontendConclusion(result: FrontendProbeResult): string {
+  return result.vue === 2 && result.ui === 'element-ui'
+    ? '需启用 T-09-vue2 / T-13 / A8'
+    : '无需启用 Vue2 条件任务';
+}
+
+function printFrontendProbe(url: string, result: FrontendProbeResult): void {
+  console.log(`\n前端框架探测结果（${url}）`);
+  console.log(`  Vue 版本      : ${result.vue ?? '未知'}`);
+  console.log(`  组件库        : ${result.ui ?? '未知'}`);
+  console.log(`  依据          : ${result.evidence.join(', ') || '无可靠证据'}`);
+  console.log(`  → 结论：${frontendConclusion(result)}`);
+}
