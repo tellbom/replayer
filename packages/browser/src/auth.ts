@@ -1,4 +1,4 @@
-import type { AuthState } from '@dsh/core';
+import { ForbiddenError, LoginTimeoutError, TIMEOUTS, type AuthState } from '@dsh/core';
 import type { Page } from 'playwright';
 
 export interface AuthConfig {
@@ -44,6 +44,58 @@ export async function getAuthState(page: Page, auth: AuthConfig): Promise<AuthSt
   }
   if (await pageMatchesLoginMarker(page, auth.loginDomMarkers)) return 'unauthenticated';
   return 'unknown';
+}
+
+export async function ensureLoggedIn(page: Page, auth: AuthConfig): Promise<void> {
+  let state = await getAuthState(page, auth);
+  if (state === 'authenticated') return;
+  if (state === 'forbidden') throw new ForbiddenError('当前用户无权访问目标系统');
+  if (state === 'unknown') {
+    await page.goto(new URL(auth.probeUrl, page.url()).href);
+    state = await getAuthState(page, auth);
+    if (state === 'authenticated') return;
+    if (state === 'forbidden') throw new ForbiddenError('当前用户无权访问目标系统');
+    if (state === 'unknown') throw new Error('认证状态未知，probe 后仍无法判断');
+  }
+
+  await page.bringToFront();
+  await showLoginHint(page);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < auth.loginTimeoutMs) {
+    await page.waitForTimeout(TIMEOUTS.loginPoll);
+    state = await getAuthState(page, auth);
+    if (state === 'authenticated') {
+      await removeLoginHint(page);
+      return;
+    }
+    if (state === 'forbidden') {
+      await removeLoginHint(page);
+      throw new ForbiddenError('当前用户无权访问目标系统');
+    }
+  }
+  throw new LoginTimeoutError(`等待用户登录超时: ${auth.loginTimeoutMs}ms`);
+}
+
+async function showLoginHint(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const hint = document.createElement('div');
+    hint.id = '__dsh_login_hint__';
+    hint.textContent = 'DSH：请在当前窗口完成登录';
+    Object.assign(hint.style, {
+      position: 'fixed',
+      inset: '0 0 auto 0',
+      zIndex: '2147483647',
+      padding: '12px',
+      color: 'white',
+      background: '#1677ff',
+      textAlign: 'center',
+    });
+    document.body.append(hint);
+  });
+}
+
+async function removeLoginHint(page: Page): Promise<void> {
+  await page.evaluate(() => document.querySelector('#__dsh_login_hint__')?.remove());
 }
 
 function readJsonPath(value: unknown, path: string): unknown {
