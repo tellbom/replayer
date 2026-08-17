@@ -1,0 +1,17 @@
+:root {
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  color: #303133;
+  background: #f5f7fa;
+}
+
+body {
+  margin: 0;
+}
+
+.page {
+  max-width: 960px;
+  margin: 32px auto;
+  padding: 24px;
+  background: white;
+  border-radius: 8px;
+}
