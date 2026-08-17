@@ -22,6 +22,7 @@ export async function executeNetworkStep(
   try {
     validateParams(params, context.params);
     requests = expandRequests(step.network, context, params);
+    requests.forEach((request) => new URL(request.url, context.baseUrl));
   } catch (error) {
     return notSent(step.id, startedAt, String(error));
   }

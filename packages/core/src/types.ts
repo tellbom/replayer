@@ -80,6 +80,12 @@ export interface StepResult {
   error?: string;
   healed?: boolean;
   raw?: { status?: number; text?: string };
+  outcomeResolvedBy?: 'postcondition';
+  postconditionResult?: {
+    found: boolean;
+    expectFound: boolean;
+    matched?: unknown;
+  };
 }
 
 export interface RunResult {

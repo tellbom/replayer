@@ -3,8 +3,8 @@ import type { Skill } from '@dsh/core';
 
 import { replay } from '../packages/replayer/src/engine';
 
-test('channel-ui: force channel ui completes an overtime submission', async (_fixtures, testInfo) => {
-  const profileDir = testInfo.outputPath('ui-profile');
+test('channel-ui: force channel ui completes an overtime submission', async ({ browserName }, testInfo) => {
+  const profileDir = testInfo.outputPath(`ui-${browserName}-profile`);
 
   const result = await replay(overtimeUiSkill(), {
     params: {

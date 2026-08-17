@@ -1,0 +1,298 @@
+import { expect, test } from '@playwright/test';
+import { ForbiddenError } from '@dsh/core';
+import type { Skill, Step, StepResult } from '@dsh/core';
+
+import { replay } from '../packages/replayer/src/engine';
+
+const baseUrl = 'http://127.0.0.1:5173';
+const runParams = {
+  type: '工作日加班',
+  startTime: '2026-08-18 18:00:00',
+  endTime: '2026-08-18 21:00:00',
+  reason: '安全降级验收',
+};
+
+test('fallback: not_sent permits one confirmed UI fallback', async ({ browserName }, testInfo) => {
+  let confirmations = 0;
+  const skill = makeSkill('fallback-not-sent', [
+    ...loginAndOpenSteps(),
+    {
+      id: 'merged-reason',
+      desc: 'merge reason',
+      channel: 'merged',
+      riskLevel: 'read',
+      hasSideEffect: false,
+      ui: { action: 'fill', value: '{{reason}}' },
+    },
+    fallbackSubmitStep('http://['),
+    debugStep(),
+  ]);
+  const result = await replay(skill, {
+    params: runParams,
+    profileDir: testInfo.outputPath(`not-sent-${browserName}-profile`),
+    noLLM: true,
+    onConfirm: async () => {
+      confirmations += 1;
+      return true;
+    },
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.extracted['merged-reason']).toBe(runParams.reason);
+  expect(result.steps.find((step) => step.stepId === 'submit')?.channelUsed).toBe('ui');
+  expect(confirmations).toBe(2);
+  expect(debugCount(result.steps.at(-1))).toBe(1);
+});
+
+test('fallback: drop_response resolves by postcondition without replay', async ({ browserName }, testInfo) => {
+  const skill = makeSkill(
+    'fallback-outcome-unknown',
+    [
+      ...loginSteps(),
+      {
+        id: 'csrf',
+        desc: 'get csrf',
+        channel: 'network',
+        riskLevel: 'read',
+        hasSideEffect: false,
+        network: {
+          method: 'GET',
+          url: '/api/csrf',
+          contentType: 'json',
+          extract: { csrfToken: '$.token' },
+        },
+      },
+      approverStep(),
+      dropSubmitStep(),
+      debugStep(),
+    ],
+    {
+      request: { method: 'GET', url: '/api/overtime/history?limit=5&order=desc' },
+      match: {
+        jsonPath: '$.list[*]',
+        where: { reason: '{{reason}}', startTime: '{{startTime}}' },
+        limit: 5,
+      },
+      expectFound: true,
+      timeoutMs: 3_000,
+    },
+  );
+  const result = await replay(skill, {
+    params: runParams,
+    profileDir: testInfo.outputPath(`drop-${browserName}-profile`),
+    noLLM: true,
+    onConfirm: async () => true,
+  });
+
+  const submit = result.steps.find((step) => step.stepId === 'submit');
+  expect(submit).toMatchObject({
+    ok: true,
+    outcome: 'confirmed_success',
+    outcomeResolvedBy: 'postcondition',
+    postconditionResult: { found: true, expectFound: true },
+  });
+  expect(debugCount(result.steps.at(-1))).toBe(1);
+});
+
+test('fallback: 403 is forbidden and never enters authentication recovery', async ({ browserName }, testInfo) => {
+  const skill = makeSkill('fallback-forbidden', [
+    ...loginSteps(),
+    {
+      id: 'forbidden',
+      desc: 'forbidden request',
+      channel: 'network',
+      riskLevel: 'read',
+      hasSideEffect: false,
+      network: { method: 'GET', url: '/api/_debug/forbidden', contentType: 'json' },
+    },
+  ]);
+  const startedAt = Date.now();
+
+  await expect(
+    replay(skill, {
+      params: runParams,
+      profileDir: testInfo.outputPath(`forbidden-${browserName}-profile`),
+      noLLM: true,
+    }),
+  ).rejects.toBeInstanceOf(ForbiddenError);
+  expect(Date.now() - startedAt).toBeLessThan(5_000);
+});
+
+function makeSkill(id: string, steps: Step[], postcondition?: Skill['postcondition']): Skill {
+  return {
+    skill: { id, name: id, system: 'mock-oa', baseUrl: `${baseUrl}/login`, version: 1 },
+    params: [
+      {
+        name: 'type',
+        type: 'enum',
+        values: [
+          { label: '工作日加班', value: 'workday' },
+          { label: '周末加班', value: 'weekend' },
+        ],
+        required: true,
+      },
+      { name: 'startTime', type: 'datetime', required: true },
+      { name: 'endTime', type: 'datetime', required: true },
+      { name: 'reason', type: 'string', required: true },
+    ],
+    preflight: [],
+    steps,
+    assertions: [],
+    ...(postcondition ? { postcondition } : {}),
+  };
+}
+
+function loginSteps(): Step[] {
+  return [
+    uiStep('login-user', {
+      action: 'fill',
+      label: '用户名',
+      kind: 'input',
+      value: 'tester',
+      preAction: { action: 'waitFor', waitFor: { selector: '.el-form-item' } },
+    }),
+    uiStep('login-password', {
+      action: 'fill',
+      label: '密码',
+      kind: 'input',
+      value: 'tester',
+    }),
+    uiStep('login-submit', {
+      action: 'click',
+      target: { strategy: 'text', text: '登录' },
+      waitFor: { selector: 'a[href="/overtime/apply"]' },
+    }),
+  ];
+}
+
+function loginAndOpenSteps(): Step[] {
+  return [
+    ...loginSteps(),
+    uiStep('open-overtime', {
+      action: 'click',
+      target: { strategy: 'text', text: '加班申请' },
+      waitFor: { selector: '.el-select' },
+    }),
+  ];
+}
+
+function uiStep(id: string, ui: NonNullable<Step['ui']>): Step {
+  return {
+    id,
+    desc: id,
+    channel: 'ui',
+    riskLevel: 'read',
+    hasSideEffect: false,
+    ui,
+  };
+}
+
+function fallbackSubmitStep(url: string): Step {
+  return {
+    id: 'submit',
+    desc: 'submit with safe fallback',
+    channel: 'auto',
+    riskLevel: 'write',
+    hasSideEffect: true,
+    network: { method: 'POST', url, contentType: 'json', body: { reason: '{{reason}}' } },
+    ui: {
+      action: 'click',
+      target: {
+        strategy: 'el-dialog-scoped',
+        dialogTitle: '确认提交',
+        inner: { strategy: 'text', text: '确认提交', nth: 1 },
+      },
+      waitFor: { selector: '.el-message--success' },
+      preAction: {
+        action: 'click',
+        target: { strategy: 'role', role: 'button', name: '提交' },
+        waitFor: { selector: '.el-dialog' },
+        preAction: {
+          action: 'fill',
+          label: '事由',
+          kind: 'textarea',
+          value: '{{reason}}',
+          preAction: {
+            action: 'setDateTime',
+            label: '结束时间',
+            value: '{{endTime}}',
+            preAction: {
+              action: 'setDateTime',
+              label: '开始时间',
+              value: '{{startTime}}',
+              preAction: {
+                action: 'waitFor',
+                waitFor: {
+                  selector: '.el-form-item:nth-child(5) input',
+                  notEmpty: true,
+                  timeoutMs: 3_000,
+                },
+                preAction: {
+                  action: 'selectOption',
+                  label: '加班类型',
+                  value: '{{type}}',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function approverStep(): Step {
+  return {
+    id: 'approver',
+    desc: 'get approver',
+    channel: 'network',
+    riskLevel: 'read',
+    hasSideEffect: false,
+    network: {
+      method: 'POST',
+      url: '/api/overtime/approver',
+      contentType: 'json',
+      body: { type: '{{type|enumValue}}' },
+      extract: { approverId: '$.approverId', approvalToken: '$.approvalToken' },
+    },
+  };
+}
+
+function dropSubmitStep(): Step {
+  return {
+    id: 'submit',
+    desc: 'drop submit response',
+    channel: 'network',
+    riskLevel: 'write',
+    hasSideEffect: true,
+    network: {
+      method: 'POST',
+      url: '/api/overtime/submit?drop_response=1',
+      headers: { 'x-csrf-token': '{{csrf.csrfToken}}' },
+      contentType: 'json',
+      body: {
+        type: '{{type|enumValue}}',
+        startTime: '{{startTime}}',
+        endTime: '{{endTime}}',
+        reason: '{{reason}}',
+        approverId: '{{approver.approverId}}',
+        approvalToken: '{{approver.approvalToken}}',
+      },
+    },
+  };
+}
+
+function debugStep(): Step {
+  return {
+    id: 'debug',
+    desc: 'read submissions',
+    channel: 'network',
+    riskLevel: 'read',
+    hasSideEffect: false,
+    network: { method: 'GET', url: '/api/_debug/submissions', contentType: 'json' },
+  };
+}
+
+function debugCount(result: StepResult | undefined): number {
+  return (JSON.parse(result?.raw?.text ?? '{}') as { count?: number }).count ?? -1;
+}
