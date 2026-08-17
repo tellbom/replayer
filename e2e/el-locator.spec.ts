@@ -9,6 +9,7 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript({ content: locatorScript });
   await login(page);
   await page.goto('/overtime/apply');
+  await expect(page.getByRole('heading', { name: '加班申请' })).toBeVisible();
 });
 
 test('el-locator: version 与 byFormItem', async ({ page }) => {
