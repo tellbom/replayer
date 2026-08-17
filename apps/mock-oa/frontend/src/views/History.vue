@@ -26,6 +26,9 @@ onMounted(async () => {
       <el-table-column prop="type" label="类型" />
       <el-table-column prop="reason" label="事由" />
       <el-table-column prop="createdAt" label="创建时间" />
+      <el-table-column label="操作">
+        <template #default><el-button>查看</el-button></template>
+      </el-table-column>
     </el-table>
   </main>
 </template>
