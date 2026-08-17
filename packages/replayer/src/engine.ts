@@ -2,6 +2,8 @@ import { ensureLoggedIn, launchDSHContext } from '@dsh/browser';
 import { StepExecutionError } from '@dsh/core';
 import type { ExecContext, RunResult, Skill, Step } from '@dsh/core';
 
+import { executePreflights } from './preflight.js';
+
 export interface ReplayOptions {
   // 冻结契约允许任意参数值。
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -25,10 +27,22 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
     const page = context.pages()[0] ?? (await context.newPage());
     await page.goto(skill.auth?.probeUrl ?? skill.skill.baseUrl);
     if (skill.auth) await ensureLoggedIn(page, skill.auth);
-    if (skill.preflight.length > 0 || skill.steps.length > 0) {
+    const executionContext: ExecContext = {
+      params: opts.params,
+      vars: {},
+      stepResults: {},
+      baseUrl: skill.skill.baseUrl,
+    };
+    await executePreflights(page, skill.preflight, executionContext);
+    if (skill.steps.length > 0) {
       throw new StepExecutionError('回放执行器尚未接入当前编排');
     }
-    return { ok: true, skillId: skill.skill.id, steps: [], extracted: {} };
+    return {
+      ok: true,
+      skillId: skill.skill.id,
+      steps: [],
+      extracted: executionContext.vars,
+    };
   } finally {
     await context.close();
   }

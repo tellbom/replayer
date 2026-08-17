@@ -13,6 +13,7 @@ export default {
     port: 5173,
     proxy: {
       '/api': 'http://localhost:3000',
+      '/legacy': 'http://localhost:3000',
     },
   },
 };
