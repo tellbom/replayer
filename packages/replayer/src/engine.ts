@@ -15,6 +15,7 @@ import type {
 } from '@dsh/core';
 import type { Page } from 'playwright';
 
+import { startDiagnosticSession, writeDiagnosticBundle } from './diagnostic.js';
 import { executeNetworkStep } from './channel-network.js';
 import { executeUiStep } from './channel-ui.js';
 import { executePreflights } from './preflight.js';
@@ -40,63 +41,93 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
   const browserContext = await launchDSHContext({ profileDir: opts.profileDir });
   try {
     const page = browserContext.pages()[0] ?? (await browserContext.newPage());
-    await page.goto(skill.auth?.probeUrl ?? skill.skill.baseUrl);
-    if (skill.auth) await ensureLoggedIn(page, skill.auth);
-    const executionContext: ExecContext = {
-      params: opts.params,
-      vars: {},
-      stepResults: {},
-      baseUrl: skill.skill.baseUrl,
-    };
-    await executePreflights(page, skill.preflight, executionContext);
+    const diagnostic = startDiagnosticSession(page);
+    let currentStepId = 'bootstrap';
+    let beforeScreenshot: Buffer | undefined;
     const stepResults: StepResult[] = [];
-    for (const step of skill.steps) {
-      const channel = step.channel === 'merged' ? 'merged' : (opts.forceChannel ?? step.channel);
-      if (!(await confirmStep(step, executionContext, opts))) {
-        stepResults.push(cancelled(step, channel));
-        break;
-      }
-      if (channel === 'merged') {
-        stepResults.push(executeMergedStep(step, executionContext, skill.params));
-        continue;
-      }
-      if (channel === 'ui' && step.ui) {
-        stepResults.push(await executeUiStep(page, step, executionContext, skill.params));
-        continue;
-      }
-      if ((channel === 'network' || channel === 'auto') && step.network) {
-        let result = await executeNetworkStep(page, step, executionContext, skill.params);
-        if (result.raw?.status === 403) throw new ForbiddenError(`Step ${step.id} is forbidden`);
-        if (result.raw?.status === 401) {
-          if (!skill.auth) throw new StepExecutionError(`Step ${step.id} requires authentication`);
-          await recoverAuthentication(page, skill.auth);
-          if (!(await confirmStep(step, executionContext, opts))) {
-            stepResults.push(cancelled(step, 'network'));
-            break;
-          }
-          result = await executeNetworkStep(page, step, executionContext, skill.params);
-          if (result.raw?.status === 403) throw new ForbiddenError(`Step ${step.id} is forbidden`);
+    try {
+      await page.goto(skill.auth?.probeUrl ?? skill.skill.baseUrl);
+      if (skill.auth) await ensureLoggedIn(page, skill.auth);
+      const executionContext: ExecContext = {
+        params: opts.params,
+        vars: {},
+        stepResults: {},
+        baseUrl: skill.skill.baseUrl,
+      };
+      await executePreflights(page, skill.preflight, executionContext);
+      for (const step of skill.steps) {
+        currentStepId = step.id;
+        beforeScreenshot = await page.screenshot();
+        const channel = step.channel === 'merged' ? 'merged' : (opts.forceChannel ?? step.channel);
+        if (!(await confirmStep(step, executionContext, opts))) {
+          stepResults.push(cancelled(step, channel));
+          break;
         }
-        const resolved = await resolveNetworkOutcome(
-          page,
-          skill,
-          step,
-          result,
-          executionContext,
-          opts,
-        );
-        stepResults.push(resolved);
-        if (!resolved.ok) break;
-        continue;
+        if (channel === 'merged') {
+          stepResults.push(executeMergedStep(step, executionContext, skill.params));
+          continue;
+        }
+        if (channel === 'ui' && step.ui) {
+          stepResults.push(await executeUiStep(page, step, executionContext, skill.params));
+          continue;
+        }
+        if ((channel === 'network' || channel === 'auto') && step.network) {
+          let result = await executeNetworkStep(page, step, executionContext, skill.params);
+          if (result.raw?.status === 403) throw new ForbiddenError(`Step ${step.id} is forbidden`);
+          if (result.raw?.status === 401) {
+            if (!skill.auth) throw new StepExecutionError(`Step ${step.id} requires authentication`);
+            await recoverAuthentication(page, skill.auth);
+            if (!(await confirmStep(step, executionContext, opts))) {
+              stepResults.push(cancelled(step, 'network'));
+              break;
+            }
+            result = await executeNetworkStep(page, step, executionContext, skill.params);
+            if (result.raw?.status === 403) throw new ForbiddenError(`Step ${step.id} is forbidden`);
+          }
+          const resolved = await resolveNetworkOutcome(
+            page,
+            skill,
+            step,
+            result,
+            executionContext,
+            opts,
+          );
+          stepResults.push(resolved);
+          if (!resolved.ok) break;
+          continue;
+        }
+        throw new StepExecutionError(`当前任务尚未支持通道: ${channel}`);
       }
-      throw new StepExecutionError(`当前任务尚未支持通道: ${channel}`);
+      const runResult: RunResult = {
+        ok: stepResults.every((result) => result.ok),
+        skillId: skill.skill.id,
+        steps: stepResults,
+        extracted: executionContext.vars,
+      };
+      if (!runResult.ok) {
+        runResult.diagnosticDir = await writeDiagnosticBundle({
+          page,
+          stepId: currentStepId,
+          result: runResult,
+          beforeScreenshot,
+          session: diagnostic,
+        });
+      } else {
+        await diagnostic.stop();
+      }
+      return runResult;
+    } catch (error) {
+      const diagnosticDir = await writeDiagnosticBundle({
+        page,
+        stepId: currentStepId,
+        result: { skillId: skill.skill.id, steps: stepResults },
+        error,
+        beforeScreenshot,
+        session: diagnostic,
+      });
+      if (error instanceof Error) Object.assign(error, { diagnosticDir });
+      throw error;
     }
-    return {
-      ok: stepResults.every((result) => result.ok),
-      skillId: skill.skill.id,
-      steps: stepResults,
-      extracted: executionContext.vars,
-    };
   } finally {
     await browserContext.close();
   }
