@@ -5,6 +5,8 @@ import { readFile } from 'node:fs/promises';
 
 import { login } from '../helpers';
 
+test.skip(!process.env.A3_EXPECTED_CLASS, 'A3 仅由 scripts/a3-loop.mjs 注入 rebuild class 后运行');
+
 test('A3 rebuild 后 CSS hash 变化但语义技能仍可回放', async ({ page, browserName }, testInfo) => {
   const expectedClass = process.env.A3_EXPECTED_CLASS;
   if (!expectedClass) throw new Error('A3_EXPECTED_CLASS 未设置');
