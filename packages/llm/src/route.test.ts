@@ -10,6 +10,7 @@ const skill: Skill = {
     description: '提交工作日或周末加班申请',
     system: 'oa',
     baseUrl: 'http://localhost:5173',
+    entry: 'oa',
     version: 1,
   },
   params: [

@@ -1,4 +1,4 @@
-import { ForbiddenError, LoginTimeoutError, TIMEOUTS, type AuthState } from '@dsh/core';
+import { ForbiddenError, LoginTimeoutError, TIMEOUTS, type AuthState, type Entry } from '@dsh/core';
 import type { Page } from 'playwright';
 
 export interface AuthConfig {
@@ -78,6 +78,25 @@ export async function ensureLoggedIn(page: Page, auth: AuthConfig): Promise<void
 
 export async function recoverAuthentication(page: Page, auth: AuthConfig): Promise<void> {
   await ensureLoggedIn(page, auth);
+}
+
+/**
+ * 【v2.0】Entry 形态的认证恢复：只重建会话，不重放业务动作（C14）。
+ * 需要用户登录时只等待（横幅提示），绝不代替用户登录（C16/C17）。
+ */
+export async function recoverEntryAuthentication(page: Page, entry: Entry): Promise<void> {
+  await ensureLoggedIn(page, entryToAuthConfig(entry));
+}
+
+export function entryToAuthConfig(entry: Entry): AuthConfig {
+  return {
+    probeUrl: entry.entry.directUrl ?? entry.entry.portalUrl ?? entry.entry.landingUrlPattern,
+    sessionApi: entry.entry.sessionProbe.url,
+    loggedInJsonPath: entry.entry.sessionProbe.jsonPath,
+    loginUrlPatterns: entry.entry.loginUrlPatterns,
+    loginDomMarkers: entry.entry.loginDomMarkers,
+    loginTimeoutMs: entry.entry.loginTimeoutMs,
+  };
 }
 
 export function classifyAuthFromResponse(

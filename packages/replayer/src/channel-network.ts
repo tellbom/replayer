@@ -1,5 +1,7 @@
 import { TIMEOUTS, resolveTemplate } from '@dsh/core';
+import { BearerUnavailableError } from '@dsh/core';
 import type { ExecContext, ParamDefinition, Step, StepResult } from '@dsh/core';
+import { getLiveAuthHeader } from '@dsh/browser';
 import type { Page } from 'playwright';
 
 interface BrowserFetchResult {
@@ -27,10 +29,34 @@ export async function executeNetworkStep(
     return notSent(step.id, startedAt, String(error));
   }
 
+  // 【C18】按 entry.sessionType 分流：bearer/mixed 需就地取用 Authorization 头。
+  // 取不到 → BearerUnavailableError → not_sent（可安全降级 ui）；
+  // token 只存本次调用的内存，每步重新取，不缓存、不落盘。
+  let liveAuthorization: string | null = null;
+  const sessionType = context.entry.entry.sessionType;
+  if (sessionType === 'bearer' || sessionType === 'mixed') {
+    const source = context.entry.entry.bearerSource;
+    if (!source) {
+      return notSent(step.id, startedAt, `entry.sessionType=${sessionType} 但未配置 bearerSource，请先跑 dsh doctor --probe-entry`);
+    }
+    try {
+      liveAuthorization = await getLiveAuthHeader(page, source);
+    } catch (error) {
+      return notSent(step.id, startedAt, `bearer 就地取用失败: ${String(error)}`);
+    }
+    if (!liveAuthorization) {
+      return notSentWrapped(step.id, startedAt, new BearerUnavailableError(
+        `entry "${context.entry.entry.id}" 会话为 bearer/${source.strategy}，无法就地取用 Authorization 头`,
+      ));
+    }
+  } else if (sessionType === 'unknown') {
+    return notSent(step.id, startedAt, 'entry.sessionType=unknown，请先执行 dsh doctor --probe-entry 探测');
+  }
+
   const extracted: Array<Record<string, unknown>> = [];
   let lastRaw: StepResult['raw'];
   for (const request of requests) {
-    const result = await browserFetch(page, request, context.baseUrl);
+    const result = await browserFetch(page, request, context.baseUrl, liveAuthorization);
     if (!result.fetchStarted) return notSent(step.id, startedAt, result.error ?? '未调用 fetch');
     if (result.status === null) {
       return {
@@ -87,14 +113,19 @@ async function browserFetch(
   page: Page,
   request: NonNullable<Step['network']>,
   baseUrl: string,
+  liveAuthorization: string | null,
 ): Promise<BrowserFetchResult> {
   return page.evaluate(
-    async ({ spec, origin, timeoutMs }) => {
+    async ({ spec, origin, timeoutMs, authorization }) => {
       let fetchStarted = false;
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         const headers = new Headers(spec.headers);
+        // 【C18】bearer/mixed：注入就地取用的 Authorization（每步现取，不缓存）
+        if (authorization && !headers.has('authorization')) {
+          headers.set('authorization', authorization);
+        }
         let body: string | undefined;
         if (spec.body) {
           if (spec.contentType === 'form') {
@@ -126,7 +157,7 @@ async function browserFetch(
         };
       }
     },
-    { spec: request, origin: baseUrl, timeoutMs: TIMEOUTS.networkStep },
+    { spec: request, origin: baseUrl, timeoutMs: TIMEOUTS.networkStep, authorization: liveAuthorization },
   );
 }
 
@@ -211,4 +242,10 @@ function notSent(stepId: string, startedAt: number, error: string): StepResult {
     durationMs: Date.now() - startedAt,
     error,
   };
+}
+
+/** BearerUnavailableError 场景：not_sent 且把错误对象挂到 error 链（可安全降级 ui）。 */
+function notSentWrapped(stepId: string, startedAt: number, error: Error): StepResult {
+  const result = notSent(stepId, startedAt, error.message);
+  return { ...result, error: `${error.message} [${(error as { code?: string }).code ?? ''}]` };
 }

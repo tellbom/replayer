@@ -6,6 +6,19 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { configureAnalyzeCommand, runAnalyze } from './analyze.js';
+import type { Entry } from '@dsh/core';
+
+const testEntry: Entry = {
+  entry: {
+    id: 'oa', name: 'OA', via: 'direct', directUrl: 'http://oa/login',
+    landingUrlPattern: '/home', excludeUrlPatterns: [], sessionType: 'cookie',
+    sessionProbe: { url: '/api/session', okStatus: [200] },
+    identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+    loginUrlPatterns: [], loginTimeoutMs: 300_000,
+    credentialProvider: { type: 'none', ref: '', ttlMs: 30_000 },
+  },
+};
+const resolver = (): ((id: string) => Entry) => () => testEntry;
 
 describe('dsh analyze', () => {
   it('exposes out and compare options', () => {
@@ -36,7 +49,7 @@ describe('dsh analyze', () => {
     };
     await runAnalyze(root, { out: output, llm: true }, llm);
     const yaml = await readFile(output, 'utf8');
-    expect(parseSkill(yaml).skill.id).toBe('annotated');
+    expect(parseSkill(yaml, resolver()).skill.id).toBe('annotated');
     expect(yaml).toContain('# TODO: LLM 建议');
   });
 
@@ -47,7 +60,7 @@ describe('dsh analyze', () => {
     await writeFile(join(root, 'record.json'), JSON.stringify(session()), 'utf8');
     await writeFile(comparison, JSON.stringify(session()), 'utf8');
     await runAnalyze(root, { out: output, compare: comparison });
-    const skill = parseSkill(await readFile(output, 'utf8'));
+    const skill = parseSkill(await readFile(output, 'utf8'), resolver());
     expect(skill.skill.id).toBe('recorded_skill');
     expect(skill.steps).toEqual([]);
   });
@@ -60,6 +73,7 @@ function session(): RecordSession {
       endedAt: '2026-08-18T00:01:00.000Z',
       baseUrl: 'http://oa',
       userAgent: 'Chrome',
+      entryId: 'oa',
     },
     actions: [],
     network: [],

@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { parseDocument } from 'yaml';
 
 import { parseSkill } from './schema.js';
-import type { Skill } from './schema.js';
+import type { Entry, Skill } from './schema.js';
 import type { HealCandidate } from './types.js';
 
 /** Persist a fully verified locator repair while retaining the YAML document's comments. */
@@ -10,12 +10,13 @@ export async function commitHeal(
   skillPath: string,
   candidate: HealCandidate,
   reason: string,
+  entryResolver: (id: string) => Entry,
 ): Promise<Skill> {
   if (!candidate.resolveVerified || !candidate.actionVerified) {
     throw new Error('只有定位与动作均验证通过的自愈候选才能写回');
   }
   const source = await readFile(skillPath, 'utf8');
-  const skill = parseSkill(source);
+  const skill = parseSkill(source, entryResolver);
   const stepIndex = skill.steps.findIndex((step) => step.id === candidate.stepId);
   if (stepIndex < 0) throw new Error(`技能中不存在步骤: ${candidate.stepId}`);
 
@@ -35,7 +36,7 @@ export async function commitHeal(
     },
   ]);
   const yaml = document.toString({ lineWidth: 0 });
-  const updated = parseSkill(yaml);
+  const updated = parseSkill(yaml, entryResolver);
   await writeFile(skillPath, yaml, 'utf8');
   return updated;
 }

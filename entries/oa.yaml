@@ -1,0 +1,31 @@
+# Mock OA 认证载体（v2.0 C16：登录归载体，技能不含登录环节）
+entry:
+  id: oa
+  name: Mock OA
+  via: portal
+  portalUrl: http://127.0.0.1:5173/portal
+  linkText: OA办公系统
+  landingUrlPattern: /home
+  excludeUrlPatterns:
+    - '\\?token='
+    - '\\?ticket='
+    - /sso/callback
+    - /sso/redirect
+  sessionType: cookie
+  channelCapability:
+    network: true
+    ui: true
+  sessionProbe:
+    url: /api/session?_nodelay=1
+    jsonPath: $.loggedIn
+    okStatus: [200]
+  identityProbe:
+    url: /api/userinfo?_nodelay=1
+    jsonPath: $.sub
+  loginUrlPatterns: [/login]
+  loginDomMarkers: ['input[type="password"]']
+  loginTimeoutMs: 300000
+  credentialProvider:
+    type: none
+    ref: ''
+    ttlMs: 30000

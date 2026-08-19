@@ -90,7 +90,7 @@ describe('detectAuth', () => {
 
 function baseSession(): RecordSession {
   return {
-    meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome' },
+    meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
     actions: [],
     network: [],
     pages: [],

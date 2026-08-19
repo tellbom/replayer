@@ -1,8 +1,9 @@
-import { parseSkill } from '@dsh/core';
-import type { Step } from '@dsh/core';
+import { parseEntry, parseSkill } from '@dsh/core';
+import type { Entry, Step } from '@dsh/core';
 import { replay } from '@dsh/replayer';
 import type { Command } from 'commander';
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 interface ReplayCliOptions {
@@ -11,6 +12,7 @@ interface ReplayCliOptions {
   channel?: 'ui' | 'network';
   llm: boolean;
   profile: string;
+  entries: string;
   yes?: boolean;
 }
 
@@ -22,6 +24,7 @@ export function configureReplayCommand(program: Command): void {
     .option('--dry-run', '只打印执行计划，不启动浏览器')
     .option('--channel <channel>', '强制通道：ui 或 network')
     .option('--no-llm', '禁用 LLM')
+    .option('--entries <directory>', 'entry 认证载体配置目录', './entries')
     .option('--profile <directory>', '持久化浏览器配置目录', './profiles/default')
     .option('--yes', '跳过高风险确认，仅用于自动化测试')
     .action(runReplay);
@@ -31,12 +34,26 @@ export async function runReplay(skillPath: string, options: ReplayCliOptions): P
   if (options.channel !== undefined && options.channel !== 'ui' && options.channel !== 'network') {
     throw new Error(`无效通道: ${options.channel}`);
   }
-  const skill = parseSkill(await readFile(skillPath, 'utf8'));
+  const entryCache = new Map<string, Entry>();
+  const loadEntrySync = (id: string): Entry => {
+    const cached = entryCache.get(id);
+    if (cached) return cached;
+    throw new Error(`entry 配置不存在: entries/${id}.yaml`);
+  };
+  const skillText = await readFile(skillPath, 'utf8');
+  const entryId = /^[ \t]*entry:[ \t]*(\S+)/m.exec(skillText)?.[1];
+  if (!entryId) throw new Error('技能缺少 skill.entry 字段');
+  const entry: Entry = parseEntry(
+    await readFile(resolve(options.entries, `${entryId}.yaml`), 'utf8'),
+  );
+  entryCache.set(entryId, entry);
+  const skill = parseSkill(skillText, loadEntrySync);
   const params = await parseReplayParams(options.params);
   const confirm = options.yes ? async () => true : confirmRisk;
   const result = await replay(skill, {
     params,
     profileDir: options.profile,
+    entry,
     dryRun: options.dryRun,
     forceChannel: options.channel,
     noLLM: !options.llm,

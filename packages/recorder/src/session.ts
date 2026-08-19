@@ -1,5 +1,5 @@
-import { ensureLoggedIn, launchDSHContext } from '@dsh/browser';
-import type { AuthConfig } from '@dsh/browser';
+import { ensureEntry, launchDSHContext } from '@dsh/browser';
+import type { Entry } from '@dsh/core';
 import type { RecordSession, RecordedAction } from '@dsh/core';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
@@ -9,10 +9,10 @@ import type { BrowserContext, Page } from 'playwright';
 import { startNetworkRecording } from './network.js';
 
 export interface RecordOptions {
-  url: string;
+  /** 【v2.0】entry 配置：录制起点恒为已建立的子系统会话（C16） */
+  entry: Entry;
   profileDir: string;
   outDir: string;
-  auth?: AuthConfig;
   channel?: 'chrome' | 'msedge';
   headless?: boolean;
   stopSignal?: Promise<void>;
@@ -21,6 +21,8 @@ export interface RecordOptions {
 
 /**
  * 启动持久化浏览器并将一次完整录制写入 record.json。
+ * 【C16】ensureEntry 完成后才开启录制——登录/门户跳转绝不进入技能。
+ * 【C19】命中 excludeUrlPatterns 的导航与请求一律不记录。
  */
 export async function record(opts: RecordOptions): Promise<RecordSession> {
   await mkdir(opts.profileDir, { recursive: true });
@@ -31,11 +33,17 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     headless: opts.headless,
   });
   const page = context.pages()[0] ?? (await context.newPage());
-  await page.goto(opts.url);
-  if (opts.auth) await ensureLoggedIn(page, opts.auth);
+  const excludeMatchers = compileExcludePatterns(opts.entry.entry.excludeUrlPatterns);
+
+  // 【C16】先建立会话，再开录制
+  const entrySession = await ensureEntry(page, opts.entry);
+  const baseUrl = new URL(page.url()).origin;
 
   const actions: RecordedAction[] = [];
   await page.exposeBinding('__DSH_RECORD__', (_source, action: RecordedAction) => {
+    // 【C19】一次性认证跳转不记录
+    const actionUrl = action.url ?? '';
+    if (actionUrl && excludeMatchers.some((re) => re.test(actionUrl))) return;
     actions.push(action);
   });
   await installRecorderProbe(context, page);
@@ -49,13 +57,15 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const pageTasks = new Set<Promise<void>>();
   const onDomContentLoaded = (): void => {
     const task = page.title().then((title) => {
-      pages.push({ ts: Date.now(), url: page.url(), title });
+      if (!excludeMatchers.some((re) => re.test(page.url()))) {
+        pages.push({ ts: Date.now(), url: page.url(), title });
+      }
     });
     pageTasks.add(task);
     void task.finally(() => pageTasks.delete(task));
   };
   page.on('domcontentloaded', onDomContentLoaded);
-  const networkRecording = startNetworkRecording(page);
+  const networkRecording = startNetworkRecording(page, excludeMatchers);
 
   try {
     await showRecordingBar(page);
@@ -74,8 +84,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     meta: {
       startedAt,
       endedAt: new Date().toISOString(),
-      baseUrl: new URL(opts.url).origin,
+      baseUrl,
       userAgent,
+      entryId: opts.entry.entry.id,
     },
     actions,
     network,
@@ -83,7 +94,13 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   };
   await writeFile(`${opts.outDir}/record.json`, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
   await context.close();
+  void entrySession;
   return session;
+}
+
+/** excludeUrlPatterns 是「字面子串的正则写法」（默认 \\?token= 等），转成 RegExp。 */
+function compileExcludePatterns(patterns: readonly string[]): RegExp[] {
+  return patterns.map((pattern) => new RegExp(pattern));
 }
 
 async function installRecorderProbe(context: BrowserContext, page: Page): Promise<void> {

@@ -42,7 +42,7 @@ describe('detectParams', () => {
 
 function recording(type: string, reason: string): RecordSession {
   return {
-    meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome' },
+    meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
     actions: [
       { ts: 1, type: 'select', label: '加班类型', value: type },
       { ts: 2, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },

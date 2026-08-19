@@ -4,6 +4,25 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { commitHeal } from './skill-writer.js';
+import type { Entry } from './schema.js';
+
+const testEntry: Entry = {
+  entry: {
+    id: 'oa',
+    name: 'OA',
+    via: 'direct',
+    directUrl: 'http://oa/login',
+    landingUrlPattern: '/home',
+    excludeUrlPatterns: [],
+    sessionType: 'cookie',
+    sessionProbe: { url: '/api/session', okStatus: [200] },
+    identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+    loginUrlPatterns: [],
+    loginTimeoutMs: 300_000,
+    credentialProvider: { type: 'none', ref: '', ttlMs: 30_000 },
+  },
+};
+const entryResolver = (): ((id: string) => Entry) => () => testEntry;
 
 const yaml = `# TODO: 保留技能复核注释
 skill:
@@ -11,6 +30,7 @@ skill:
   name: demo
   system: oa
   baseUrl: http://oa
+  entry: oa
   version: 1
 params: []
 preflight: []
@@ -41,7 +61,7 @@ describe('commitHeal', () => {
       actionVerified: true,
       requiresConfirm: false,
       model: 'mock',
-    }, '字段改名');
+    }, '字段改名', entryResolver());
 
     const output = await readFile(path, 'utf8');
     expect(updated.skill.version).toBe(2);
@@ -59,6 +79,6 @@ describe('commitHeal', () => {
       actionVerified: false,
       requiresConfirm: false,
       model: 'mock',
-    }, '未验证')).rejects.toThrow('均验证通过');
+    }, '未验证', entryResolver())).rejects.toThrow('均验证通过');
   });
 });

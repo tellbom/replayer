@@ -19,7 +19,12 @@ export function createProgram(): Command {
     .command('doctor')
     .description('检查浏览器载体与内网迁移前置条件')
     .option('--probe-frontend <url>', '探测目标页面的 Vue/Element 版本')
-    .action(async (options: { probeFrontend?: string }) => runDoctor(options));
+    .option('--probe-entry', '探测目标系统会话类型并生成 entry 配置草稿')
+    .option('--portal <url>', 'entry 探测：门户地址')
+    .option('--direct <url>', 'entry 探测：直达地址')
+    .option('--target <id>', 'entry 探测：目标系统 id', 'oa')
+    .option('--entries <directory>', 'entry 配置输出目录', './entries')
+    .action(async (options: import('./doctor.js').DoctorOptions) => runDoctor(options));
   configureRecordCommand(program);
   configureDiffCommand(program);
   configureReplayCommand(program);

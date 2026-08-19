@@ -1,10 +1,13 @@
+# v2.0 C16：技能起点恒为「已通过 entry 进入目标系统、会话已建立」。
+# 登录环节在 entries/oa.yaml（载体职责），本技能不含任何登录步骤。
 skill:
   id: oa_overtime_submit
   name: 提交加班申请
   description: Mock OA 加班申请确定性回放技能
   system: mock-oa
-  baseUrl: http://127.0.0.1:5173/login
-  version: 1
+  baseUrl: http://127.0.0.1:5173
+  entry: oa
+  version: 2
 params:
   - name: type
     type: enum
@@ -18,42 +21,15 @@ params:
   - { name: reason, type: string, required: true }
 preflight: []
 steps:
-  - id: login-user
-    desc: 输入 Mock 用户名
-    channel: ui
-    riskLevel: read
-    hasSideEffect: false
-    ui:
-      action: fill
-      label: 用户名
-      kind: input
-      value: tester
-      preAction:
-        action: waitFor
-        waitFor: { selector: .el-form-item }
-  - id: login-password
-    desc: 输入 Mock 密码
-    channel: ui
-    riskLevel: read
-    hasSideEffect: false
-    ui: { action: fill, label: 密码, kind: input, value: tester }
-  - id: login-submit
-    desc: 登录 Mock OA
-    channel: ui
-    riskLevel: read
-    hasSideEffect: false
-    ui:
-      action: click
-      target: { strategy: text, text: 登录 }
-      waitFor: { selector: 'a[href="/overtime/apply"]' }
   - id: csrf
     desc: 获取 CSRF token
     channel: network
     riskLevel: read
     hasSideEffect: false
+    idempotent: true
     network:
       method: GET
-      url: /api/csrf
+      url: /api/csrf?_nodelay=1
       contentType: json
       extract: { csrfToken: $.token }
   - id: approver
@@ -61,9 +37,10 @@ steps:
     channel: network
     riskLevel: read
     hasSideEffect: false
+    idempotent: true
     network:
       method: POST
-      url: /api/overtime/approver
+      url: /api/overtime/approver?_nodelay=1
       contentType: json
       body: { type: '{{type|enumValue}}' }
       extract: { approverId: $.approverId, approvalToken: $.approvalToken }
@@ -72,18 +49,21 @@ steps:
     channel: merged
     riskLevel: read
     hasSideEffect: false
+    idempotent: true
     ui: { action: setDateTime, value: '{{startTime}}' }
   - id: endTime
     desc: 合并结束时间参数
     channel: merged
     riskLevel: read
     hasSideEffect: false
+    idempotent: true
     ui: { action: setDateTime, value: '{{endTime}}' }
   - id: reason
     desc: 合并事由参数
     channel: merged
     riskLevel: read
     hasSideEffect: false
+    idempotent: true
     ui: { action: fill, value: '{{reason}}' }
   - id: submit
     desc: 提交加班申请
@@ -113,3 +93,8 @@ postcondition:
     limit: 5
   expectFound: true
   timeoutMs: 10000
+reentry:
+  strategy: restart-from-anchor
+  identityLock: true
+  anchor: approver
+  maxReentries: 2

@@ -1,3 +1,4 @@
+import { DEPENDENCY } from '@dsh/core';
 import type { RecordedAction, RecordedRequest, RecordSession } from '@dsh/core';
 
 const ACTION_REQUEST_WINDOW_MS = 2_000;
@@ -67,25 +68,23 @@ function analyzeDependencies(requests: RecordedRequest[]): CorrelatedRequest[] {
   const lastMutating = [...requests]
     .filter((request) => request.mutating)
     .sort((left, right) => right.requestTs - left.requestTs)[0]?.requestId;
+  // 弱值去重需要跨全部响应统计出现次数（T-29 规则第 4 条）
+  const globalValueCounts = new Map<string, number>();
+  for (const request of requests) {
+    for (const leaf of responseBodyLeaves(request)) {
+      const key = `${typeof leaf.value}:${String(leaf.value)}`;
+      globalValueCounts.set(key, (globalValueCounts.get(key) ?? 0) + 1);
+    }
+  }
   return requests.map((target, targetIndex) => {
     const dependsOn: RequestDependency[] = [];
     const targetLeaves = requestBodyLeaves(target);
     for (const source of requests.slice(0, targetIndex)) {
       const sourceLeaves = responseBodyLeaves(source);
-      // 弱值（布尔/数字）在枚举型响应中大量重复，等值即匹配会产生海量假依赖；
-      // 仅当该值在整个源响应中唯一出现时才视为依赖（approverId 这类唯一 id 仍可识别）。
-      const weakValueCounts = countWeakValues(sourceLeaves);
       for (const targetLeaf of targetLeaves) {
-        // 空字符串是弱值：列表型响应里到处都是，等值匹配只会产生假依赖。
-        if (targetLeaf.value === '') continue;
+        if (isWeakValue(targetLeaf.value, globalValueCounts)) continue;
         for (const sourceLeaf of sourceLeaves) {
           if (targetLeaf.value !== sourceLeaf.value) continue;
-          if (
-            (typeof sourceLeaf.value === 'number' || typeof sourceLeaf.value === 'boolean') &&
-            (weakValueCounts.get(sourceLeaf.value) ?? 0) > 1
-          ) {
-            continue;
-          }
           if (source.sanitizeMode !== 'structured' || target.sanitizeMode !== 'structured') {
             throw new Error(
               `依赖识别要求 structured 脱敏: ${source.requestId} -> ${target.requestId}`,
@@ -103,14 +102,34 @@ function analyzeDependencies(requests: RecordedRequest[]): CorrelatedRequest[] {
   });
 }
 
-function countWeakValues(leaves: ValueLeaf[]): Map<number | boolean, number> {
-  const counts = new Map<number | boolean, number>();
-  for (const leaf of leaves) {
-    if (typeof leaf.value === 'number' || typeof leaf.value === 'boolean') {
-      counts.set(leaf.value, (counts.get(leaf.value) ?? 0) + 1);
-    }
+/** fingerprint 形态豁免弱值规则——依赖识别恰恰依赖它们。 */
+function isFingerprint(value: string): boolean {
+  return /^<REDACTED:sha256:[0-9a-f]{12}>$/.test(value);
+}
+
+/**
+ * 【T-29】弱值过滤，按序判断，命中即跳过：
+ * 1. 布尔（含 'true'/'false' 字符串形态）
+ * 2. 空值（'' —— null/undefined/[]/{} 已被 collectLeaves 排除）
+ * 3. 短数字：整数且 |v| < minNumberAbs
+ * 4. 某值在所有响应中出现次数 > weakValueThreshold（fingerprint 豁免）
+ * 5. 短字符串：长度 < minStringLength 且非 fingerprint
+ */
+function isWeakValue(value: string | number | boolean, counts: Map<string, number>): boolean {
+  if (typeof value === 'boolean') return true;
+  if (value === 'true' || value === 'false') return true;
+  if (value === '') return true;
+  if (typeof value === 'number' && Number.isInteger(value) && Math.abs(value) < DEPENDENCY.minNumberAbs) {
+    return true;
   }
-  return counts;
+  const key = `${typeof value}:${String(value)}`;
+  if ((counts.get(key) ?? 0) > DEPENDENCY.weakValueThreshold && !(typeof value === 'string' && isFingerprint(value))) {
+    return true;
+  }
+  if (typeof value === 'string' && value.length < DEPENDENCY.minStringLength && !isFingerprint(value)) {
+    return true;
+  }
+  return false;
 }
 
 interface ValueLeaf {

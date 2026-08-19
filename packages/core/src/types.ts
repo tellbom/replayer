@@ -18,7 +18,14 @@ export type ControlKind =
   | 'text';
 
 export interface RecordSession {
-  meta: { startedAt: string; endedAt: string; baseUrl: string; userAgent: string };
+  meta: {
+    startedAt: string;
+    endedAt: string;
+    baseUrl: string;
+    userAgent: string;
+    /** 【v2.0】本次录制使用的 entry 配置 id */
+    entryId: string;
+  };
   actions: RecordedAction[];
   network: RecordedRequest[];
   pages: { ts: number; url: string; title: string }[];
@@ -69,6 +76,10 @@ export interface ExecContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   stepResults: Record<string, any>;
   baseUrl: string;
+  /** 【v2.0】技能引用的认证载体配置 */
+  entry: import('./schema.js').Entry;
+  /** 【C21】执行开始时记录的身份摘要 */
+  identityDigest: string;
 }
 
 export interface StepResult {
@@ -80,7 +91,7 @@ export interface StepResult {
   error?: string;
   healed?: boolean;
   raw?: { status?: number; text?: string };
-  outcomeResolvedBy?: 'postcondition';
+  outcomeResolvedBy?: 'response' | 'postcondition';
   postconditionResult?: {
     found: boolean;
     expectFound: boolean;
@@ -94,6 +105,8 @@ export interface RunResult {
   steps: StepResult[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   extracted: Record<string, any>;
+  /** 【v2.0 C22】本次运行触发的重入次数 */
+  reentryCount: number;
   diagnosticDir?: string;
 }
 

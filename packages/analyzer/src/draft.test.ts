@@ -1,4 +1,16 @@
-import { parseSkill, type RecordSession } from '@dsh/core';
+import { parseSkill, type Entry, type RecordSession } from '@dsh/core';
+
+const testEntry: Entry = {
+  entry: {
+    id: 'oa', name: 'OA', via: 'direct', directUrl: 'http://oa/login',
+    landingUrlPattern: '/home', excludeUrlPatterns: [], sessionType: 'cookie',
+    sessionProbe: { url: '/api/session', okStatus: [200] },
+    identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+    loginUrlPatterns: [], loginTimeoutMs: 300_000,
+    credentialProvider: { type: 'none', ref: '', ttlMs: 30_000 },
+  },
+};
+const resolver = (): ((id: string) => Entry) => () => testEntry;
 import { describe, expect, it } from 'vitest';
 
 import { generateDraft } from './draft.js';
@@ -6,7 +18,7 @@ import { generateDraft } from './draft.js';
 describe('generateDraft', () => {
   it('creates a schema-valid YAML draft with dependency templates and TODO comments', () => {
     const result = generateDraft(recording(true));
-    const parsed = parseSkill(result.yaml);
+    const parsed = parseSkill(result.yaml, resolver());
     const approver = parsed.steps.find((step) => step.network?.url.includes('/approver'));
     const submit = parsed.steps.find((step) => step.network?.url.includes('/submit'));
 
@@ -41,7 +53,7 @@ describe('generateDraft', () => {
 
   it('writes an explicit safety TODO when no postcondition can be inferred', () => {
     const result = generateDraft(recording(false));
-    expect(parseSkill(result.yaml).postcondition).toBeUndefined();
+    expect(parseSkill(result.yaml, resolver()).postcondition).toBeUndefined();
     expect(result.yaml).toContain('TODO: 未能自动推断 postcondition');
     expect(result.yaml).toContain('响应丢失将中止');
   });
@@ -54,7 +66,7 @@ describe('generateDraft', () => {
       attributes: { 'oauth2.device.authorization.grant.enabled': 'dsh-test' },
     });
     const result = generateDraft(session);
-    expect(() => parseSkill(result.yaml)).not.toThrow();
+    expect(() => parseSkill(result.yaml, resolver())).not.toThrow();
     expect(result.yaml).toContain('oauth2.device.authorization.grant.enabled');
   });
 });
@@ -120,6 +132,7 @@ function recording(withHistory: boolean): RecordSession {
       endedAt: '2026-08-18T00:01:00.000Z',
       baseUrl: 'http://oa',
       userAgent: 'Chrome',
+      entryId: 'oa',
     },
     actions: [
       { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },

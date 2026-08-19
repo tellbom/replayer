@@ -1,6 +1,8 @@
 import { parse } from 'yaml';
 import { z } from 'zod';
 
+import { assertNoPlainCredentials } from './sanitize.js';
+import { SchemaViolationError } from './errors.js';
 import type { ControlKind, LocatorStrategy } from './types.js';
 
 export const ControlKindSchema: z.ZodType<ControlKind> = z.enum([
@@ -60,6 +62,86 @@ export const PostconditionSchema = z.object({
 
 export type Postcondition = z.infer<typeof PostconditionSchema>;
 
+/** 【v2.0 C18】bearer 内存态系统的 token 就地取用来源 */
+export const BearerSourceSchema = z.object({
+  strategy: z.enum(['storage', 'global', 'cdp-inherit', 'ui-only']),
+  key: z.string().optional(),
+  globalPath: z.string().optional(),
+  triggerUrl: z.string().optional(),
+});
+
+export type BearerSource = z.infer<typeof BearerSourceSchema>;
+
+/**
+ * 【v2.0】Entry：认证载体配置。技能通过 skill.entry 引用，自身不含登录环节（C16）。
+ */
+export const EntrySchema = z.object({
+  entry: z.object({
+    id: z.string(),
+    name: z.string(),
+
+    via: z.enum(['portal', 'direct']),
+    portalUrl: z.string().optional(),
+    linkText: z.string().optional(),
+    directUrl: z.string().optional(),
+
+    landingUrlPattern: z.string(),
+
+    /** 【C19】必须排除的一次性认证跳转 */
+    excludeUrlPatterns: z
+      .array(z.string())
+      .default(['\\?token=', '\\?ticket=', '/sso/callback', '/sso/redirect']),
+
+    /** 【C18】由 dsh doctor --probe-entry 探测得出 */
+    sessionType: z.enum(['cookie', 'bearer', 'mixed', 'unknown']).default('unknown'),
+    bearerSource: BearerSourceSchema.optional(),
+    channelCapability: z
+      .object({
+        network: z.boolean(),
+        ui: z.boolean().default(true),
+      })
+      .optional(),
+
+    /** 会话存活探测 */
+    sessionProbe: z.object({
+      url: z.string(),
+      jsonPath: z.string().optional(),
+      okStatus: z.array(z.number()).default([200]),
+    }),
+
+    /** 【C21】身份一致性探测 */
+    identityProbe: z.object({
+      url: z.string(),
+      jsonPath: z.string(),
+    }),
+
+    loginUrlPatterns: z.array(z.string()).default([]),
+    loginDomMarkers: z.array(z.string()).optional(),
+    loginTimeoutMs: z.number().default(300_000),
+
+    /** 【二期预留，一期恒 none】 */
+    credentialProvider: z
+      .object({
+        type: z.enum(['none', 'vault', 'os-keychain', 'enterprise-sso-agent']).default('none'),
+        ref: z.string().default(''),
+        ttlMs: z.number().default(30_000),
+      })
+      .default({ type: 'none', ref: '', ttlMs: 30_000 }),
+  }),
+});
+
+export type Entry = z.infer<typeof EntrySchema>;
+
+/** 【v2.0 C22】重入策略：从锚点重跑幂等前缀，不是从断点继续 */
+export const ReentrySchema = z.object({
+  strategy: z.enum(['restart-from-anchor', 'abort']).default('restart-from-anchor'),
+  identityLock: z.boolean().default(true),
+  anchor: z.string(),
+  maxReentries: z.number().default(2),
+});
+
+export type Reentry = z.infer<typeof ReentrySchema>;
+
 type UiActionName =
   | 'navigate'
   | 'click'
@@ -117,6 +199,10 @@ export const StepSchema = z.object({
   channel: z.enum(['network', 'ui', 'merged', 'auto']),
   riskLevel: z.enum(['read', 'write', 'critical']).default('read'),
   hasSideEffect: z.boolean().default(false),
+  /**
+   * 【C22】重跑是否无副作用。未显式声明时按 riskLevel 推导：read → true，write/critical → false
+   */
+  idempotent: z.boolean().optional(),
   network: z
     .object({
       method: z.enum(['GET', 'POST', 'PUT', 'DELETE']),
@@ -190,24 +276,17 @@ export const SkillSchema = z.object({
     description: z.string().optional(),
     system: z.string(),
     baseUrl: z.string(),
+    /** 【C16】引用 entries/<id>.yaml，技能内不再有 auth 段 */
+    entry: z.string(),
     version: z.number().default(1),
     recordedAt: z.string().optional(),
   }),
-  auth: z
-    .object({
-      probeUrl: z.string(),
-      sessionApi: z.string().optional(),
-      loggedInJsonPath: z.string().optional(),
-      loginUrlPatterns: z.array(z.string()).default([]),
-      loginDomMarkers: z.array(z.string()).optional(),
-      loginTimeoutMs: z.number().default(300_000),
-    })
-    .optional(),
   params: z.array(ParamSchema),
   preflight: z.array(PreflightSchema).default([]),
   steps: z.array(StepSchema),
   assertions: z.array(AssertionSchema).default([]),
   postcondition: PostconditionSchema.optional(),
+  reentry: ReentrySchema.optional(),
   _healHistory: z
     .array(
       z.object({
@@ -230,6 +309,55 @@ export const SkillSchema = z.object({
 export type Step = z.infer<typeof StepSchema>;
 export type Skill = z.infer<typeof SkillSchema>;
 
-export function parseSkill(yamlText: string): Skill {
-  return SkillSchema.parse(parse(yamlText));
+/** 【v2.0】未显式声明 idempotent 时按 riskLevel 推导（C22 校验用同一规则）。 */
+export function stepIsIdempotent(step: Step): boolean {
+  return step.idempotent ?? step.riskLevel === 'read';
+}
+
+export function parseSkill(yamlText: string, entryResolver: (id: string) => Entry): Skill {
+  const skill = SkillSchema.parse(parse(yamlText));
+  const entry = entryResolver(skill.skill.entry);
+
+  // 【C17】明文凭证拒绝
+  assertNoPlainCredentials(skill.steps, 'steps');
+  assertNoPlainCredentials(skill.preflight, 'preflight');
+
+  // 【C18】bearer 内存态系统禁止 network 通道
+  const netUnavailable =
+    entry.entry.sessionType === 'bearer' && entry.entry.bearerSource?.strategy === 'ui-only';
+  if (netUnavailable) {
+    const bad = skill.steps.filter((s) => s.channel === 'network' || s.channel === 'auto');
+    if (bad.length) {
+      throw new SchemaViolationError(
+        `[C18] entry "${entry.entry.id}" 的 sessionType=bearer/ui-only，network 通道不可用。` +
+          `以下步骤必须改为 channel: ui —— ${bad.map((s) => s.id).join(', ')}`,
+      );
+    }
+  }
+
+  // 【C22】anchor 之前的步骤必须幂等
+  if (skill.reentry) {
+    const idx = skill.steps.findIndex((s) => s.id === skill.reentry!.anchor);
+    if (idx < 0) {
+      throw new SchemaViolationError(`reentry.anchor "${skill.reentry.anchor}" 不存在`);
+    }
+    const bad = skill.steps.slice(0, idx + 1).filter((s) => !stepIsIdempotent(s));
+    if (bad.length) {
+      throw new SchemaViolationError(
+        `[C22] anchor 之前存在非幂等步骤：${bad.map((s) => s.id).join(', ')}。` +
+          `重入会重跑这些步骤并产生重复副作用。请把 anchor 前移，或标记这些步骤为幂等。`,
+      );
+    }
+  }
+  return skill;
+}
+
+export function parseEntry(yamlText: string): Entry {
+  const entry = EntrySchema.parse(parse(yamlText));
+  if (entry.entry.credentialProvider.type !== 'none') {
+    throw new SchemaViolationError(
+      `entry "${entry.entry.id}" 的 credentialProvider.type=${entry.entry.credentialProvider.type} 属于二期能力，一期恒为 none。`,
+    );
+  }
+  return entry;
 }

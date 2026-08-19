@@ -1,11 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
 
+import { SchemaViolationError } from './errors.js';
 import type { SanitizeMode } from './types.js';
 
 const SENSITIVE_HEADER =
   /^(authorization|cookie|set-cookie|x-api-key|proxy-authorization|x-csrf-token)$/i;
+// 敏感词词形匹配：camel/snake 变体均命中（approvalToken、client_secret、api_key），
+// 仅排除同词内的小写延续（secretary、tokenize）这类业务字段误伤。
 const SENSITIVE_FIELD =
-  /(password|passwd|access_token|refresh_token|token|session|secret|api_key|__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken)/i;
+  /(?:[Pp]assword|[Pp]asswd|[Aa]ccess_?[Tt]oken|[Rr]efresh_?[Tt]oken|[Tt]oken|[Ss]ession|[Ss]ecret|[Aa]pi_?[Kk]ey)(?![a-z])|__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken/;
 
 export interface SanitizedBody {
   value: string;
@@ -33,6 +36,16 @@ export function createSanitizer(): Sanitizer {
   const sanitizeUnknown = (value: unknown, key?: string): unknown => {
     if (key !== undefined && SENSITIVE_FIELD.test(key)) {
       return fingerprint(String(value));
+    }
+    // 【v2.0 规格第 5 条】字符串叶子可能是内嵌 JSON（如 StepResult.raw.text 持有的
+    // 响应体）。先尝试 JSON.parse 展开，成功则递归处理后再序列化回去；
+    // 失败则保持原值（非 JSON 字符串的脱敏由 sanitizeText 的正则兜底）。
+    if (typeof value === 'string' && looksLikeJson(value)) {
+      try {
+        return sanitizeUnknown(JSON.parse(value));
+      } catch {
+        // 保持原值继续
+      }
     }
     if (Array.isArray(value)) {
       return value.map((item) => sanitizeUnknown(item));
@@ -139,6 +152,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** 仅对「看起来像 JSON 对象/数组」的字符串做展开，避免对普通业务文本反复 parse。 */
+function looksLikeJson(value: string): boolean {
+  return value.length > 1 && (value.startsWith('{') || value.startsWith('['));
+}
+
 function getBoundary(contentType: string): string {
   const match = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
   const boundary = match?.[1] ?? match?.[2];
@@ -178,4 +196,36 @@ function sanitizeHiddenInputs(body: string, fingerprint: (value: string) => stri
         `${prefix}${fingerprint(value)}${suffix}`,
     );
   });
+}
+
+/** 【v2.0 C17】凭证字段名黑名单：技能中不得出现明文凭证字段。 */
+const FORBIDDEN_KEYS = /^(password|passwd|pwd|secret|client_?secret|credential|api_?key)$/i;
+/** 【v2.0 C17】凭证换取语义：grant_type=password 的字符串与表单两种形态。 */
+const FORBIDDEN_VALUES = /grant_type\s*=\s*password|"grant_type"\s*:\s*"password"/i;
+
+/**
+ * 【C17】递归校验技能树中不含明文凭证。parseSkill 在 Schema 解析后调用，
+ * 命中即抛 SchemaViolationError——凭证换取直接否定整个架构的存在理由（§0.3）。
+ */
+// 冻结契约允许技能树持有任意 JSON 值。
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function assertNoPlainCredentials(node: any, path = 'root'): void {
+  if (node === null || node === undefined) return;
+  if (typeof node === 'string') {
+    if (FORBIDDEN_VALUES.test(node)) {
+      throw new SchemaViolationError(
+        `[C17] ${path} 含凭证换取语义（grant_type=password），禁止。技能不得包含登录环节，见 C16。`,
+      );
+    }
+    return;
+  }
+  if (typeof node !== 'object') return;
+  for (const [k, v] of Object.entries(node)) {
+    if (FORBIDDEN_KEYS.test(k)) {
+      throw new SchemaViolationError(
+        `[C17] ${path}.${k} 是明文凭证字段，禁止出现在技能中。二期自动填充请用 credentialProvider.ref。`,
+      );
+    }
+    assertNoPlainCredentials(v, `${path}.${k}`);
+  }
 }

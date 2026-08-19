@@ -9,8 +9,9 @@ export interface NetworkRecording {
 
 /**
  * 监听 Playwright 网络事件，并且只在内存中保留脱敏后的记录。
+ * 【C19】excludeMatchers 命中的一跳认证 URL 不录制。
  */
-export function startNetworkRecording(page: Page): NetworkRecording {
+export function startNetworkRecording(page: Page, excludeMatchers: RegExp[] = []): NetworkRecording {
   const sanitizer = createSanitizer();
   const records: RecordedRequest[] = [];
   const byRequest = new Map<Request, RecordedRequest>();
@@ -27,6 +28,7 @@ export function startNetworkRecording(page: Page): NetworkRecording {
     const resourceType = request.resourceType();
     const rawUrl = request.url();
     if (shouldDiscard(method, resourceType, rawUrl)) return;
+    if (excludeMatchers.some((re) => re.test(rawUrl))) return;
 
     const initialHeaders = request.headers();
     const postData = request.postData();
