@@ -46,13 +46,19 @@ export function correlate(session: RecordSession): CorrelatedStep[] {
   }
 
   if (orphanRequests.length > 0) {
-    steps.push({
+    // 按 requestTs 插回动作序列：orphan 是动作窗口外的初始化请求，
+    // 追加到末尾会让依赖模板引用后置步骤，回放时必然解析失败。
+    const orphanStep: CorrelatedStep = {
       id: 'orphan',
       action: null,
       requests: orphanRequests,
       orphan: true,
       hasSideEffect: orphanRequests.some((request) => request.mutating),
-    });
+    };
+    const insertBefore = session.actions.findIndex(
+      (action) => action.ts > orphanRequests[0]!.requestTs,
+    );
+    steps.splice(insertBefore === -1 ? steps.length : insertBefore, 0, orphanStep);
   }
   return steps;
 }
@@ -66,9 +72,20 @@ function analyzeDependencies(requests: RecordedRequest[]): CorrelatedRequest[] {
     const targetLeaves = requestBodyLeaves(target);
     for (const source of requests.slice(0, targetIndex)) {
       const sourceLeaves = responseBodyLeaves(source);
+      // 弱值（布尔/数字）在枚举型响应中大量重复，等值即匹配会产生海量假依赖；
+      // 仅当该值在整个源响应中唯一出现时才视为依赖（approverId 这类唯一 id 仍可识别）。
+      const weakValueCounts = countWeakValues(sourceLeaves);
       for (const targetLeaf of targetLeaves) {
+        // 空字符串是弱值：列表型响应里到处都是，等值匹配只会产生假依赖。
+        if (targetLeaf.value === '') continue;
         for (const sourceLeaf of sourceLeaves) {
           if (targetLeaf.value !== sourceLeaf.value) continue;
+          if (
+            (typeof sourceLeaf.value === 'number' || typeof sourceLeaf.value === 'boolean') &&
+            (weakValueCounts.get(sourceLeaf.value) ?? 0) > 1
+          ) {
+            continue;
+          }
           if (source.sanitizeMode !== 'structured' || target.sanitizeMode !== 'structured') {
             throw new Error(
               `依赖识别要求 structured 脱敏: ${source.requestId} -> ${target.requestId}`,
@@ -84,6 +101,16 @@ function analyzeDependencies(requests: RecordedRequest[]): CorrelatedRequest[] {
     }
     return { ...target, dependsOn, isSubmit: target.requestId === lastMutating };
   });
+}
+
+function countWeakValues(leaves: ValueLeaf[]): Map<number | boolean, number> {
+  const counts = new Map<number | boolean, number>();
+  for (const leaf of leaves) {
+    if (typeof leaf.value === 'number' || typeof leaf.value === 'boolean') {
+      counts.set(leaf.value, (counts.get(leaf.value) ?? 0) + 1);
+    }
+  }
+  return counts;
 }
 
 interface ValueLeaf {

@@ -1,0 +1,72 @@
+# Keycloak master realm 创建客户端（DSH 网络通道技能）
+# 来源：tmp/kc-rec1 真实录制 + 人工修正（TODO 已逐条复核）
+# 说明：Keycloak 控制台走 OAuth 授权码流程（一次性 code），无法确定性重放；
+# 改用 admin-cli password grant 获取 Bearer token，再调 Admin REST API。
+skill:
+  id: kc_create_client
+  name: 创建 Keycloak 客户端
+  description: 在 master realm 创建指定 clientId 的 OpenID Connect 公共客户端
+  system: keycloak
+  baseUrl: http://192.168.124.2:18085
+  version: 1
+  recordedAt: 2026-08-19T07:50:17.169Z
+params:
+  - name: clientId
+    type: string
+    required: true
+    prompt: 客户端 ID
+preflight: []
+steps:
+  - id: token
+    desc: 用 admin-cli 密码流换取访问令牌
+    channel: network
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: POST
+      url: /realms/master/protocol/openid-connect/token
+      contentType: form
+      body:
+        grant_type: password
+        client_id: admin-cli
+        username: admin
+        password: admin
+      extract: { accessToken: $.access_token }
+  - id: create
+    desc: 创建 OpenID Connect 公共客户端
+    channel: network
+    riskLevel: write
+    hasSideEffect: true
+    network:
+      method: POST
+      url: /admin/realms/master/clients
+      headers: { authorization: 'Bearer {{token.accessToken}}' }
+      contentType: json
+      body:
+        protocol: openid-connect
+        clientId: '{{clientId}}'
+        publicClient: true
+        enabled: true
+  - id: verify
+    desc: 查询确认客户端已创建
+    channel: network
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /admin/realms/master/clients?clientId={{clientId}}
+      headers: { authorization: 'Bearer {{token.accessToken}}' }
+      contentType: json
+      extract: { found: '$[0].clientId' }
+assertions:
+  - { type: httpStatus, expect: 200 }
+postcondition:
+  request:
+    method: GET
+    url: /admin/realms/master/clients?clientId={{clientId}}
+    headers: { authorization: 'Bearer {{token.accessToken}}' }
+  match:
+    jsonPath: '$[*]'
+    where: { clientId: '{{clientId}}' }
+  expectFound: true
+  timeoutMs: 10000

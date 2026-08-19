@@ -56,6 +56,10 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
     const stepResults: StepResult[] = [];
     try {
       await page.goto(skill.auth?.probeUrl ?? skill.skill.baseUrl);
+      // OAuth/SSO 站点在 goto 返回后仍有 302→授权→回调的多跳导航；
+      // 立即 evaluate 会撞上「Execution context was destroyed」。
+      // 等待跳转链静止（URL 稳定且不再有整页导航）后再执行步骤。
+      await settleNavigation(page);
       if (skill.auth) await ensureLoggedIn(page, skill.auth);
       const executionContext: ExecContext = {
         params: opts.params,
@@ -156,6 +160,23 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
     }
   } finally {
     await browserContext.close();
+  }
+}
+
+/** 等待重定向链静止：URL 在短窗口内不再变化且无进行中的整页导航。 */
+async function settleNavigation(page: Page, stableMs = 1_500, timeoutMs = 30_000): Promise<void> {
+  const startedAt = Date.now();
+  let lastUrl = page.url();
+  let lastChange = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await page.waitForTimeout(250);
+    const current = page.url();
+    if (current !== lastUrl) {
+      lastUrl = current;
+      lastChange = Date.now();
+      continue;
+    }
+    if (Date.now() - lastChange >= stableMs) return;
   }
 }
 

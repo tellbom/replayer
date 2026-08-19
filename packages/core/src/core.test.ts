@@ -52,6 +52,19 @@ describe('统一脱敏器', () => {
     expect(sanitizer.fingerprint('first-token')).not.toBe(sanitizer.fingerprint('second-token'));
   });
 
+  it('sanitizeText 处理嵌套 JSON 字符串中的转义 token 字段', () => {
+    const sanitizer = createSanitizer();
+    // StepResult.raw.text 这类字段持有「字符串形式的响应体」，
+    // 序列化后敏感字段以 \"access_token\":\"...\" 双层转义形态出现。
+    const embedded = JSON.stringify({
+      raw: { text: JSON.stringify({ access_token: 'secret-jwt-payload' }) },
+    });
+
+    const result = sanitizer.sanitizeText(embedded);
+    expect(result).not.toContain('secret-jwt-payload');
+    expect(result).toMatch(/<REDACTED:sha256:[0-9a-f]{12}>/);
+  });
+
   it('跨编码格式的同一 token 产生相同 fingerprint', () => {
     const token = 'tk_9f3a2c8e1b';
     const sanitizer = createSanitizer();

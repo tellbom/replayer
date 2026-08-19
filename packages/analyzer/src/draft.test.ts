@@ -45,6 +45,18 @@ describe('generateDraft', () => {
     expect(result.yaml).toContain('TODO: 未能自动推断 postcondition');
     expect(result.yaml).toContain('响应丢失将中止');
   });
+
+  it('keeps attribute keys containing dots intact when parameterizing bodies', () => {
+    const session = recording(false);
+    const submit = session.network.find((item) => item.url.includes('/submit'))!;
+    submit.postData = JSON.stringify({
+      clientId: 'dsh-test',
+      attributes: { 'oauth2.device.authorization.grant.enabled': 'dsh-test' },
+    });
+    const result = generateDraft(session);
+    expect(() => parseSkill(result.yaml)).not.toThrow();
+    expect(result.yaml).toContain('oauth2.device.authorization.grant.enabled');
+  });
 });
 
 function recording(withHistory: boolean): RecordSession {

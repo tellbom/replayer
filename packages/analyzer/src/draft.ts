@@ -183,13 +183,27 @@ function parameterizeBody(body: Record<string, unknown>, params: Skill['params']
 }
 
 function setBodyPath(body: Record<string, unknown>, path: string, value: string): void {
-  const segments = path.replace(/^body\.?/, '').split('.').filter(Boolean);
-  let current = body;
-  for (const segment of segments.slice(0, -1)) {
-    current = current[segment] as Record<string, unknown>;
+  // 叶子路径由 collectLeaves 用 '.' 拼接产生，key 本身可能含点（如
+  // oauth2.device.authorization.grant.enabled），因此按 body 实际结构逐段最长匹配回溯。
+  const fullPath = path.replace(/^body\.?/, '');
+  const segment = longestKeyPrefix(body, fullPath);
+  if (segment === undefined) return;
+  const rest = fullPath.slice(segment.length).replace(/^\./, '');
+  const child = body[segment];
+  if (rest.length === 0) {
+    body[segment] = value;
+    return;
   }
-  const leaf = segments.at(-1);
-  if (leaf) current[leaf] = value;
+  if (typeof child === 'object' && child !== null && !Array.isArray(child)) {
+    setBodyPath(child as Record<string, unknown>, rest, value);
+  }
+}
+
+function longestKeyPrefix(node: Record<string, unknown>, path: string): string | undefined {
+  const candidates = Object.keys(node)
+    .filter((key) => path === key || path.startsWith(`${key}.`))
+    .sort((left, right) => right.length - left.length);
+  return candidates[0];
 }
 
 function dynamicHeaders(headers: Record<string, string>): Record<string, string> {

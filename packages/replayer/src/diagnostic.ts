@@ -131,13 +131,19 @@ export async function writeDiagnosticBundle(input: DiagnosticBundleInput): Promi
     ),
   );
   const result = sanitizer.sanitizeText(
-    JSON.stringify(
-      sanitizer.sanitizeObject({
-        result: input.result,
-        error: input.error instanceof Error ? input.error.message : String(input.error ?? ''),
-      }),
-      null,
-      2,
+    // StepResult.raw.text 等字段持有「字符串形式的响应体」，其内部 JSON 里的
+    // access_token 等敏感字段不会被 sanitizeObject 的按键名匹配捕获；
+    // 先序列化再按 application/json 走结构化脱敏，嵌套字符串同样被处理。
+    sanitizer.sanitizeBody(
+      JSON.stringify(
+        sanitizer.sanitizeObject({
+          result: input.result,
+          error: input.error instanceof Error ? input.error.message : String(input.error ?? ''),
+        }),
+        null,
+        2,
+      ),
+      'application/json',
     ),
   );
   const har = sanitizer.sanitizeText(

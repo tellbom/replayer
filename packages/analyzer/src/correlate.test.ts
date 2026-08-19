@@ -37,13 +37,15 @@ describe('correlate', () => {
     session.network = [request('page-init', 1_000, 1_200)];
 
     const result = correlate(session);
-    expect(result.at(-1)).toEqual(
-      expect.objectContaining({
-        id: 'orphan',
-        action: null,
-        orphan: true,
-        requests: [expect.objectContaining({ requestId: 'page-init' })],
-      }),
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'orphan',
+          action: null,
+          orphan: true,
+          requests: [expect.objectContaining({ requestId: 'page-init' })],
+        }),
+      ]),
     );
   });
 
@@ -89,6 +91,38 @@ describe('correlate', () => {
     );
     expect(submit?.isSubmit).toBe(true);
     expect(steps[1]?.hasSideEffect).toBe(true);
+  });
+
+  it('ignores repeated weak values but keeps unique ids as dependencies', () => {
+    const session = baseSession();
+    session.actions = [{ ts: 1_000, type: 'click' }];
+    session.network = [
+      {
+        ...request('serverinfo', 900, 950),
+        responseBody: JSON.stringify({ flags: [false, false, false], approverId: 1023, name: '' }),
+      },
+      {
+        ...request('submit', 1_100, 1_200),
+        postData: JSON.stringify({ enabled: false, approverId: 1023, name: '' }),
+      },
+    ];
+    const submit = correlate(session)
+      .flatMap((step) => step.requests)
+      .find((item) => item.requestId === 'submit');
+    expect(submit?.dependsOn).toEqual([{ from: 'serverinfo', path: '$.approverId', to: 'body.approverId' }]);
+  });
+
+  it('keeps orphan requests in temporal order across action steps', () => {
+    const session = baseSession();
+    session.actions = [{ ts: 2_000, type: 'click' }];
+    session.network = [
+      request('orphan-init', 1_000, 1_200),
+      request('submit', 2_100, 2_200),
+    ];
+    const steps = correlate(session);
+    // orphan(1_000) 应排在 action(2_000) 之前，否则依赖模板会引用后置步骤
+    expect(steps.map((step) => step.id)).toEqual(['orphan', 'action-1']);
+    expect(steps[0]?.requests[0]?.requestId).toBe('orphan-init');
   });
 
   it('rejects a dependency discovered from fallback sanitization', () => {

@@ -68,6 +68,13 @@ export function createSanitizer(): Sanitizer {
         /("[^"]*(?:password|passwd|access_token|refresh_token|token|session|secret|api_key)[^"]*"\s*:\s*")([^"]*)(")/gi,
         (_match, prefix: string, value: string, suffix: string) =>
           `${prefix}${fingerprint(value)}${suffix}`,
+      )
+      // 嵌套 JSON 字符串：字段以 \"key\":\"value\" 双层转义形态出现
+      //（如诊断包 result.json 里 StepResult.raw.text 持有的响应体）。
+      .replace(
+        /(\\?"[^"\\]*(?:password|passwd|access_token|refresh_token|token|session|secret|api_key)[^"\\]*\\?"\s*:\s*\\?")([^"\\]*)(\\?")/gi,
+        (_match, prefix: string, value: string, suffix: string) =>
+          `${prefix}${fingerprint(value)}${suffix}`,
       );
 
   const sanitizeBodyWithMode = (body: string, contentType: string): SanitizedBody => {
