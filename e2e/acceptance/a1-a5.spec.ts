@@ -3,10 +3,13 @@ import { generateDraft } from '@dsh/analyzer';
 import { ForbiddenError, parseSkill } from '@dsh/core';
 import type { RecordSession, Skill, Step } from '@dsh/core';
 import { record } from '@dsh/recorder';
+import { chromium } from 'playwright';
 import { replay } from '@dsh/replayer';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { oaEntry, entryResolver, seedProfile } from '../fixture';
 
 const baseUrl = 'http://127.0.0.1:5173';
 
@@ -16,14 +19,16 @@ test('A1 录制加班并生成可解析 draft.yaml', async () => {
     await expect(page.getByText(/提交成功/)).toBeVisible();
   });
   const draft = generateDraft(session);
-  expect(parseSkill(draft.yaml).steps.length).toBeGreaterThan(0);
+  expect(parseSkill(draft.yaml, entryResolver()).steps.length).toBeGreaterThan(0);
 });
 
 test('A2 修正技能可稳定回放', async ({ browserName }, testInfo) => {
+  await seedProfile(testInfo.outputPath(`profile-${browserName}`));
   const skill = await loadOvertimeSkill();
   const result = await replay(skill, {
     params: overtimeParams(`A2-${testInfo.repeatEachIndex}`),
     profileDir: testInfo.outputPath(`profile-${browserName}`),
+    entry: oaEntry,
     noLLM: true,
     onConfirm: async () => true,
   });
@@ -40,13 +45,15 @@ test('A4 同一录制器无需改代码即可录制请假流程', async () => {
     await expect(page.getByText(/提交成功/)).toBeVisible();
   });
   const draft = generateDraft(session);
-  expect(parseSkill(draft.yaml).steps.length).toBeGreaterThan(0);
+  expect(parseSkill(draft.yaml, entryResolver()).steps.length).toBeGreaterThan(0);
 });
 
 test('A5 network 通道单步提交小于 2 秒', async ({ browserName }, testInfo) => {
+  await seedProfile(testInfo.outputPath(`profile-${browserName}`));
   const result = await replay(await loadOvertimeSkill(), {
     params: overtimeParams('A5 性能验收'),
     profileDir: testInfo.outputPath(`profile-${browserName}`),
+    entry: oaEntry,
     noLLM: true,
     onConfirm: async () => true,
   });
@@ -56,6 +63,7 @@ test('A5 network 通道单步提交小于 2 秒', async ({ browserName }, testIn
 });
 
 test('S1 drop_response 只产生一条业务数据且不自动 UI 重提', async ({ browserName }, testInfo) => {
+  await seedProfile(testInfo.outputPath(`profile-${browserName}`));
   const skill = await loadOvertimeSkill();
   const submit = skill.steps.find((step) => step.id === 'submit')!;
   submit.network!.url = '/api/overtime/submit?drop_response=1';
@@ -64,6 +72,7 @@ test('S1 drop_response 只产生一条业务数据且不自动 UI 重提', async
   const result = await replay(skill, {
     params: overtimeParams('S1 响应丢失验收'),
     profileDir: testInfo.outputPath(`profile-${browserName}`),
+    entry: oaEntry,
     noLLM: true,
     onConfirm: async () => true,
   });
@@ -86,10 +95,12 @@ test('S2 403 直接失败且不触发登录循环或业务重试', async ({ brow
     },
   ];
   let failure: (ForbiddenError & { diagnosticDir?: string }) | undefined;
+  await seedProfile(testInfo.outputPath(`profile-${browserName}`));
   try {
     await replay(skill, {
       params: overtimeParams('S2'),
       profileDir: testInfo.outputPath(`profile-${browserName}`),
+      entry: oaEntry,
       noLLM: true,
     });
   } catch (error) {
@@ -105,19 +116,28 @@ async function recordBusiness(
   action: (page: import('@playwright/test').Page) => Promise<void>,
 ): Promise<RecordSession> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-acceptance-record-'));
+  const profile = join(root, 'profile');
+  // 种子门户会话（等价于用户此前登录过一次——C16：登录不进入录制）
+  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
+  {
+    const page = seed.pages()[0] ?? (await seed.newPage());
+    await page.goto(`${baseUrl}/login`);
+    await page.getByLabel('用户名').fill('tester');
+    await page.getByLabel('密码').fill('tester');
+    await page.getByRole('button', { name: '登录' }).click();
+    await page.waitForURL('**/home');
+  }
+  await seed.close();
+
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolveStop) => { stop = resolveStop; });
   return record({
-    url: `${baseUrl}/login`,
-    profileDir: join(root, 'profile'),
+    entry: oaEntry,
+    profileDir: profile,
     outDir: join(root, 'recording'),
     headless: true,
     stopSignal,
     onReady: async (page) => {
-      await page.getByLabel('用户名').fill('tester');
-      await page.getByLabel('密码').fill('tester');
-      await page.getByRole('button', { name: '登录' }).click();
-      await page.waitForURL('**/home');
       await page.goto(`${baseUrl}${path}`);
       await page.locator('.el-form-item').first().waitFor();
       await action(page);
@@ -156,7 +176,7 @@ async function completeForm(
 }
 
 async function loadOvertimeSkill(): Promise<Skill> {
-  return parseSkill(await readFile('skills/oa_overtime_submit.yaml', 'utf8'));
+  return parseSkill(await readFile('skills/oa_overtime_submit.yaml', 'utf8'), entryResolver());
 }
 
 function overtimeParams(reason: string): Record<string, string> {

@@ -1,3 +1,4 @@
+import { TIMEOUTS } from '@dsh/core';
 import type { BearerSource } from '@dsh/core';
 import type { Page } from 'playwright';
 
@@ -47,16 +48,19 @@ export async function getLiveAuthHeader(page: Page, source: BearerSource): Promi
   }
 }
 
-/** 经 CDP 观察页面自身请求的 Authorization 头并原样借用。 */
+/**
+ * 经 CDP 观察页面自身请求的 Authorization 头并原样借用。
+ * triggerUrl 是「诱发端点」：导航到它（或刷新当前页），让 SPA 自身发出
+ * 带认证头的请求——裸 fetch 诱发不了（token 在 SPA 的请求层里，不在页面全局）。
+ */
 export async function captureAuthHeaderViaCDP(
   page: Page,
   triggerUrl: string,
 ): Promise<string | null> {
-  if (!triggerUrl) return null;
   const cdp = await attachCDP(page);
   await cdp.enableNetwork();
   const captured = new Promise<string | null>((resolve) => {
-    const timer = setTimeout(() => resolve(null), 3_000);
+    const timer = setTimeout(() => resolve(null), TIMEOUTS.bearerFetch * 2);
     cdp.session.on('Network.requestWillBeSent', (event: unknown) => {
       const request = (event as { request: { headers: Record<string, string> } }).request;
       const value = request.headers['Authorization'] ?? request.headers['authorization'];
@@ -66,9 +70,11 @@ export async function captureAuthHeaderViaCDP(
       }
     });
   });
-  await page.evaluate(async (url) => {
-    void fetch(url, { credentials: 'include' }).catch(() => undefined);
-  }, new URL(triggerUrl, page.url()).href);
+  if (triggerUrl) {
+    await page.goto(new URL(triggerUrl, page.url()).href).catch(() => undefined);
+  } else {
+    await page.reload().catch(() => undefined);
+  }
   const header = await captured;
   await cdp.session.detach();
   return header;

@@ -20,10 +20,12 @@ export interface DoctorOptions {
   direct?: string;
   /** entry 输出目录（探测结果写入 entries/<id>.yaml 供人工复核） */
   entries?: string;
+  /** 【probe-entry 专用】使用指定持久 profile（探测需在已登录会话上进行） */
+  profile?: string;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<void> {
-  const profileDir = await mkdtemp(join(tmpdir(), 'dsh-doctor-'));
+  const profileDir = options.profile ?? (await mkdtemp(join(tmpdir(), 'dsh-doctor-')));
   const channel = process.env.DSH_CHANNEL === 'msedge' ? 'msedge' : 'chrome';
   const context = await launchDSHContext({ profileDir, channel, headless: true });
   try {
@@ -55,7 +57,8 @@ export async function runDoctor(options: DoctorOptions): Promise<void> {
     }
   } finally {
     await context.close();
-    await rm(profileDir, { recursive: true, force: true });
+    // 指定的持久 profile 不删除（--probe-entry 复用已登录会话）
+    if (!options.profile) await rm(profileDir, { recursive: true, force: true });
   }
 }
 

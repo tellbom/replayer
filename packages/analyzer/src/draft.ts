@@ -74,6 +74,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       '跨请求依赖来自结构化脱敏后的叶子值匹配。',
       '所有 TODO 项必须在发布前人工确认。',
       '认证载体见 entries/ 目录（C16：技能不含登录环节）。',
+      '若未生成 reentry：首步即写时无幂等 anchor 可用，请人工前移幂等步骤（C22）。',
     ],
   };
   const skill = SkillSchema.parse(raw);
@@ -81,9 +82,18 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
 }
 
 /** 【C22】reentry 草稿：anchor 取第一个非幂等步骤之前的那一步。 */
-function reentryDraft(steps: Skill['steps']): { anchor: string; maxReentries: number } | undefined {
-  const firstNonIdempotent = steps.findIndex((step) => !(step.idempotent ?? step.riskLevel === 'read'));
-  if (firstNonIdempotent <= 0) return undefined;
+function reentryDraft(
+  steps: Skill['steps'],
+): { anchor: string; maxReentries: number } | undefined {
+  if (steps.length === 0) return undefined;
+  const firstNonIdempotent = steps.findIndex(
+    (step) => !(step.idempotent ?? step.riskLevel === 'read'),
+  );
+  // 全部幂等 → anchor 落在首步（重跑整个前缀安全）
+  if (firstNonIdempotent === -1) return { anchor: steps[0]!.id, maxReentries: 2 };
+  // 首步即写 → 无前置幂等步骤可作 anchor，生成 reentry 只会让 C22 校验拒绝。
+  // 不生成，由 YAML 注释说明（见 _notes），人工须前移幂等步骤或显式声明幂等。
+  if (firstNonIdempotent === 0) return undefined;
   return { anchor: steps[firstNonIdempotent - 1]!.id, maxReentries: 2 };
 }
 

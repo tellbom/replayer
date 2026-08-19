@@ -56,12 +56,23 @@ export async function ensureEntry(page: Page, entry: Entry): Promise<EntrySessio
 }
 
 async function enterViaPortal(page: Page, entry: Entry): Promise<void> {
-  await page.goto(entry.entry.portalUrl ?? '');
-  await settleNavigation(page);
+  const portalUrl = entry.entry.portalUrl ?? '';
   const linkText = entry.entry.linkText;
   if (!linkText) throw new Error('via=portal 需要 entry.linkText');
   const link = page.locator('a', { hasText: linkText }).first();
-  await link.waitFor({ state: 'visible', timeout: TIMEOUTS.entryProbe });
+
+  await page.goto(portalUrl);
+  await settleNavigation(page);
+  try {
+    await link.waitFor({ state: 'visible', timeout: TIMEOUTS.entryProbe });
+  } catch {
+    // 门户未登录：部分门户会把 401 重定向到自身登录页（当前页面可能已不在门户）。
+    // 等待用户完成认证后，重新回到门户页找入口链接。
+    await ensureLoggedIn(page, entryToAuthConfig(entry));
+    await page.goto(portalUrl);
+    await settleNavigation(page);
+    await link.waitFor({ state: 'visible', timeout: TIMEOUTS.entryProbe });
+  }
   await link.click();
   await settleNavigation(page);
 }
@@ -83,17 +94,30 @@ function urlMatches(url: string, pattern: string): boolean {
 export async function probeSession(page: Page, entry: Entry): Promise<boolean> {
   const probe = entry.entry.sessionProbe;
   const result = await page.evaluate(
-    async ({ url, okStatus }) => {
+    async ({ url, jsonPath }) => {
       try {
-        const response = await fetch(url, { credentials: 'include' });
-        return { status: response.status };
+        const response = await fetch(url, { credentials: 'include', cache: 'no-store' });
+        if (!response.ok) return { status: response.status, value: null };
+        const body: unknown = await response.json();
+        if (!jsonPath) return { status: response.status, value: null as null };
+        const segments = jsonPath.replace(/^\$\.?/, '').split('.').filter(Boolean);
+        let current = body;
+        for (const segment of segments) {
+          if (typeof current !== 'object' || current === null) return { status: response.status, value: null };
+          current = (current as Record<string, unknown>)[segment];
+        }
+        return { status: response.status, value: current === undefined ? null : current };
       } catch {
-        return { status: 0 };
+        return { status: 0, value: null };
       }
     },
-    { url: new URL(probe.url, page.url()).href, okStatus: probe.okStatus },
+    { url: new URL(probe.url, page.url()).href, jsonPath: probe.jsonPath },
   );
-  return probe.okStatus.includes(result.status);
+  if (!probe.okStatus.includes(result.status)) return false;
+  // 配置了 jsonPath 时按布尔值判定（$.loggedIn=false → 会话无效），
+  // 未配置则仅按状态码（与 v1 AuthConfig 语义一致）
+  if (probe.jsonPath) return result.value === true;
+  return true;
 }
 
 /** 【C21】身份摘要：只取 identityProbe 指定的标识字段，立即摘要，不保留原值。 */

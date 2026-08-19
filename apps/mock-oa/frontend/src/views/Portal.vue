@@ -6,7 +6,7 @@ import { api } from '../api';
 const loggedIn = ref(false);
 
 onMounted(async () => {
-  const response = await api.get<{ loggedIn: boolean }>('/session');
+  const response = await api.get<{ loggedIn: boolean }>('/portal/session');
   loggedIn.value = response.data.loggedIn;
 });
 

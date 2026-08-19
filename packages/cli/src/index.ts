@@ -24,6 +24,7 @@ export function createProgram(): Command {
     .option('--direct <url>', 'entry 探测：直达地址')
     .option('--target <id>', 'entry 探测：目标系统 id', 'oa')
     .option('--entries <directory>', 'entry 配置输出目录', './entries')
+    .option('--profile <directory>', 'probe-entry 使用的持久 profile（需已登录）')
     .action(async (options: import('./doctor.js').DoctorOptions) => runDoctor(options));
   configureRecordCommand(program);
   configureDiffCommand(program);
