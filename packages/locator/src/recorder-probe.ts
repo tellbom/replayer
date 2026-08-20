@@ -68,6 +68,8 @@ document.addEventListener(
 
     const interactive = target.closest('button, [role="button"], a');
     if (interactive) {
+      // 【T-67b】记录最近点击元素（消歧 oracle：Node 侧据此验证 scoped selector 命中）
+      Reflect.set(window, '__dsh_last_clicked__', interactive);
       emit({ type: 'click', text: interactive.textContent?.trim(), target: generator(interactive) });
     }
   },
