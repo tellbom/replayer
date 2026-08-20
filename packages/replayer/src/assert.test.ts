@@ -3,6 +3,7 @@ import type { ExecContext, Skill } from '@dsh/core';
 import { describe, expect, it } from 'vitest';
 
 import { runAssertions } from './assert.js';
+import { testEntry } from './test-entry.js';
 
 describe('runAssertions', () => {
   it('accepts the expected HTTP status', () => {
@@ -68,5 +69,12 @@ function run(assertions: Skill['assertions'], raw: { status?: number; text?: str
 }
 
 function makeContext(): ExecContext {
-  return { params: {}, vars: {}, stepResults: {}, baseUrl: 'http://127.0.0.1' };
+  return {
+    params: {},
+    vars: {},
+    stepResults: {},
+    baseUrl: 'http://127.0.0.1',
+    entry: testEntry(),
+    identityDigest: '',
+  };
 }

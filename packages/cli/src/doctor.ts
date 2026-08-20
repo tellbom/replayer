@@ -2,7 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { launchDSHContext } from '@dsh/browser';
+import { launchDSHContext, probeSessionType } from '@dsh/browser';
+import { draftEntryYaml } from '@dsh/browser';
 
 export interface FrontendProbeResult {
   vue: number | null;
@@ -10,8 +11,21 @@ export interface FrontendProbeResult {
   evidence: string[];
 }
 
-export async function runDoctor(options: { probeFrontend?: string }): Promise<void> {
-  const profileDir = await mkdtemp(join(tmpdir(), 'dsh-doctor-'));
+export interface DoctorOptions {
+  probeFrontend?: string;
+  /** 【T-58】entry 探测：--probe-entry --portal <url> --target <id> 或 --direct <url> */
+  probeEntry?: boolean;
+  portal?: string;
+  target?: string;
+  direct?: string;
+  /** entry 输出目录（探测结果写入 entries/<id>.yaml 供人工复核） */
+  entries?: string;
+  /** 【probe-entry 专用】使用指定持久 profile（探测需在已登录会话上进行） */
+  profile?: string;
+}
+
+export async function runDoctor(options: DoctorOptions): Promise<void> {
+  const profileDir = options.profile ?? (await mkdtemp(join(tmpdir(), 'dsh-doctor-')));
   const channel = process.env.DSH_CHANNEL === 'msedge' ? 'msedge' : 'chrome';
   const context = await launchDSHContext({ profileDir, channel, headless: true });
   try {
@@ -38,10 +52,58 @@ export async function runDoctor(options: { probeFrontend?: string }): Promise<vo
       const result = await probeFrontend(page, options.probeFrontend);
       printFrontendProbe(options.probeFrontend, result);
     }
+    if (options.probeEntry) {
+      await printEntryProbe(page, options);
+    }
   } finally {
     await context.close();
-    await rm(profileDir, { recursive: true, force: true });
+    // 指定的持久 profile 不删除（--probe-entry 复用已登录会话）
+    if (!options.profile) await rm(profileDir, { recursive: true, force: true });
   }
+}
+
+/** 【T-58】entry 探测：sessionType + 通道能力 + entry YAML 草稿。 */
+async function printEntryProbe(
+  page: import('playwright').Page,
+  options: DoctorOptions,
+): Promise<void> {
+  const url = options.direct ?? options.portal;
+  const targetId = options.target ?? (options.direct ? 'direct' : 'oa');
+  if (!url) throw new Error('--probe-entry 需要 --direct <url> 或 --portal <url>');
+  console.log(`\nEntry 探测：${targetId}（${url}）`);
+  console.log('────────────────────────────────────────');
+  await page.goto(url);
+  await page.waitForTimeout(2_000);
+
+  const probe = await probeSessionType(page);
+  console.log(`sessionType     ${probe.sessionType}`);
+  if (probe.bearerSource) console.log(`bearerSource    ${probe.bearerSource.strategy}`);
+  console.log(
+    `通道能力        network ${probe.channelCapability.network ? '✓' : '✗'}   ui ${probe.channelCapability.ui ? '✓' : '✗'}`,
+  );
+  console.log(`证据            ${probe.evidence.join('  ')}`);
+  if (probe.sessionType === 'bearer' && probe.bearerSource?.strategy === 'ui-only') {
+    console.log('⚠ bearer/ui-only：该系统技能必须全部 channel: ui（C18）');
+  }
+  const yaml = draftEntryYaml({
+    id: targetId,
+    name: targetId,
+    via: options.direct ? 'direct' : 'portal',
+    directUrl: options.direct,
+    portalUrl: options.portal,
+    landingUrlPattern: '/',
+    sessionType: probe.sessionType,
+    ...(probe.bearerSource ? { bearerSource: probe.bearerSource } : {}),
+    channelCapability: probe.channelCapability,
+  });
+  const entriesDir = options.entries ?? './entries';
+  const { mkdir, writeFile: writeEntryFile } = await import('node:fs/promises');
+  const { resolve: resolvePath, join: joinPath } = await import('node:path');
+  await mkdir(entriesDir, { recursive: true });
+  const outPath = joinPath(resolvePath(entriesDir), `${targetId}.yaml`);
+  await writeEntryFile(outPath, yaml, 'utf8');
+  console.log('────────────────────────────────────────');
+  console.log(`已生成 ${outPath}，请人工复核后使用`);
 }
 
 export async function probeFrontend(page: import('playwright').Page, url: string): Promise<FrontendProbeResult> {

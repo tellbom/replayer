@@ -128,11 +128,12 @@ describe('correlate', () => {
   it('rejects a dependency discovered from fallback sanitization', () => {
     const session = baseSession();
     session.actions = [{ ts: 1_000, type: 'click' }];
+    const shared = 'same-secret-value';
     session.network = [
-      { ...request('source', 1_100, 1_200), responseBody: JSON.stringify({ token: 'same' }) },
+      { ...request('source', 1_100, 1_200), responseBody: JSON.stringify({ token: shared }) },
       {
         ...request('target', 1_300, 1_400),
-        postData: JSON.stringify({ token: 'same' }),
+        postData: JSON.stringify({ token: shared }),
         sanitizeMode: 'fallback',
       },
     ];
@@ -142,7 +143,7 @@ describe('correlate', () => {
 
 function baseSession(): RecordSession {
   return {
-    meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome' },
+    meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
     actions: [],
     network: [],
     pages: [],

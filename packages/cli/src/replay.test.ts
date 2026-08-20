@@ -11,7 +11,7 @@ describe('dsh replay', () => {
     const program = new Command().name('dsh');
     configureReplayCommand(program);
     const help = program.commands[0]?.helpInformation() ?? '';
-    for (const option of ['--params', '--dry-run', '--channel', '--no-llm', '--profile', '--yes']) {
+    for (const option of ['--params', '--dry-run', '--channel', '--no-llm', '--entries', '--profile', '--yes']) {
       expect(help).toContain(option);
     }
   });

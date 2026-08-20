@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@isomorphic/locatorUtils": ["./locatorUtils.ts"],
+      "@isomorphic/stringUtils": ["./stringUtils.ts"],
+      "@isomorphic/selectorParser": ["./selectorParser.ts"],
+      "@isomorphic/cssTokenizer": ["./cssTokenizer.ts"],
+      "@isomorphic/cssParser": ["./cssParser.ts"],
+      "@isomorphic/ariaSnapshot": ["./ariaSnapshot-shim.ts"],
+      "./cssParser": ["./cssParser.ts"],
+      "./domUtils": ["./domUtils.ts"],
+      "./roleUtils": ["./roleUtils.ts"],
+      "./selectorParser": ["./selectorParser.ts"],
+      "./selectorUtils": ["./selectorUtils.ts"],
+      "./stringUtils": ["./stringUtils.ts"]
+    }
+  }
+}

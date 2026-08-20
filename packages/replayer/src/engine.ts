@@ -1,4 +1,5 @@
-import { ensureLoggedIn, launchDSHContext, recoverAuthentication } from '@dsh/browser';
+import { ensureEntry, launchDSHContext } from '@dsh/browser';
+import type { Entry } from '@dsh/core';
 import {
   ForbiddenError,
   LocatorNotFoundError,
@@ -21,12 +22,15 @@ import { startDiagnosticSession, writeDiagnosticBundle } from './diagnostic.js';
 import { executeNetworkStep } from './channel-network.js';
 import { executeUiStep } from './channel-ui.js';
 import { executePreflights } from './preflight.js';
+import { decideReentry, resetContextAfterAnchor } from './reentry.js';
 
 export interface ReplayOptions {
   // 冻结契约允许任意参数值。
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params: Record<string, any>;
   profileDir: string;
+  /** 【v2.0 C16】技能引用的认证载体配置 */
+  entry: Entry;
   dryRun?: boolean;
   forceChannel?: 'ui' | 'network';
   noLLM?: boolean;
@@ -44,7 +48,7 @@ export interface ReplayOptions {
 export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResult> {
   if (opts.dryRun) {
     process.stdout.write(renderExecutionPlan(skill, opts));
-    return { ok: true, skillId: skill.skill.id, steps: [], extracted: {} };
+    return { ok: true, skillId: skill.skill.id, steps: [], extracted: {}, reentryCount: 0 };
   }
 
   const browserContext = await launchDSHContext({ profileDir: opts.profileDir });
@@ -55,20 +59,22 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
     let beforeScreenshot: Buffer | undefined;
     const stepResults: StepResult[] = [];
     try {
-      await page.goto(skill.auth?.probeUrl ?? skill.skill.baseUrl);
-      // OAuth/SSO 站点在 goto 返回后仍有 302→授权→回调的多跳导航；
-      // 立即 evaluate 会撞上「Execution context was destroyed」。
-      // 等待跳转链静止（URL 稳定且不再有整页导航）后再执行步骤。
-      await settleNavigation(page);
-      if (skill.auth) await ensureLoggedIn(page, skill.auth);
+      // 【T-35 v2.0】回放起点恒为「已通过 entry 进入目标系统、会话已建立」（C16）。
+      const entrySession = await ensureEntry(page, opts.entry);
       const executionContext: ExecContext = {
         params: opts.params,
         vars: {},
         stepResults: {},
         baseUrl: skill.skill.baseUrl,
+        entry: opts.entry,
+        identityDigest: entrySession.identityDigest,
       };
       await executePreflights(page, skill.preflight, executionContext);
-      for (const step of skill.steps) {
+      let reentryCount = 0;
+      let stepIndex = 0;
+      let aborted = false;
+      while (stepIndex < skill.steps.length && !aborted) {
+        const step = skill.steps[stepIndex]!;
         currentStepId = step.id;
         beforeScreenshot = await page.screenshot();
         const channel = step.channel === 'merged' ? 'merged' : (opts.forceChannel ?? step.channel);
@@ -78,6 +84,7 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
         }
         if (channel === 'merged') {
           stepResults.push(executeMergedStep(step, executionContext, skill.params));
+          stepIndex += 1;
           continue;
         }
         if (channel === 'ui' && step.ui) {
@@ -95,20 +102,59 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
             if (!healed) throw error;
             stepResults.push(healed);
           }
+          stepIndex += 1;
           continue;
         }
         if ((channel === 'network' || channel === 'auto') && step.network) {
           let result = await executeNetworkStep(page, step, executionContext, skill.params);
           if (result.raw?.status === 403) throw new ForbiddenError(`Step ${step.id} is forbidden`);
           if (result.raw?.status === 401) {
-            if (!skill.auth) throw new StepExecutionError(`Step ${step.id} requires authentication`);
-            await recoverAuthentication(page, skill.auth);
+            // 【T-59】会话失效：恢复认证 + 身份校验 + 按 C22 决策重跑方式。
+            reentryCount += 1;
+            const decision = await decideReentry(
+              {
+                page,
+                skill,
+                step,
+                context: executionContext,
+                interrupted: result,
+                reentryCount,
+              },
+              (conditionPage, condition, conditionContext) =>
+                executePostcondition(conditionPage, condition, conditionContext, skill.params),
+            );
+            if (decision.action === 'abort') {
+              aborted = true;
+              break;
+            }
+            if (decision.action === 'skip-step') {
+              stepResults.push(decision.result ?? cancelled(step, 'network'));
+              stepIndex += 1;
+              continue;
+            }
+            if (decision.action === 'restart-from-anchor') {
+              const anchorId = skill.reentry?.anchor;
+              const anchorIndex = anchorId
+                ? skill.steps.findIndex((s) => s.id === anchorId)
+                : -1;
+              if (anchorIndex < 0) {
+                aborted = true;
+                break;
+              }
+              resetContextAfterAnchor(executionContext, skill);
+              await executePreflights(page, skill.preflight, executionContext);
+              stepIndex = anchorIndex;
+              continue;
+            }
+            // retry-step：重新执行当前步骤（不推进 index）
             if (!(await confirmStep(step, executionContext, opts))) {
               stepResults.push(cancelled(step, 'network'));
               break;
             }
             result = await executeNetworkStep(page, step, executionContext, skill.params);
-            if (result.raw?.status === 403) throw new ForbiddenError(`Step ${step.id} is forbidden`);
+            if (result.raw?.status === 403) {
+              throw new ForbiddenError(`Step ${step.id} is forbidden`);
+            }
           }
           const resolved = await resolveNetworkOutcome(
             page,
@@ -120,6 +166,7 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
           );
           stepResults.push(resolved);
           if (!resolved.ok) break;
+          stepIndex += 1;
           continue;
         }
         throw new StepExecutionError(`当前任务尚未支持通道: ${channel}`);
@@ -133,6 +180,7 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
         skillId: skill.skill.id,
         steps: stepResults,
         extracted: executionContext.vars,
+        reentryCount,
       };
       if (!runResult.ok) {
         runResult.diagnosticDir = await writeDiagnosticBundle({

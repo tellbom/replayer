@@ -5,7 +5,13 @@ export type LocatorStrategy =
   | { strategy: 'el-table-cell'; rowAnchorText: string; buttonText: string }
   | { strategy: 'text'; text: string; exact?: boolean; nth?: number }
   | { strategy: 'role'; role: string; name: string }
-  | { strategy: 'css'; selector: string };
+  | { strategy: 'css'; selector: string }
+  /**
+   * 【T-67a】Playwright selectorGenerator 产物（vendor 引擎语法，如
+   * internal:role=button[name="x"i] >> nth=1）。由 Node 侧 Playwright
+   * Locator API 解析执行（channel-ui），不进浏览器 IIFE。
+   */
+  | { strategy: 'playwright'; selector: string; confidence?: 'HIGH' | 'LOW' };
 
 export type ControlKind =
   | 'input'
@@ -18,7 +24,14 @@ export type ControlKind =
   | 'text';
 
 export interface RecordSession {
-  meta: { startedAt: string; endedAt: string; baseUrl: string; userAgent: string };
+  meta: {
+    startedAt: string;
+    endedAt: string;
+    baseUrl: string;
+    userAgent: string;
+    /** 【v2.0】本次录制使用的 entry 配置 id */
+    entryId: string;
+  };
   actions: RecordedAction[];
   network: RecordedRequest[];
   pages: { ts: number; url: string; title: string }[];
@@ -69,6 +82,10 @@ export interface ExecContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   stepResults: Record<string, any>;
   baseUrl: string;
+  /** 【v2.0】技能引用的认证载体配置 */
+  entry: import('./schema.js').Entry;
+  /** 【C21】执行开始时记录的身份摘要 */
+  identityDigest: string;
 }
 
 export interface StepResult {
@@ -80,7 +97,7 @@ export interface StepResult {
   error?: string;
   healed?: boolean;
   raw?: { status?: number; text?: string };
-  outcomeResolvedBy?: 'postcondition';
+  outcomeResolvedBy?: 'response' | 'postcondition';
   postconditionResult?: {
     found: boolean;
     expectFound: boolean;
@@ -94,6 +111,8 @@ export interface RunResult {
   steps: StepResult[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   extracted: Record<string, any>;
+  /** 【v2.0 C22】本次运行触发的重入次数 */
+  reentryCount: number;
   diagnosticDir?: string;
 }
 

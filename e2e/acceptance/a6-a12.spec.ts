@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { stringify } from 'yaml';
 
 import { login } from '../helpers';
+import { oaEntry, seedProfile } from '../fixture';
 
 const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
 const snapshotScript = await readFile('packages/locator/dist/snapshot.iife.js', 'utf8');
@@ -69,7 +70,7 @@ test('A6 五种文案变化至少四种能 resolve，自愈写动作确认后才
     onConfirm: async () => { confirmations += 1; return true; },
   })).resolves.toMatchObject({ actionVerified: true });
   expect(confirmations).toBe(1);
-  expect(parseSkill(await readFile(skillPath, 'utf8')).skill.version).toBe(2);
+  expect(parseSkill(await readFile(skillPath, 'utf8'), () => oaEntry).skill.version).toBe(2);
 });
 
 test('A7 Legacy SSR 真实 HTML preflight 提取 __VIEWSTATE 后提交', async ({ page }) => {
@@ -106,9 +107,11 @@ test('A7 Legacy SSR 真实 HTML preflight 提取 __VIEWSTATE 后提交', async (
 test.skip('A8 Vue2 条件未启用：doctor 尚未确认目标为 Vue2 + Element UI 2.x', async () => {});
 
 test('A9 自然语言路由抽参后执行已有技能', async ({ browserName }, testInfo) => {
+  await seedProfile(testInfo.outputPath(`profile-${browserName}`));
   const instruction = '提交工作日加班，开始 2026-08-19 18:00:00，结束 2026-08-19 21:00:00，事由 A9 验收';
   await runNaturalLanguage(instruction, {
-    skills: './skills', profile: testInfo.outputPath(`profile-${browserName}`), llm: true, yes: true,
+    skills: './skills', entries: './entries',
+    profile: testInfo.outputPath(`profile-${browserName}`), llm: true, yes: true,
   }, {
     provider: mockLLM([{
       skillId: 'oa_overtime_submit',
@@ -197,13 +200,19 @@ function healStep(
 
 function oneStepSkill(step: Step): Skill {
   return {
-    skill: { id: 'a6', name: 'A6', system: 'oa', baseUrl: 'http://127.0.0.1:5173', version: 1 },
+    skill: {
+      id: 'a6', name: 'A6', system: 'oa', baseUrl: 'http://127.0.0.1:5173',
+      entry: 'oa', version: 1,
+    },
     params: [], preflight: [], steps: [step], assertions: [],
   };
 }
 
 function execContext(): ExecContext {
-  return { params: {}, vars: {}, stepResults: {}, baseUrl: 'http://127.0.0.1:5173' };
+  return {
+    params: {}, vars: {}, stepResults: {}, baseUrl: 'http://127.0.0.1:5173',
+    entry: oaEntry, identityDigest: '',
+  };
 }
 
 function mockLLM(responses: object[]): ILLMProvider {

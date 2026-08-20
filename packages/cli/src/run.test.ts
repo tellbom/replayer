@@ -1,4 +1,4 @@
-import type { ILLMProvider, RunResult, Skill } from '@dsh/core';
+import type { Entry, ILLMProvider, RunResult, Skill } from '@dsh/core';
 import { Command } from 'commander';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,10 +9,34 @@ import { stringify } from 'yaml';
 import { configureRunCommand, runNaturalLanguage } from './run.js';
 
 const skill: Skill = {
-  skill: { id: 'demo', name: '演示技能', description: '执行演示', system: 'oa', baseUrl: 'http://oa', version: 1 },
+  skill: {
+    id: 'demo',
+    name: '演示技能',
+    description: '执行演示',
+    system: 'oa',
+    baseUrl: 'http://oa',
+    entry: 'oa',
+    version: 1,
+  },
   params: [], preflight: [], steps: [], assertions: [],
 };
-const success: RunResult = { ok: true, skillId: 'demo', steps: [], extracted: {} };
+const entry: Entry = {
+  entry: {
+    id: 'oa',
+    name: 'OA',
+    via: 'direct',
+    directUrl: 'http://oa/login',
+    landingUrlPattern: '/home',
+    excludeUrlPatterns: [],
+    sessionType: 'cookie',
+    sessionProbe: { url: '/api/session', okStatus: [200] },
+    identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+    loginUrlPatterns: [],
+    loginTimeoutMs: 300_000,
+    credentialProvider: { type: 'none', ref: '', ttlMs: 30_000 },
+  },
+};
+const success: RunResult = { ok: true, skillId: 'demo', steps: [], extracted: {}, reentryCount: 0 };
 
 afterEach(() => {
   delete process.env.DSH_TOKEN_BUDGET;
@@ -68,8 +92,10 @@ describe('dsh run', () => {
 });
 
 function options(skills: string) {
-  return { skills, profile: './profiles/test', llm: true, yes: true };
+  return { skills, entries: lastEntriesDir, profile: './profiles/test', llm: true, yes: true };
 }
+
+let lastEntriesDir = './entries';
 
 function mockLLM(response: object): ILLMProvider {
   return {
@@ -80,6 +106,11 @@ function mockLLM(response: object): ILLMProvider {
 
 async function skillsDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-run-'));
+  const entriesDir = join(directory, 'entries');
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(entriesDir);
+  await writeFile(join(entriesDir, 'oa.yaml'), stringify(entry), 'utf8');
   await writeFile(join(directory, 'demo.yaml'), stringify(skill), 'utf8');
+  lastEntriesDir = entriesDir;
   return directory;
 }

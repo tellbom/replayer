@@ -1,0 +1,32 @@
+entry:
+  id: keycloak
+  name: Keycloak 管理台
+  via: direct
+  directUrl: http://192.168.124.2:18085/admin/master/console/
+  landingUrlPattern: "/admin/master/console"
+  excludeUrlPatterns:
+    - '\\?token='
+    - '\\?ticket='
+    - /sso/callback
+    - /sso/redirect
+  sessionProbe:
+    url: /realms/master/protocol/openid-connect/userinfo
+  identityProbe:
+    url: /realms/master/protocol/openid-connect/userinfo
+    jsonPath: "$.sub"
+  loginUrlPatterns:
+    - /realms/master/protocol/openid-connect/auth
+  sessionType: bearer
+  bearerSource:
+    # 实测（2026-08-20）：token 仅存于 keycloak-js 内存闭包，
+    # storage/global 均不可达；CDP 借用页面自身请求的 Authorization 头可行
+    # （getLiveAuthHeader cdp-inherit 实测借到并成功调 Admin API 200）
+    strategy: cdp-inherit
+    triggerUrl: http://192.168.124.2:18085/admin/master/console/
+  channelCapability:
+    network: true
+    ui: true
+  credentialProvider:
+    type: none
+    ref: ''
+    ttlMs: 30000

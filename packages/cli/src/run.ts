@@ -1,9 +1,11 @@
 import {
   NoMatchingSkillError,
   TokenBudgetExceededError,
+  parseEntry,
   parseSkill,
 } from '@dsh/core';
-import type { ILLMProvider, Skill, Step } from '@dsh/core';
+import type { Entry } from '@dsh/core';
+import type { ILLMProvider, Skill, Step, StepResult } from '@dsh/core';
 import { DeepSeekProvider, executeHeal, proposeHeal, route } from '@dsh/llm';
 import { replay } from '@dsh/replayer';
 import type { ReplayOptions } from '@dsh/replayer';
@@ -14,6 +16,8 @@ import { createInterface } from 'node:readline/promises';
 
 interface RunCliOptions {
   skills: string;
+  /** 【v2.0】entries/ 目录，技能的认证载体配置来源 */
+  entries: string;
   skill?: string;
   params?: string;
   profile: string;
@@ -25,6 +29,7 @@ interface RunCliOptions {
 interface LoadedSkill {
   path: string;
   skill: Skill;
+  entry: Entry;
 }
 
 interface RunDependencies {
@@ -37,6 +42,7 @@ export function configureRunCommand(program: Command): void {
     .command('run <instruction>')
     .description('用自然语言选择并执行已录制技能')
     .option('--skills <directory>', '技能目录', './skills')
+    .option('--entries <directory>', 'entry 认证载体配置目录', './entries')
     .option('--skill <file>', '--no-llm 时明确指定技能文件')
     .option('--params <json>', '--no-llm 时提供确定性参数 JSON', '{}')
     .option('--profile <directory>', '持久化浏览器配置目录', './profiles/default')
@@ -51,7 +57,8 @@ export async function runNaturalLanguage(
   options: RunCliOptions,
   dependencies: RunDependencies = {},
 ): Promise<void> {
-  const loaded = await loadSkills(options.skills);
+  const entryIndex = await loadEntryIndex(options.entries);
+  const loaded = await loadSkills(options.skills, entryIndex);
   const confirm = options.yes ? async () => true : confirmRisk;
   const replayImpl = dependencies.replayImpl ?? replay;
 
@@ -61,7 +68,9 @@ export async function runNaturalLanguage(
       : loaded.find((item) => item.skill.skill.id === instruction || item.skill.skill.name === instruction);
     if (!selected) throw noMatchingSkill();
     const params = JSON.parse(options.params ?? '{}') as Record<string, unknown>;
-    await outputReplay(await replayImpl(selected.skill, replayOptions(options, params, confirm)));
+    await outputReplay(
+      await replayImpl(selected.skill, replayOptions(options, params, confirm, selected.entry)),
+    );
     return;
   }
 
@@ -73,8 +82,9 @@ export async function runNaturalLanguage(
   }
   const selected = loaded.find((item) => item.skill.skill.id === routed.skillId);
   if (!selected) throw noMatchingSkill();
-  const optionsForReplay = replayOptions(options, routed.params, confirm);
-  optionsForReplay.onLocatorFailure = async ({ page, skill, step, error, context }) => {
+  const optionsForReplay = replayOptions(options, routed.params, confirm, selected.entry);
+  optionsForReplay.onLocatorFailure = async (failure: NonNullable<ReplayOptions['onLocatorFailure']> extends (input: infer I) => Promise<StepResult | null> ? I : never) => {
+    const { page, skill, step, error, context } = failure;
     const snapshot = await page.evaluate(() => window.__DSH_SNAPSHOT__());
     const candidate = await proposeHeal({ llm: provider, page, step, error, snapshot });
     if (!candidate) return null;
@@ -99,25 +109,45 @@ export async function runNaturalLanguage(
   await outputReplay(await replayImpl(selected.skill, optionsForReplay));
 }
 
-async function loadSkills(directory: string): Promise<LoadedSkill[]> {
+/** 【v2.0】加载 entries/ 目录为 id → Entry 索引。 */
+async function loadEntryIndex(directory: string): Promise<Map<string, Entry>> {
+  const dirents = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  const files = dirents
+    .filter((dirent) => dirent.isFile() && /\.ya?ml$/i.test(dirent.name))
+    .map((dirent) => join(directory, dirent.name));
+  const index = new Map<string, Entry>();
+  for (const file of files) {
+    const entry = parseEntry(await readFile(file, 'utf8'));
+    index.set(entry.entry.id, entry);
+  }
+  return index;
+}
+
+async function loadSkills(directory: string, entryIndex: Map<string, Entry>): Promise<LoadedSkill[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = entries
     .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
     .map((entry) => join(directory, entry.name));
-  return Promise.all(files.map(async (path) => ({
-    path,
-    skill: parseSkill(await readFile(path, 'utf8')),
-  })));
+  return Promise.all(files.map(async (path) => {
+    const skill = parseSkill(await readFile(path, 'utf8'), (id) => {
+      const entry = entryIndex.get(id);
+      if (!entry) throw new Error(`entry 配置不存在: entries/${id}.yaml`);
+      return entry;
+    });
+    return { path, skill, entry: entryIndex.get(skill.skill.entry)! };
+  }));
 }
 
 function replayOptions(
   options: RunCliOptions,
   params: Record<string, unknown>,
   confirm: NonNullable<ReplayOptions['onConfirm']>,
+  entry: Entry,
 ): ReplayOptions {
   return {
     params,
     profileDir: options.profile,
+    entry,
     dryRun: options.dryRun,
     noLLM: !options.llm,
     onConfirm: confirm,

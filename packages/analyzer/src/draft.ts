@@ -4,7 +4,7 @@ import { Document, isNode, isSeq } from 'yaml';
 
 import { correlate, type CorrelatedRequest } from './correlate.js';
 import { detectParams } from './params.js';
-import { detectAuth, detectPreflight } from './preflight.js';
+import { detectPreflight } from './preflight.js';
 
 interface DraftItem {
   id: string;
@@ -46,9 +46,11 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       .map((item) => [item.request.requestId, item.id]),
   );
   const extracts = dependencyExtracts(items);
-  const steps = items.map((item) => draftStep(item, params, stepByRequest, extracts, session.meta.baseUrl));
-  const auth = detectAuth(session).auth;
+  const steps: Skill['steps'] = items.map((item) =>
+    draftStep(item, params, stepByRequest, extracts, session.meta.baseUrl) as Skill['steps'][number],
+  );
   const postcondition = inferPostcondition(items, params, session.meta.baseUrl);
+  // 【C16】技能不含 auth 段：认证载体在 entries/<id>.yaml，录制时由 record 记录 entryId。
   const raw = {
     skill: {
       id: skillId(items),
@@ -56,24 +58,43 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       description: '根据浏览器录制自动生成，发布前需复核 TODO',
       system: new URL(session.meta.baseUrl).hostname,
       baseUrl: session.meta.baseUrl,
+      entry: session.meta.entryId,
       version: 1,
       recordedAt: session.meta.endedAt,
     },
-    ...(auth ? { auth } : {}),
     params,
     preflight: detectPreflight(session),
     steps,
     assertions: [{ type: 'httpStatus', expect: 200 }],
     ...(postcondition ? { postcondition } : {}),
+    ...(reentryDraft(steps) ? { reentry: reentryDraft(steps) } : {}),
     _notes: [
       '动作与请求仅按 requestTs 关联。',
       '参数来自用户 fill/select/datetime 动作。',
       '跨请求依赖来自结构化脱敏后的叶子值匹配。',
       '所有 TODO 项必须在发布前人工确认。',
+      '认证载体见 entries/ 目录（C16：技能不含登录环节）。',
+      '若未生成 reentry：首步即写时无幂等 anchor 可用，请人工前移幂等步骤（C22）。',
     ],
   };
   const skill = SkillSchema.parse(raw);
   return { skill, yaml: renderDraftYaml(skill, Boolean(postcondition)) };
+}
+
+/** 【C22】reentry 草稿：anchor 取第一个非幂等步骤之前的那一步。 */
+function reentryDraft(
+  steps: Skill['steps'],
+): { anchor: string; maxReentries: number } | undefined {
+  if (steps.length === 0) return undefined;
+  const firstNonIdempotent = steps.findIndex(
+    (step) => !(step.idempotent ?? step.riskLevel === 'read'),
+  );
+  // 全部幂等 → anchor 落在首步（重跑整个前缀安全）
+  if (firstNonIdempotent === -1) return { anchor: steps[0]!.id, maxReentries: 2 };
+  // 首步即写 → 无前置幂等步骤可作 anchor，生成 reentry 只会让 C22 校验拒绝。
+  // 不生成，由 YAML 注释说明（见 _notes），人工须前移幂等步骤或显式声明幂等。
+  if (firstNonIdempotent === 0) return undefined;
+  return { anchor: steps[firstNonIdempotent - 1]!.id, maxReentries: 2 };
 }
 
 function draftStep(

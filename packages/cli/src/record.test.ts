@@ -10,7 +10,7 @@ describe('dsh record', () => {
     const command = program.commands.find((candidate) => candidate.name() === 'record');
     const help = command?.helpInformation() ?? '';
 
-    for (const option of ['--url', '--out', '--profile', '--channel', '--auth']) {
+    for (const option of ['--entry', '--out', '--entries', '--profile', '--channel']) {
       expect(help).toContain(option);
     }
   });

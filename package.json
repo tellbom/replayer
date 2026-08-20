@@ -13,7 +13,8 @@
     "test": "vitest run --passWithNoTests",
     "lint": "eslint . --ext .ts,.mts,.js,.mjs",
     "e2e": "playwright test",
-    "dsh": "node packages/cli/dist/index.js"
+    "dsh": "node packages/cli/dist/index.js",
+    "check:constraints": "node scripts/check-constraints.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

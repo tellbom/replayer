@@ -106,7 +106,10 @@ export async function executeHeal(ctx: ExecuteHealContext): Promise<HealCandidat
     runAssertions(ctx.skill.assertions, ctx.assertionRaw, ctx.context);
   }
   const verified = { ...ctx.candidate, actionVerified: true };
-  await commitHeal(ctx.skillPath, verified, ctx.reason);
+  await commitHeal(ctx.skillPath, verified, ctx.reason, (id: string) => {
+    if (id !== ctx.context.entry.entry.id) throw new Error(`entry 配置不存在: ${id}`);
+    return ctx.context.entry;
+  });
   return verified;
 }
 

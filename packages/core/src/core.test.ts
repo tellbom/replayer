@@ -7,9 +7,10 @@ import {
   LocatorNotFoundError,
   LoginTimeoutError,
   OutcomeUnknownError,
+  SchemaViolationError,
   StepExecutionError,
 } from './errors.js';
-import { createSanitizer } from './sanitize.js';
+import { assertNoPlainCredentials, createSanitizer } from './sanitize.js';
 
 describe('统一脱敏器', () => {
   it('脱敏认证与会话 header，同时保留普通 header', () => {
@@ -63,6 +64,53 @@ describe('统一脱敏器', () => {
     const result = sanitizer.sanitizeText(embedded);
     expect(result).not.toContain('secret-jwt-payload');
     expect(result).toMatch(/<REDACTED:sha256:[0-9a-f]{12}>/);
+  });
+
+  it('双层转义的 JWT 必须被脱敏（Keycloak 实测回归）', () => {
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.sig';
+    const inner = JSON.stringify({ access_token: jwt, expires_in: 60 });
+    const outer = JSON.stringify({ status: 200, text: inner });
+    const out = createSanitizer().sanitizeBody(outer, 'application/json');
+    expect(out).not.toContain(jwt);
+    expect(out).not.toContain('eyJhbGciOiJSUzI1NiJ9');
+  });
+
+  it('三层嵌套同样不得泄漏', () => {
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.sig';
+    const level3 = JSON.stringify({ access_token: jwt });
+    const level2 = JSON.stringify({ payload: level3 });
+    const level1 = JSON.stringify({ body: level2 });
+    const out = createSanitizer().sanitizeBody(level1, 'application/json');
+    expect(out).not.toContain('eyJhbGciOiJSUzI1NiJ9');
+    expect(out).toMatch(/<REDACTED:sha256:[0-9a-f]{12}>/);
+  });
+
+  it('正常业务字段不被误伤', () => {
+    const out = createSanitizer().sanitizeBody(
+      JSON.stringify({ passengerName: '张三', secretary: '李四' }),
+      'application/json',
+    );
+    expect(out).toContain('张三');
+    expect(out).toContain('李四');
+  });
+
+  it('assertNoPlainCredentials 拦截 grant_type=password 与凭证字段名', () => {
+    expect(() =>
+      assertNoPlainCredentials({ body: 'grant_type=password&username=a' }),
+    ).toThrow(SchemaViolationError);
+    expect(() =>
+      assertNoPlainCredentials({ body: JSON.stringify({ grant_type: 'password' }) }),
+    ).toThrow(SchemaViolationError);
+    expect(() => assertNoPlainCredentials({ steps: [{ body: { password: 'x' } }] })).toThrow(
+      SchemaViolationError,
+    );
+    expect(() => assertNoPlainCredentials({ steps: [{ body: { client_secret: 'y' } }] })).toThrow(
+      SchemaViolationError,
+    );
+    // 正常业务字段通过
+    expect(() =>
+      assertNoPlainCredentials({ steps: [{ body: { reason: '版本上线', type: 'workday' } }] }),
+    ).not.toThrow();
   });
 
   it('跨编码格式的同一 token 产生相同 fingerprint', () => {

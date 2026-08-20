@@ -1,11 +1,29 @@
 import { parseSkill } from '@dsh/core';
-import type { ILLMProvider, Skill } from '@dsh/core';
+import type { Entry, ILLMProvider, Skill } from '@dsh/core';
 import { describe, expect, it } from 'vitest';
 
 import { annotate } from './annotate.js';
 
+const testEntry: Entry = {
+  entry: {
+    id: 'oa', name: 'OA', via: 'direct', directUrl: 'http://oa/login',
+    landingUrlPattern: '/home', excludeUrlPatterns: [], sessionType: 'cookie',
+    sessionProbe: { url: '/api/session', okStatus: [200] },
+    identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+    loginUrlPatterns: [], loginTimeoutMs: 300_000,
+    credentialProvider: { type: 'none', ref: '', ttlMs: 30_000 },
+  },
+};
+
 const draft: Skill = {
-  skill: { id: 'draft', name: '草稿', system: 'oa', baseUrl: 'http://oa', version: 1 },
+  skill: {
+    id: 'draft',
+    name: '草稿',
+    system: 'oa',
+    baseUrl: 'http://oa',
+    entry: 'oa',
+    version: 1,
+  },
   params: [{ name: 'reason', type: 'string', required: true }],
   preflight: [],
   steps: [{ id: 's1', desc: '点击', channel: 'ui', riskLevel: 'read', hasSideEffect: false }],
@@ -29,7 +47,7 @@ describe('annotate', () => {
     };
 
     const result = await annotate(llm, draft);
-    expect(parseSkill(result.yaml)).toEqual(result.skill);
+    expect(parseSkill(result.yaml, () => testEntry)).toEqual(result.skill);
     expect((result.yaml.match(/# TODO: LLM 建议/g) ?? []).length).toBe(7);
     expect(result.skill.steps[0]?.desc).toBe('点击提交按钮');
   });

@@ -7,6 +7,25 @@ function emit(action: Record<string, unknown>): void {
 }
 
 function generator(element: Element): unknown {
+  // 【T-63b/T-67a】feature flag（由 recorder 按 DSH_LOCATOR_ENGINE 注入）：
+  // playwright 引擎产出正式 {strategy:'playwright'} 契约（Node 侧
+  // Playwright Locator API 解析执行）；legacy 保持原 LocatorStrategy。
+  if (Reflect.get(window, '__DSH_LOCATOR_ENGINE__') === 'playwright') {
+    const pwgen = Reflect.get(window, '__DSH_PWGEN__');
+    if (typeof pwgen === 'function') {
+      const generated = pwgen(element) as {
+        selector: string;
+        unique: boolean;
+        matchCount: number;
+        confidence: 'HIGH' | 'LOW';
+      };
+      return {
+        strategy: 'playwright',
+        selector: generated.selector,
+        confidence: generated.confidence,
+      };
+    }
+  }
   const generate = Reflect.get(window, '__DSH_GEN__');
   return typeof generate === 'function' ? generate(element) : undefined;
 }
@@ -49,6 +68,8 @@ document.addEventListener(
 
     const interactive = target.closest('button, [role="button"], a');
     if (interactive) {
+      // 【T-67b】记录最近点击元素（消歧 oracle：Node 侧据此验证 scoped selector 命中）
+      Reflect.set(window, '__dsh_last_clicked__', interactive);
       emit({ type: 'click', text: interactive.textContent?.trim(), target: generator(interactive) });
     }
   },
