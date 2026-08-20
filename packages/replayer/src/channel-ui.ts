@@ -49,6 +49,10 @@ async function runAction(page: Page, action: UiAction): Promise<Record<string, u
   if (action.action === 'navigate') {
     if (!action.url) throw new Error('navigate action requires url');
     await page.goto(new URL(action.url, page.url()).href);
+  } else if (action.action === 'click' && action.target?.strategy === 'playwright') {
+    // 【T-67a】vendor selectorGenerator 产物（internal:role=... >> nth 等引擎语法）
+    // 由 Playwright Locator 原生解析执行——与生成器同引擎，语义严格一致。
+    await page.locator(action.target.selector).first().click();
   } else if (action.action === 'click' && action.target?.strategy === 'role') {
     // 【P0】role 语义走 Playwright getByRole：implicit ARIA role（<button>/<a>/<input type=submit>
     // 无显式 role 属性也是 button role）——IIFE resolver 只查显式 [role=...] 属性，

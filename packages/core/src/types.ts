@@ -5,7 +5,13 @@ export type LocatorStrategy =
   | { strategy: 'el-table-cell'; rowAnchorText: string; buttonText: string }
   | { strategy: 'text'; text: string; exact?: boolean; nth?: number }
   | { strategy: 'role'; role: string; name: string }
-  | { strategy: 'css'; selector: string };
+  | { strategy: 'css'; selector: string }
+  /**
+   * 【T-67a】Playwright selectorGenerator 产物（vendor 引擎语法，如
+   * internal:role=button[name="x"i] >> nth=1）。由 Node 侧 Playwright
+   * Locator API 解析执行（channel-ui），不进浏览器 IIFE。
+   */
+  | { strategy: 'playwright'; selector: string; confidence?: 'HIGH' | 'LOW' };
 
 export type ControlKind =
   | 'input'

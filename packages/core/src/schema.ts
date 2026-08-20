@@ -42,6 +42,11 @@ export const LocatorStrategySchema: z.ZodType<LocatorStrategy> = z.lazy(() =>
     }),
     z.object({ strategy: z.literal('role'), role: z.string(), name: z.string() }),
     z.object({ strategy: z.literal('css'), selector: z.string() }),
+    z.object({
+      strategy: z.literal('playwright'),
+      selector: z.string(),
+      confidence: z.enum(['HIGH', 'LOW']).optional(),
+    }),
   ]),
 );
 

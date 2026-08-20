@@ -7,9 +7,9 @@ function emit(action: Record<string, unknown>): void {
 }
 
 function generator(element: Element): unknown {
-  // 【T-63b】feature flag（由 recorder 按 DSH_LOCATOR_ENV 注入）：
-  // playwright 引擎返回 { selector, unique, matchCount, confidence, source }，
-  // legacy 引擎保持原有 LocatorStrategy 产物。
+  // 【T-63b/T-67a】feature flag（由 recorder 按 DSH_LOCATOR_ENGINE 注入）：
+  // playwright 引擎产出正式 {strategy:'playwright'} 契约（Node 侧
+  // Playwright Locator API 解析执行）；legacy 保持原 LocatorStrategy。
   if (Reflect.get(window, '__DSH_LOCATOR_ENGINE__') === 'playwright') {
     const pwgen = Reflect.get(window, '__DSH_PWGEN__');
     if (typeof pwgen === 'function') {
@@ -17,14 +17,12 @@ function generator(element: Element): unknown {
         selector: string;
         unique: boolean;
         matchCount: number;
-        confidence: string;
+        confidence: 'HIGH' | 'LOW';
       };
-      // POC：target 直接承载 playwright selector 文本；confidence 随行
       return {
-        strategy: 'css',
+        strategy: 'playwright',
         selector: generated.selector,
-        _pwConfidence: generated.confidence,
-        _pwMatchCount: generated.matchCount,
+        confidence: generated.confidence,
       };
     }
   }

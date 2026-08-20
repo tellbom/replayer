@@ -119,8 +119,11 @@ async function installRecorderProbe(context: BrowserContext, page: Page): Promis
     await page.addScriptTag({ content: pwgen });
   }
   await context.addInitScript(() => Reflect.set(window, '__DSH_RECORDING__', true));
-  await context.addInitScript(() =>
-    Reflect.set(window, '__DSH_LOCATOR_ENGINE__', engine),
+  // 注意：闭包捕获外层变量的 addInitScript 实测不生效（变量不随函数序列化），
+  // 必须用参数形式传递
+  await context.addInitScript(
+    (flag) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', flag),
+    engine,
   );
   await context.addInitScript(() => {
     window.addEventListener('DOMContentLoaded', () => {
@@ -141,6 +144,9 @@ async function installRecorderProbe(context: BrowserContext, page: Page): Promis
   });
   await context.addInitScript({ content: probe });
   await page.evaluate(() => Reflect.set(window, '__DSH_RECORDING__', true));
+  // 当前页注入路径：先设引擎旗帜再挂 probe（generator() 读取的是 window 旗帜，
+  // 顺序颠倒会让首屏动作走错引擎分支）
+  await page.evaluate((flag) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', flag), engine);
   await page.addScriptTag({ content: probe });
 }
 
