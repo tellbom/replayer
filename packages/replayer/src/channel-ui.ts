@@ -49,6 +49,19 @@ async function runAction(page: Page, action: UiAction): Promise<Record<string, u
   if (action.action === 'navigate') {
     if (!action.url) throw new Error('navigate action requires url');
     await page.goto(new URL(action.url, page.url()).href);
+  } else if (action.action === 'click' && action.target?.strategy === 'role') {
+    // 【P0】role 语义走 Playwright getByRole：implicit ARIA role（<button>/<a>/<input type=submit>
+    // 无显式 role 属性也是 button role）——IIFE resolver 只查显式 [role=...] 属性，
+    // 对原生控件必然 LocatorNotFound（实测缺陷）。
+    await page
+      .getByRole(action.target.role as Parameters<Page['getByRole']>[0], { name: action.target.name, exact: true })
+      .first()
+      .click();
+  } else if (action.action === 'click' && action.target?.strategy === 'text') {
+    await page
+      .getByText(action.target.text, { exact: action.target.exact !== false })
+      .nth(action.target.nth ?? 0)
+      .click();
   } else {
     await page.evaluate(async (spec) => {
       const locator = window.__DSH_LOCATOR__;
