@@ -20,6 +20,7 @@
 | selectorParser.ts | packages/isomorphic/selectorParser.ts |
 | cssParser.ts | packages/isomorphic/cssParser.ts |
 | cssTokenizer.ts | packages/isomorphic/cssTokenizer.ts |
+| roleSelectorEngine.ts | packages/injected/src/roleSelectorEngine.ts |
 
 ## 本目录允许的改动
 

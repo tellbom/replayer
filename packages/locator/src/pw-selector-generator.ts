@@ -9,16 +9,13 @@ import { parseSelector } from '../../../vendor/playwright-injected/1.62.1/select
 import type { ParsedSelector } from '../../../vendor/playwright-injected/1.62.1/selectorParser';
 import { parseCSS } from '../../../vendor/playwright-injected/1.62.1/cssParser';
 import { customCSSNames } from '../../../vendor/playwright-injected/1.62.1/selectorParser';
-import {
-  beginAriaCaches,
-  endAriaCaches,
-  getAriaRole,
-  getElementAccessibleNameText,
-} from '../../../vendor/playwright-injected/1.62.1/roleUtils';
-import { isElementVisible } from '../../../vendor/playwright-injected/1.62.1/domUtils';
+import { beginAriaCaches, endAriaCaches } from '../../../vendor/playwright-injected/1.62.1/roleUtils';
 import { elementMatchesText, elementText } from '../../../vendor/playwright-injected/1.62.1/selectorUtils';
+import { createRoleEngine } from '../../../vendor/playwright-injected/1.62.1/roleSelectorEngine';
 
 type Part = { name: string; body: unknown; source: string };
+
+const roleEngine = createRoleEngine(true);
 
 /** 按 ParsedSelector 逐部件查询（css/text/role/nth —— 生成器产出的引擎集）。 */
 function queryAllParts(
@@ -56,27 +53,35 @@ function queryAllParts(
         if (matches === 'self') next.add(el);
       }
       roots = next;
-    } else if (part.name === 'role') {
-      const body = String(part.body);
-      const roleMatch = /^\[role\s*=\s*(?:"([^"]*)"|'([^']*)'|(\w+))\]/.exec(body);
-      const nameMatch = /name\s*=\s*(?:"([^"]*)"|'([^']*)'|\[([^\]]*)\]|(\S+))/.exec(body);
-      const role = roleMatch?.[1] ?? roleMatch?.[2] ?? roleMatch?.[3];
-      const name = nameMatch?.[1] ?? nameMatch?.[2] ?? nameMatch?.[3] ?? nameMatch?.[4];
+    } else if (part.name === 'internal:text') {
+      // 上游文本候选引擎（escapeForTextSelector 产物，"text" 或 /regex/ 形态）
+      const raw = String(part.body);
+      const expected = raw.replace(/^["']|["']$/g, '');
+      const next = new Set<Element>();
+      for (const el of allElements(evaluator, root)) {
+        const matches = elementMatchesText(
+          evaluator._cacheText,
+          el,
+          (text: { normalized: string }) => text.normalized === expected,
+        );
+        if (matches === 'self') next.add(el);
+      }
+      roots = next;
+    } else if (part.name === 'internal:role' || part.name === 'role') {
+      // 上游 role 引擎原实现（roleSelectorEngine.ts，含 name/checked/level 等
+      // ARIA 属性解析与 implicit role 语义）——与官方 getByRole 同源
       beginAriaCaches();
       try {
         const next = new Set<Element>();
-        for (const el of allElements(evaluator, root)) {
-          if (!isElementVisible(el)) continue;
-          if (role && getAriaRole(el) !== role) continue;
-          if (name !== undefined && getElementAccessibleNameText(el, evaluator._cacheText) !== name) continue;
-          next.add(el);
+        for (const scope of roots) {
+          for (const el of roleEngine.queryAll(scope, String(part.body))) next.add(el);
         }
         roots = next;
       } finally {
         endAriaCaches();
       }
     } else {
-      // 未知引擎（internal:*/control 等）——生成器在 POC 场景不产出；视为空使该候选被否决
+      // 其余 internal:attr/label 等——POC 场景尚未接；视为空使该候选被否决
       return [];
     }
   }
