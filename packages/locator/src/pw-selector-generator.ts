@@ -116,10 +116,21 @@ function generateTarget(element: Element): {
   const script = makeInjectedScript();
   const result = generateSelector(script as never, element, {
     testIdAttributeName: 'data-testid',
+    // 组件库运行时 id（el-collapse-2f8c-… 每次渲染变化）不能当锚点：
+    // vendor 的 id 优先档会直接采用它——渲染即断。noCSSId 关闭 id 档，
+    // 迫使算法退到 role/text 语义档（业务文案，rebuild 稳定）。
+    // 代价：稳定手写 id 也一并放弃（内网页面手写 id 罕见，取舍可接受）。
+    noCSSId: true,
   });
   const parsed = parseSelector(result.selector);
   const matches = queryAllParts(evaluatorOf(script), parsed.parts, element.ownerDocument);
-  const usesNth = parsed.parts.some((p) => p.name === 'nth');
+  // 置信度（任务定义：位置依赖 = LOW）：
+  // - nth 引擎（button >> nth=4）
+  // - css 内的 :nth-child(/nth-of-type 结构链（section:nth-child(8) > button）
+  // 两者都是「DOM 位置依赖」，rebuild/改版即断——vendor 分数体系不区分这两档，DSH 在此收紧。
+  const usesNth = parsed.parts.some(
+    (p) => p.name === 'nth' || (p.name === 'css' && String(p.source).includes(':nth-')),
+  );
   return {
     selector: result.selector,
     unique: matches.length === 1 && matches[0] === element,
