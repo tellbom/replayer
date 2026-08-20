@@ -159,5 +159,7 @@ declare global {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     __DSH_RECORD__?: (action: any) => void;
     __DSH_RECORDING__?: boolean;
+    __DSH_LOCATOR_ENGINE__?: 'legacy' | 'playwright';
+    __dsh_clicked__?: Record<number, Element>;
   }
 }

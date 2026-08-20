@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe('T-17 Playwright 持久化上下文', () => {
-  it('为新页面注入三个浏览器侧全局对象', async () => {
+  it('为新页面注入基础全局对象与定位引擎标志', async () => {
     const profileDir = await mkdtemp(join(tmpdir(), 'dsh-browser-test-'));
     profiles.push(profileDir);
     const context = await launchDSHContext({ profileDir, headless: true });
@@ -23,8 +23,14 @@ describe('T-17 Playwright 持久化上下文', () => {
         locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
         snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
         generator: typeof Reflect.get(window, '__DSH_GEN__'),
+        engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
       }));
-      expect(globals).toEqual({ locator: 'object', snapshot: 'function', generator: 'function' });
+      expect(globals).toEqual({
+        locator: 'object',
+        snapshot: 'function',
+        generator: 'function',
+        engine: 'legacy',
+      });
     } finally {
       await context.close();
     }

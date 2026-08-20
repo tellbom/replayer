@@ -16,6 +16,10 @@ import { createRoleEngine } from '../../../vendor/playwright-injected/1.62.1/rol
 type Part = { name: string; body: unknown; source: string };
 
 const roleEngine = createRoleEngine(true);
+const GENERATE_SELECTOR_OPTIONS = Object.freeze({
+  testIdAttributeName: 'data-testid',
+  noCSSId: true,
+});
 
 /** 按 ParsedSelector 逐部件查询（css/text/role/nth —— 生成器产出的引擎集）。 */
 function queryAllParts(
@@ -120,12 +124,11 @@ function generateTarget(element: Element): {
 } {
   const script = makeInjectedScript();
   const result = generateSelector(script as never, element, {
-    testIdAttributeName: 'data-testid',
+    ...GENERATE_SELECTOR_OPTIONS,
     // 组件库运行时 id（el-collapse-2f8c-… 每次渲染变化）不能当锚点：
     // vendor 的 id 优先档会直接采用它——渲染即断。noCSSId 关闭 id 档，
     // 迫使算法退到 role/text 语义档（业务文案，rebuild 稳定）。
     // 代价：稳定手写 id 也一并放弃（内网页面手写 id 罕见，取舍可接受）。
-    noCSSId: true,
   });
   const parsed = parseSelector(result.selector);
   const matches = queryAllParts(evaluatorOf(script), parsed.parts, element.ownerDocument);
@@ -149,4 +152,7 @@ function evaluatorOf(script: ReturnType<typeof makeInjectedScript>): SelectorEva
   return script._evaluator as SelectorEvaluatorImpl;
 }
 
-Object.assign(window, { __DSH_PWGEN__: generateTarget });
+Object.assign(window, {
+  __DSH_PWGEN__: generateTarget,
+  __DSH_PWGEN_OPTIONS__: GENERATE_SELECTOR_OPTIONS,
+});

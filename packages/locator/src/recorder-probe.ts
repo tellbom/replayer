@@ -1,9 +1,15 @@
 let openSelectLabel: string | null = null;
+let nextActionIdx = 0;
+const clickedElements: Record<number, Element> = {};
+Reflect.set(window, '__dsh_clicked__', clickedElements);
 
-function emit(action: Record<string, unknown>): void {
+function emit(action: Record<string, unknown>, clickedElement?: Element): void {
   if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
+  const actionIdx = nextActionIdx;
+  nextActionIdx += 1;
+  if (clickedElement) clickedElements[actionIdx] = clickedElement;
   const record = Reflect.get(window, '__DSH_RECORD__');
-  if (typeof record === 'function') record({ ts: Date.now(), ...action });
+  if (typeof record === 'function') record({ ts: Date.now(), actionIdx, ...action });
 }
 
 function generator(element: Element): unknown {
@@ -68,9 +74,11 @@ document.addEventListener(
 
     const interactive = target.closest('button, [role="button"], a');
     if (interactive) {
-      // 【T-67b】记录最近点击元素（消歧 oracle：Node 侧据此验证 scoped selector 命中）
-      Reflect.set(window, '__dsh_last_clicked__', interactive);
-      emit({ type: 'click', text: interactive.textContent?.trim(), target: generator(interactive) });
+      // 【T-68】每个动作持有独立 oracle，异步消歧不会被后续点击覆盖。
+      emit(
+        { type: 'click', text: interactive.textContent?.trim(), target: generator(interactive) },
+        interactive,
+      );
     }
   },
   true,

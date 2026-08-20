@@ -42,6 +42,30 @@ export async function launchDSHContext(options: BrowserOptions): Promise<Browser
     const path = fileURLToPath(new URL(relativePath, import.meta.url));
     await context.addInitScript({ content: await readFile(path, 'utf8') });
   }
+  await context.addInitScript(
+    (engine) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', engine),
+    process.env.DSH_LOCATOR_ENGINE === 'playwright' ? 'playwright' : 'legacy',
+  );
+
+  const auditPage = await context.newPage();
+  try {
+    const injected = await auditPage.evaluate(() => ({
+      locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
+      snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
+      gen: typeof Reflect.get(window, '__DSH_GEN__'),
+      engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
+    }));
+    const missing = Object.entries(injected).filter(([, value]) =>
+      value === 'undefined' || value === undefined,
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `[注入自检失败] ${JSON.stringify(injected)} — 缺失: ${missing.map(([name]) => name).join(',')}`,
+      );
+    }
+  } finally {
+    await auditPage.close();
+  }
   return context;
 }
 

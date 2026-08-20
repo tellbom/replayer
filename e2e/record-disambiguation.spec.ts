@@ -4,6 +4,7 @@
 // 同时验证 HIGH 产物不触发回调。
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import type { JSHandle } from 'playwright';
 
 import { oaEntry } from './fixture';
 
@@ -130,4 +131,60 @@ test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browser
   // record.json 落盘内容与内存一致
   const disk = JSON.parse(await readFile(testInfo.outputPath('rec/record.json'), 'utf8'));
   expect(disk.actions.filter((a: { type: string }) => a.type === 'click').length).toBe(clicks.length);
+});
+
+test('快速连续点击的两个 LOW 动作分别持有自己的 oracle', async ({ browserName }, testInfo) => {
+  test.setTimeout(120_000);
+  process.env.DSH_LOCATOR_ENGINE = 'playwright';
+  const { record } = await import('../packages/recorder/src/session');
+  const profile = testInfo.outputPath(`profile-race-${browserName}`);
+  const { chromium } = await import('playwright');
+  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
+  {
+    const page = seed.pages()[0] ?? (await seed.newPage());
+    await page.goto('http://127.0.0.1:5173/login');
+    await page.getByLabel('用户名').fill('tester');
+    await page.getByLabel('密码').fill('tester');
+    await page.getByRole('button', { name: '登录' }).click();
+    await page.waitForURL('**/home');
+  }
+  await seed.close();
+
+  const observed = new Map<string, string>();
+  let stop!: () => void;
+  const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
+  await record({
+    entry: oaEntry,
+    profileDir: profile,
+    outDir: testInfo.outputPath('rec-race'),
+    headless: true,
+    stopSignal,
+    onDisambiguation: async (input) => {
+      const text = await (input.targetElement as JSHandle<Element>).evaluate(
+        (element) => element.textContent?.trim() ?? '',
+      );
+      observed.set(input.pwResult.selector, text);
+      return null;
+    },
+    onReady: async (page) => {
+      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.locator('.el-form-item').first().waitFor();
+      await page.evaluate(() => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <section><button type="button">快速甲</button></section>
+          <section><button type="button">快速甲</button></section>
+          <section><button type="button">快速乙</button></section>
+          <section><button type="button">快速乙</button></section>`);
+        const buttons = [...document.querySelectorAll('section button')];
+        (buttons[1] as HTMLElement).click();
+        (buttons[3] as HTMLElement).click();
+      });
+      await expect.poll(() => observed.size).toBe(2);
+      stop();
+    },
+  });
+
+  const pairs = [...observed.entries()];
+  expect(pairs.find(([selector]) => selector.includes('快速甲'))?.[1]).toBe('快速甲');
+  expect(pairs.find(([selector]) => selector.includes('快速乙'))?.[1]).toBe('快速乙');
 });

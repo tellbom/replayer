@@ -46,6 +46,7 @@ export interface RecordOptions {
 export async function record(opts: RecordOptions): Promise<RecordSession> {
   await mkdir(opts.profileDir, { recursive: true });
   await mkdir(opts.outDir, { recursive: true });
+  const engine = process.env.DSH_LOCATOR_ENGINE === 'playwright' ? 'playwright' : 'legacy';
   const context = await launchDSHContext({
     profileDir: opts.profileDir,
     channel: opts.channel,
@@ -61,7 +62,11 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const actions: RecordedAction[] = [];
   /** 【T-67b】进行中的消歧任务（写盘前必须全部完成，保证 record.json 一致性） */
   const disambiguationTasks = new Set<Promise<void>>();
-  await page.exposeBinding('__DSH_RECORD__', async (_source, action: RecordedAction) => {
+  await page.exposeBinding('__DSH_RECORD__', async (
+    _source,
+    emitted: RecordedAction & { actionIdx: number },
+  ) => {
+    const { actionIdx, ...action } = emitted;
     // 【C19】一次性认证跳转不记录
     const actionUrl = action.url ?? '';
     if (actionUrl && excludeMatchers.some((re) => re.test(actionUrl))) return;
@@ -77,13 +82,13 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       const index = actions.length - 1;
       const task = (async () => {
         try {
-          const disambig = await page.evaluate(() => {
+          const disambig = await page.evaluate((idx) => {
             const collect = Reflect.get(window, '__DSH_DISAMBIG__');
-            // 最后一次点击的元素即本 action 目标（探针同步 emit）
-            const el = (window as unknown as { __dsh_last_clicked__?: Element }).__dsh_last_clicked__;
+            const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+            const el = clicked[idx];
             if (typeof collect !== 'function' || !el) return null;
             return { context: collect(el) };
-          });
+          }, actionIdx);
           const pwResult = {
             selector: (target as { selector: string }).selector,
             matchCount: -1,
@@ -93,7 +98,11 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
           const scoped = await opts.onDisambiguation!({
             page,
             targetElement: await page.evaluateHandle(
-              () => (window as unknown as { __dsh_last_clicked__?: Element }).__dsh_last_clicked__!,
+              (idx) => {
+                const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+                return clicked[idx];
+              },
+              actionIdx,
             ),
             pwResult,
             context: disambig.context,
@@ -110,7 +119,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       void task.finally(() => disambiguationTasks.delete(task));
     }
   });
-  await installRecorderProbe(context, page);
+  await installRecorderProbe(context, page, engine);
   const startedAt = new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
   actions.push({ ts: Date.now(), type: 'navigate', url: page.url() });
@@ -169,13 +178,16 @@ function compileExcludePatterns(patterns: readonly string[]): RegExp[] {
   return patterns.map((pattern) => new RegExp(pattern));
 }
 
-async function installRecorderProbe(context: BrowserContext, page: Page): Promise<void> {
+async function installRecorderProbe(
+  context: BrowserContext,
+  page: Page,
+  engine: 'legacy' | 'playwright',
+): Promise<void> {
   const probePath = fileURLToPath(
     new URL('../../locator/dist/recorder-probe.iife.js', import.meta.url),
   );
   const probe = await readFile(probePath, 'utf8');
   // 【T-63b】feature flag：legacy（默认）| playwright（vendor Codegen 算法 POC）
-  const engine = process.env.DSH_LOCATOR_ENGINE === 'playwright' ? 'playwright' : 'legacy';
   if (engine === 'playwright') {
     const pwgenPath = fileURLToPath(
       new URL('../../locator/dist/pw-selector-generator.iife.js', import.meta.url),
@@ -221,6 +233,20 @@ async function installRecorderProbe(context: BrowserContext, page: Page): Promis
   // 顺序颠倒会让首屏动作走错引擎分支）
   await page.evaluate((flag) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', flag), engine);
   await page.addScriptTag({ content: probe });
+  const injected = await page.evaluate(() => ({
+    locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
+    snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
+    gen: typeof Reflect.get(window, '__DSH_GEN__'),
+    engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
+  }));
+  const missing = Object.entries(injected).filter(([, value]) =>
+    value === 'undefined' || value === undefined,
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `[注入自检失败] ${JSON.stringify(injected)} — 缺失: ${missing.map(([name]) => name).join(',')}`,
+    );
+  }
 }
 
 async function showRecordingBar(page: Page): Promise<void> {
