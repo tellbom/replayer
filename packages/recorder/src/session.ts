@@ -108,7 +108,20 @@ async function installRecorderProbe(context: BrowserContext, page: Page): Promis
     new URL('../../locator/dist/recorder-probe.iife.js', import.meta.url),
   );
   const probe = await readFile(probePath, 'utf8');
+  // 【T-63b】feature flag：legacy（默认）| playwright（vendor Codegen 算法 POC）
+  const engine = process.env.DSH_LOCATOR_ENGINE === 'playwright' ? 'playwright' : 'legacy';
+  if (engine === 'playwright') {
+    const pwgenPath = fileURLToPath(
+      new URL('../../locator/dist/pw-selector-generator.iife.js', import.meta.url),
+    );
+    const pwgen = await readFile(pwgenPath, 'utf8');
+    await context.addInitScript({ content: pwgen });
+    await page.addScriptTag({ content: pwgen });
+  }
   await context.addInitScript(() => Reflect.set(window, '__DSH_RECORDING__', true));
+  await context.addInitScript(() =>
+    Reflect.set(window, '__DSH_LOCATOR_ENGINE__', engine),
+  );
   await context.addInitScript(() => {
     window.addEventListener('DOMContentLoaded', () => {
       const bar = document.createElement('div');

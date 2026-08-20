@@ -7,6 +7,27 @@ function emit(action: Record<string, unknown>): void {
 }
 
 function generator(element: Element): unknown {
+  // 【T-63b】feature flag（由 recorder 按 DSH_LOCATOR_ENV 注入）：
+  // playwright 引擎返回 { selector, unique, matchCount, confidence, source }，
+  // legacy 引擎保持原有 LocatorStrategy 产物。
+  if (Reflect.get(window, '__DSH_LOCATOR_ENGINE__') === 'playwright') {
+    const pwgen = Reflect.get(window, '__DSH_PWGEN__');
+    if (typeof pwgen === 'function') {
+      const generated = pwgen(element) as {
+        selector: string;
+        unique: boolean;
+        matchCount: number;
+        confidence: string;
+      };
+      // POC：target 直接承载 playwright selector 文本；confidence 随行
+      return {
+        strategy: 'css',
+        selector: generated.selector,
+        _pwConfidence: generated.confidence,
+        _pwMatchCount: generated.matchCount,
+      };
+    }
+  }
   const generate = Reflect.get(window, '__DSH_GEN__');
   return typeof generate === 'function' ? generate(element) : undefined;
 }
