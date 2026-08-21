@@ -76,6 +76,10 @@ export interface RecordedAction {
   produces?: ScopeDefinition;
   waitAfter?: {
     scopeReady?: string;
+    urlPattern?: string;
+    networkIdle?: boolean;
+    requestUrlPattern?: string;
+    notEmpty?: LocatorStrategy;
     settleMs?: number;
     timeoutMs?: number;
   };

@@ -22,7 +22,15 @@ export async function executeUiStep(
   }
 
   try {
+    const requestWait = step.waitAfter?.requestUrlPattern
+      ? page.waitForResponse(
+          (response) => response.url().includes(step.waitAfter!.requestUrlPattern!),
+          { timeout: step.waitAfter.timeoutMs },
+        )
+      : null;
     const value = await runAction(page, action, context);
+    if (requestWait) await requestWait;
+    await waitAfterAction(page, step.waitAfter);
     if (step.produces) await registerScope(page, step, context);
     context.stepResults[step.id] = value;
     return {
@@ -36,6 +44,35 @@ export async function executeUiStep(
   } catch (error) {
     if (error instanceof ScopeNotReadyError) throw error;
     throw locatorFailure(step, action.target ?? shortcutTarget(action), error);
+  }
+}
+
+async function waitAfterAction(page: Page, waitAfter: Step['waitAfter']): Promise<void> {
+  if (!waitAfter) return;
+  const timeout = waitAfter.timeoutMs;
+  if (waitAfter.urlPattern) {
+    await page.waitForURL((url) => url.href.includes(waitAfter.urlPattern!), { timeout });
+  }
+  if (waitAfter.networkIdle) await page.waitForLoadState('networkidle', { timeout });
+  if (waitAfter.notEmpty) {
+    await page.waitForFunction(
+      async (strategy) => {
+        try {
+          const element = await window.__DSH_LOCATOR__.resolve(strategy);
+          const value =
+            element instanceof HTMLInputElement ||
+            element instanceof HTMLTextAreaElement ||
+            element instanceof HTMLSelectElement
+              ? element.value
+              : element.textContent;
+          return Boolean(value?.trim());
+        } catch {
+          return false;
+        }
+      },
+      waitAfter.notEmpty,
+      { timeout },
+    );
   }
 }
 

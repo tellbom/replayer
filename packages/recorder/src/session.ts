@@ -258,6 +258,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   await Promise.all([...mutationTasks.values()]);
   await Promise.all(postProcessTasks);
   const network = await networkRecording.stop();
+  await inferAsyncWaits(page, actions, network);
   const session: RecordSession = {
     meta: {
       startedAt,
@@ -277,6 +278,91 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   await lease.release();
   void entrySession;
   return session;
+}
+
+async function inferAsyncWaits(
+  page: Page,
+  actions: RecordedAction[],
+  network: RecordSession['network'],
+): Promise<void> {
+  for (const [index, action] of actions.entries()) {
+    if (action.type === 'navigate') continue;
+    const windowEnd = Math.min(actions[index + 1]?.ts ?? Number.POSITIVE_INFINITY, action.ts + 2_000);
+    const requests = network.filter(
+      (request) =>
+        request.requestTs >= action.ts &&
+        request.requestTs < windowEnd &&
+        (request.resourceType === 'xhr' || request.resourceType === 'fetch') &&
+        request.status !== null &&
+        request.status >= 200 &&
+        request.status < 300 &&
+        request.responseBody !== null,
+    );
+
+    for (const request of requests) {
+      const values = responseScalarValues(request.responseBody!);
+      if (values.length === 0) continue;
+      const notEmpty = await findPopulatedFormControl(page, values);
+      if (!notEmpty) continue;
+      const requestUrl = new URL(request.url);
+      action.waitAfter = {
+        ...action.waitAfter,
+        requestUrlPattern: requestUrl.pathname,
+        notEmpty,
+        timeoutMs: action.waitAfter?.timeoutMs ?? 8_000,
+      };
+      break;
+    }
+  }
+}
+
+function responseScalarValues(body: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return [];
+  }
+  const values: string[] = [];
+  const visit = (value: unknown): void => {
+    if (typeof value === 'string' || typeof value === 'number') {
+      const text = String(value).trim();
+      if (text) values.push(text);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value && typeof value === 'object') Object.values(value).forEach(visit);
+  };
+  visit(parsed);
+  return values;
+}
+
+async function findPopulatedFormControl(
+  page: Page,
+  responseValues: string[],
+): Promise<RecordedAction['target'] | null> {
+  return page.evaluate((values) => {
+    const expected = new Set(values);
+    for (const item of document.querySelectorAll<HTMLElement>('.el-form-item')) {
+      const label = item.querySelector<HTMLElement>('.el-form-item__label')?.textContent?.trim();
+      if (!label) continue;
+      const control = item.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+        'input, textarea, select',
+      );
+      if (!control || !expected.has(control.value.trim())) continue;
+      const kind =
+        control instanceof HTMLTextAreaElement
+          ? 'textarea'
+          : control instanceof HTMLSelectElement
+            ? 'select'
+            : 'input';
+      return { strategy: 'el-form-item' as const, label, kind };
+    }
+    return null;
+  }, responseValues);
 }
 
 /** excludeUrlPatterns 是「字面子串的正则写法」（默认 \\?token= 等），转成 RegExp。 */
@@ -462,6 +548,7 @@ async function installRecorderProbe(
   };
   await page.addInitScript(installBar, RECORDING_PAUSED_MARKER);
   const guardedProbe = `if (!Reflect.get(window, '__DSH_RECORDER_PROBE_INSTALLED__')) { Reflect.set(window, '__DSH_RECORDER_PROBE_INSTALLED__', true); ${probe} }`;
+  await page.addInitScript({ content: guardedProbe });
   await setRecordingState(page, true);
   // 当前页注入路径：先设引擎旗帜再挂 probe（generator() 读取的是 window 旗帜，
   // 顺序颠倒会让首屏动作走错引擎分支）
