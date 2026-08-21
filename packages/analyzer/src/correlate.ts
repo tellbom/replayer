@@ -82,7 +82,13 @@ function correlateRequest(
     .map((action, index) => ({ action, index }))
     .filter(({ action }) => action.ts <= request.requestTs);
 
-  const responseValues = responseBodyLeaves(request).map((leaf) => String(leaf.value));
+  const responseValues = responseBodyLeaves(request)
+    .map((leaf) => leaf.value)
+    .filter((value) =>
+      (typeof value === 'string' && value.length >= DEPENDENCY.minStringLength) ||
+      (typeof value === 'number' && Math.abs(value) >= DEPENDENCY.minNumberAbs),
+    )
+    .map(String);
   const domOwner = [...eligible].reverse().find(({ action }) => {
     if (!action.produces) return false;
     const mutation = JSON.stringify(action.produces);

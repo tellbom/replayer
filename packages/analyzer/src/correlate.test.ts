@@ -196,6 +196,27 @@ describe('correlate', () => {
     });
     expect(correlated?.evidence).toContain('137ms');
   });
+
+  it('does not treat weak response scalars as DOM causality evidence', () => {
+    const session = baseSession();
+    session.actions = [
+      {
+        ts: 1_000, type: 'click', text: 'open',
+        produces: {
+          scopeId: 'sc1', root: { strategy: 'css', selector: '.panel-0' },
+          kind: 'panel', portaled: false, appearedAfterMs: 10,
+        },
+      },
+      { ts: 1_200, type: 'click', text: 'submit' },
+    ];
+    session.network = [{
+      ...request('submit', 1_250, 1_300), responseBody: JSON.stringify({ code: 0 }),
+    }];
+
+    const owner = correlate(session).find((step) => step.requests.length > 0);
+    expect(owner?.action?.text).toBe('submit');
+    expect(owner?.requests[0]?.correlation?.method).toBe('time-window');
+  });
 });
 
 function baseSession(): RecordSession {
