@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { StepSchema } from './schema.js';
+import { LocatorStrategySchema, StepSchema } from './schema.js';
 
 describe('T-71 scope 契约', () => {
   it('保留原字段并填充 requires、portaled、timeoutMs 默认值', () => {
@@ -46,5 +46,18 @@ describe('T-76 sessionHolding 契约', () => {
       stateTtlMs: 1_800_000,
       cookieKind: 'unknown',
     });
+  });
+});
+
+describe('T-73 iframe 定位契约', () => {
+  it('解析 frame-playwright target', () => {
+    expect(
+      LocatorStrategySchema.parse({
+        strategy: 'frame-playwright',
+        frame: '#legacy',
+        selector: 'button[name="提交"]',
+        confidence: 'HIGH',
+      }),
+    ).toMatchObject({ strategy: 'frame-playwright', frame: '#legacy' });
   });
 });

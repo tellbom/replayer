@@ -43,6 +43,12 @@ export const LocatorStrategySchema: z.ZodType<LocatorStrategy> = z.lazy(() =>
     z.object({ strategy: z.literal('role'), role: z.string(), name: z.string() }),
     z.object({ strategy: z.literal('css'), selector: z.string() }),
     z.object({
+      strategy: z.literal('frame-playwright'),
+      frame: z.string(),
+      selector: z.string(),
+      confidence: z.enum(['HIGH', 'LOW']).optional(),
+    }),
+    z.object({
       strategy: z.literal('playwright'),
       selector: z.string(),
       confidence: z.enum(['HIGH', 'LOW']).optional(),
@@ -157,13 +163,7 @@ export const ReentrySchema = z.object({
 export type Reentry = z.infer<typeof ReentrySchema>;
 
 type UiActionName =
-  | 'navigate'
-  | 'click'
-  | 'fill'
-  | 'selectOption'
-  | 'setDateTime'
-  | 'waitFor'
-  | 'readValue';
+  'navigate' | 'click' | 'fill' | 'selectOption' | 'setDateTime' | 'waitFor' | 'readValue';
 
 export interface UiAction {
   action: UiActionName;
@@ -173,7 +173,11 @@ export interface UiAction {
   kind?: ControlKind | undefined;
   value?: string | undefined;
   waitFor?:
-    | { selector?: string | undefined; notEmpty?: boolean | undefined; timeoutMs?: number | undefined }
+    | {
+        selector?: string | undefined;
+        notEmpty?: boolean | undefined;
+        timeoutMs?: number | undefined;
+      }
     | undefined;
   preAction?: UiAction | undefined;
   extract?: Record<string, string> | undefined;
@@ -212,7 +216,16 @@ export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
 export const ProducesSchema = z.object({
   scopeId: z.string(),
   root: LocatorStrategySchema,
-  kind: z.enum(['dialog', 'drawer', 'listbox', 'menu', 'datepicker', 'table-row', 'panel', 'unknown']),
+  kind: z.enum([
+    'dialog',
+    'drawer',
+    'listbox',
+    'menu',
+    'datepicker',
+    'table-row',
+    'panel',
+    'unknown',
+  ]),
   portaled: z.boolean().default(false),
   appearedAfterMs: z.number().optional(),
 });

@@ -1,11 +1,5 @@
 import { LocatorNotFoundError, ScopeNotReadyError, resolveTemplate } from '@dsh/core';
-import type {
-  ExecContext,
-  LocatorStrategy,
-  ParamDefinition,
-  Step,
-  StepResult,
-} from '@dsh/core';
+import type { ExecContext, LocatorStrategy, ParamDefinition, Step, StepResult } from '@dsh/core';
 import type { Locator, Page } from 'playwright';
 
 type UiAction = NonNullable<Step['ui']>;
@@ -60,14 +54,26 @@ async function runAction(
   } else if (action.action === 'fill' && action.target?.strategy === 'playwright') {
     if (action.value === undefined) throw new Error('fill requires value');
     await (await resolvePlaywrightTarget(page, action, context)).fill(action.value);
-  } else if (action.action === 'selectOption' && action.target?.strategy === 'playwright' && action.scope) {
+  } else if (action.action === 'click' && action.target?.strategy === 'frame-playwright') {
+    await (await resolvePlaywrightTarget(page, action, context)).click();
+  } else if (action.action === 'fill' && action.target?.strategy === 'frame-playwright') {
+    if (action.value === undefined) throw new Error('fill requires value');
+    await (await resolvePlaywrightTarget(page, action, context)).fill(action.value);
+  } else if (
+    action.action === 'selectOption' &&
+    action.target?.strategy === 'playwright' &&
+    action.scope
+  ) {
     await (await resolvePlaywrightTarget(page, action, context)).click();
   } else if (action.action === 'click' && action.target?.strategy === 'role') {
     // 【P0】role 语义走 Playwright getByRole：implicit ARIA role（<button>/<a>/<input type=submit>
     // 无显式 role 属性也是 button role）——IIFE resolver 只查显式 [role=...] 属性，
     // 对原生控件必然 LocatorNotFound（实测缺陷）。
     await page
-      .getByRole(action.target.role as Parameters<Page['getByRole']>[0], { name: action.target.name, exact: true })
+      .getByRole(action.target.role as Parameters<Page['getByRole']>[0], {
+        name: action.target.name,
+        exact: true,
+      })
       .first()
       .click();
   } else if (action.action === 'click' && action.target?.strategy === 'text') {
@@ -134,13 +140,12 @@ async function runAction(
   }
   return page.evaluate(async (spec) => {
     const target =
-      spec.target ??
-      ({ strategy: 'el-form-item', label: spec.label!, kind: spec.kind! } as const);
+      spec.target ?? ({ strategy: 'el-form-item', label: spec.label!, kind: spec.kind! } as const);
     const element = await window.__DSH_LOCATOR__.resolve(target);
     const value =
       element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
         ? element.value
-        : element.textContent ?? '';
+        : (element.textContent ?? '');
     if (!spec.extract || Object.keys(spec.extract).length === 0) return { value };
     return Object.fromEntries(
       Object.entries(spec.extract).map(([name, property]) => {
@@ -160,10 +165,20 @@ async function resolvePlaywrightTarget(
   action: UiAction,
   context: ExecContext,
 ): Promise<Locator> {
-  if (action.target?.strategy !== 'playwright') throw new Error('scope target must use playwright strategy');
-  const locator = action.scope
-    ? rootLocator(page, context.scopes[action.scope]?.root, action.scope).locator(action.target.selector)
-    : page.locator(action.target.selector);
+  if (action.target?.strategy !== 'playwright' && action.target?.strategy !== 'frame-playwright') {
+    throw new Error('target must use playwright strategy');
+  }
+  if (action.scope && action.target.strategy === 'frame-playwright') {
+    throw new ScopeNotReadyError(`${action.scope}: iframe target 不支持外层 scope`);
+  }
+  const locator =
+    action.target.strategy === 'frame-playwright'
+      ? page.frameLocator(action.target.frame).locator(action.target.selector)
+      : action.scope
+        ? rootLocator(page, context.scopes[action.scope]?.root, action.scope).locator(
+            action.target.selector,
+          )
+        : page.locator(action.target.selector);
   const count = await locator.count();
   if (count !== 1) {
     throw new LocatorNotFoundError(`目标必须唯一命中，实际 ${count}: ${action.target.selector}`);
@@ -188,11 +203,7 @@ async function registerScope(page: Page, step: Step, context: ExecContext): Prom
   if (step.waitAfter?.settleMs) await page.waitForTimeout(step.waitAfter.settleMs);
 }
 
-function rootLocator(
-  page: Page,
-  strategy: LocatorStrategy | undefined,
-  scopeId: string,
-): Locator {
+function rootLocator(page: Page, strategy: LocatorStrategy | undefined, scopeId: string): Locator {
   if (!strategy) throw new ScopeNotReadyError(scopeId);
   if (strategy.strategy === 'playwright') return page.locator(strategy.selector);
   if (strategy.strategy === 'role') {
@@ -202,7 +213,9 @@ function rootLocator(
     });
   }
   if (strategy.strategy === 'text') {
-    return page.getByText(strategy.text, { exact: strategy.exact !== false }).nth(strategy.nth ?? 0);
+    return page
+      .getByText(strategy.text, { exact: strategy.exact !== false })
+      .nth(strategy.nth ?? 0);
   }
   if (strategy.strategy === 'css') return page.locator(strategy.selector);
   throw new ScopeNotReadyError(`${scopeId} 不支持 root strategy=${strategy.strategy}`);

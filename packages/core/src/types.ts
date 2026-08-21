@@ -11,7 +11,13 @@ export type LocatorStrategy =
    * internal:role=button[name="x"i] >> nth=1）。由 Node 侧 Playwright
    * Locator API 解析执行（channel-ui），不进浏览器 IIFE。
    */
-  | { strategy: 'playwright'; selector: string; confidence?: 'HIGH' | 'LOW' };
+  | { strategy: 'playwright'; selector: string; confidence?: 'HIGH' | 'LOW' }
+  | {
+      strategy: 'frame-playwright';
+      frame: string;
+      selector: string;
+      confidence?: 'HIGH' | 'LOW';
+    };
 
 export type ControlKind =
   'input' | 'textarea' | 'select' | 'datepicker' | 'radio' | 'checkbox' | 'button' | 'text';
