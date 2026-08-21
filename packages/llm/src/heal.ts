@@ -137,6 +137,8 @@ function targetTerms(target: LocatorStrategy): string[] {
     case 'text': return [target.text];
     case 'role': return [target.name];
     case 'css': return [target.selector];
+    case 'playwright': return [target.selector];
+    case 'frame-playwright': return [target.frame, target.selector];
   }
 }
 
@@ -203,6 +205,9 @@ async function resolveOnly(
             .filter((element) => text(element.textContent) === text(current.name));
         case 'css':
           return [...root.querySelectorAll(current.selector)].filter(visible);
+        case 'playwright':
+        case 'frame-playwright':
+          return [];
       }
     };
     const matches = find(strategy, document);
