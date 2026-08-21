@@ -29,6 +29,7 @@ describe('executeNetworkStep', () => {
       channel: 'network',
       riskLevel: 'write',
       hasSideEffect: true,
+      requires: [],
       network: {
         method: 'POST',
         url: '/api/submit',
@@ -43,6 +44,7 @@ describe('executeNetworkStep', () => {
       baseUrl: 'http://oa',
       entry: testEntry,
       identityDigest: '',
+      scopes: {},
     };
     const result = await executeNetworkStep({} as Page, step, context, []);
     expect(result.outcome).toBe('not_sent');

@@ -76,5 +76,6 @@ function makeContext(): ExecContext {
     baseUrl: 'http://127.0.0.1',
     entry: testEntry(),
     identityDigest: '',
+    scopes: {},
   };
 }

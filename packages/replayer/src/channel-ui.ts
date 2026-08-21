@@ -1,4 +1,4 @@
-import { LocatorNotFoundError, resolveTemplate } from '@dsh/core';
+import { LocatorNotFoundError, ScopeNotReadyError, resolveTemplate } from '@dsh/core';
 import type {
   ExecContext,
   LocatorStrategy,
@@ -6,7 +6,7 @@ import type {
   Step,
   StepResult,
 } from '@dsh/core';
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 
 type UiAction = NonNullable<Step['ui']>;
 
@@ -28,7 +28,8 @@ export async function executeUiStep(
   }
 
   try {
-    const value = await runAction(page, action);
+    const value = await runAction(page, action, context);
+    if (step.produces) await registerScope(page, step, context);
     context.stepResults[step.id] = value;
     return {
       stepId: step.id,
@@ -39,20 +40,28 @@ export async function executeUiStep(
       raw: action.action === 'readValue' ? { text: JSON.stringify(value) } : undefined,
     };
   } catch (error) {
+    if (error instanceof ScopeNotReadyError) throw error;
     throw locatorFailure(step, action.target ?? shortcutTarget(action), error);
   }
 }
 
-async function runAction(page: Page, action: UiAction): Promise<Record<string, unknown>> {
-  if (action.preAction) await runAction(page, action.preAction);
+async function runAction(
+  page: Page,
+  action: UiAction,
+  context: ExecContext,
+): Promise<Record<string, unknown>> {
+  if (action.preAction) await runAction(page, action.preAction, context);
 
   if (action.action === 'navigate') {
     if (!action.url) throw new Error('navigate action requires url');
     await page.goto(new URL(action.url, page.url()).href);
   } else if (action.action === 'click' && action.target?.strategy === 'playwright') {
-    // 【T-67a】vendor selectorGenerator 产物（internal:role=... >> nth 等引擎语法）
-    // 由 Playwright Locator 原生解析执行——与生成器同引擎，语义严格一致。
-    await page.locator(action.target.selector).first().click();
+    await (await resolvePlaywrightTarget(page, action, context)).click();
+  } else if (action.action === 'fill' && action.target?.strategy === 'playwright') {
+    if (action.value === undefined) throw new Error('fill requires value');
+    await (await resolvePlaywrightTarget(page, action, context)).fill(action.value);
+  } else if (action.action === 'selectOption' && action.target?.strategy === 'playwright' && action.scope) {
+    await (await resolvePlaywrightTarget(page, action, context)).click();
   } else if (action.action === 'click' && action.target?.strategy === 'role') {
     // 【P0】role 语义走 Playwright getByRole：implicit ARIA role（<button>/<a>/<input type=submit>
     // 无显式 role 属性也是 button role）——IIFE resolver 只查显式 [role=...] 属性，
@@ -144,6 +153,59 @@ async function runAction(page: Page, action: UiAction): Promise<Record<string, u
       }),
     );
   }, action);
+}
+
+async function resolvePlaywrightTarget(
+  page: Page,
+  action: UiAction,
+  context: ExecContext,
+): Promise<Locator> {
+  if (action.target?.strategy !== 'playwright') throw new Error('scope target must use playwright strategy');
+  const locator = action.scope
+    ? rootLocator(page, context.scopes[action.scope]?.root, action.scope).locator(action.target.selector)
+    : page.locator(action.target.selector);
+  const count = await locator.count();
+  if (count !== 1) {
+    throw new LocatorNotFoundError(`目标必须唯一命中，实际 ${count}: ${action.target.selector}`);
+  }
+  return locator;
+}
+
+async function registerScope(page: Page, step: Step, context: ExecContext): Promise<void> {
+  const produces = step.produces!;
+  if (step.waitAfter?.scopeReady && step.waitAfter.scopeReady !== produces.scopeId) {
+    throw new ScopeNotReadyError(step.waitAfter.scopeReady);
+  }
+  const locator = rootLocator(page, produces.root, produces.scopeId);
+  try {
+    await locator.waitFor({ state: 'visible', timeout: step.waitAfter?.timeoutMs ?? 8_000 });
+  } catch (error) {
+    throw new ScopeNotReadyError(`${produces.scopeId}: ${String(error)}`, { cause: error });
+  }
+  const count = await locator.count();
+  if (count !== 1) throw new ScopeNotReadyError(`${produces.scopeId} 命中 ${count} 个容器`);
+  context.scopes[produces.scopeId] = produces;
+  if (step.waitAfter?.settleMs) await page.waitForTimeout(step.waitAfter.settleMs);
+}
+
+function rootLocator(
+  page: Page,
+  strategy: LocatorStrategy | undefined,
+  scopeId: string,
+): Locator {
+  if (!strategy) throw new ScopeNotReadyError(scopeId);
+  if (strategy.strategy === 'playwright') return page.locator(strategy.selector);
+  if (strategy.strategy === 'role') {
+    return page.getByRole(strategy.role as Parameters<Page['getByRole']>[0], {
+      name: strategy.name,
+      exact: true,
+    });
+  }
+  if (strategy.strategy === 'text') {
+    return page.getByText(strategy.text, { exact: strategy.exact !== false }).nth(strategy.nth ?? 0);
+  }
+  if (strategy.strategy === 'css') return page.locator(strategy.selector);
+  throw new ScopeNotReadyError(`${scopeId} 不支持 root strategy=${strategy.strategy}`);
 }
 
 function shortcutTarget(action: UiAction): LocatorStrategy | undefined {

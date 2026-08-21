@@ -124,6 +124,9 @@ function draftStep(
     hasSideEffect: item.hasSideEffect,
     ...(network ? { network } : {}),
     ...(ui ? { ui } : {}),
+    ...(item.action?.scope ? { requires: [item.action.scope] } : {}),
+    ...(item.action?.produces ? { produces: item.action.produces } : {}),
+    ...(item.action?.waitAfter ? { waitAfter: item.action.waitAfter } : {}),
   };
 }
 
@@ -164,6 +167,7 @@ function uiAction(action: RecordedAction, params: Skill['params']): unknown {
     ...(action.target ? { target: action.target } : {}),
     ...(action.label ? { label: action.label } : {}),
     ...(value !== undefined ? { value } : {}),
+    ...(action.scope ? { scope: action.scope } : {}),
   };
   if (action.type === 'select') return { action: 'selectOption', ...common };
   if (action.type === 'datetime') return { action: 'setDateTime', ...common };

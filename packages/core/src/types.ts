@@ -31,6 +31,16 @@ export interface AppearedRoot {
   portaled: boolean;
 }
 
+export type AppearedRootRecord = Omit<AppearedRoot, 'node'>;
+
+export interface ScopeDefinition {
+  scopeId: string;
+  root: LocatorStrategy;
+  kind: AppearedRoot['kind'];
+  portaled: boolean;
+  appearedAfterMs?: number;
+}
+
 export interface RecordSession {
   meta: {
     startedAt: string;
@@ -53,6 +63,13 @@ export interface RecordedAction {
   value?: string;
   text?: string;
   url?: string;
+  scope?: string;
+  produces?: ScopeDefinition;
+  waitAfter?: {
+    scopeReady?: string;
+    settleMs?: number;
+    timeoutMs?: number;
+  };
 }
 
 export type SanitizeMode = 'structured' | 'fallback' | 'none';
@@ -94,6 +111,7 @@ export interface ExecContext {
   entry: import('./schema.js').Entry;
   /** 【C21】执行开始时记录的身份摘要 */
   identityDigest: string;
+  scopes: Record<string, ScopeDefinition>;
 }
 
 export interface StepResult {
@@ -172,6 +190,10 @@ declare global {
     __DSH_MUTATION__: {
       begin(actionIdx: number): void;
       end(actionIdx: number, settleMs?: number): Promise<AppearedRoot[]>;
+      deriveScope(
+        producerActionIdx: number,
+        target: Element,
+      ): { root: AppearedRootRecord; target: LocatorStrategy } | null;
     };
   }
 }

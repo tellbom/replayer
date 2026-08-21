@@ -212,6 +212,7 @@ function execContext(): ExecContext {
   return {
     params: {}, vars: {}, stepResults: {}, baseUrl: 'http://127.0.0.1:5173',
     entry: oaEntry, identityDigest: '',
+    scopes: {},
   };
 }
 

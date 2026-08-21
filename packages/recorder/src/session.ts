@@ -60,8 +60,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const baseUrl = new URL(page.url()).origin;
 
   const actions: RecordedAction[] = [];
-  /** 【T-67b】进行中的消歧任务（写盘前必须全部完成，保证 record.json 一致性） */
-  const disambiguationTasks = new Set<Promise<void>>();
+  const actionByIdx = new Map<number, RecordedAction>();
+  const mutationTasks = new Map<number, Promise<void>>();
+  const postProcessTasks: Promise<void>[] = [];
   await page.exposeBinding('__DSH_RECORD__', async (
     _source,
     emitted: RecordedAction & { actionIdx: number },
@@ -71,16 +72,48 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     const actionUrl = action.url ?? '';
     if (actionUrl && excludeMatchers.some((re) => re.test(actionUrl))) return;
     actions.push(action);
-    // 【T-67b】LOW 置信产物触发消歧回调（回调内部含 Playwright 再验证）；
-    // 异步进行，完成后原地替换该 action 的 target。
+    actionByIdx.set(actionIdx, action);
     const target = action.target as { strategy?: string; confidence?: string } | undefined;
-    if (
-      opts.onDisambiguation &&
-      target?.strategy === 'playwright' &&
-      target.confidence === 'LOW'
-    ) {
-      const index = actions.length - 1;
-      const task = (async () => {
+    if (target) {
+      const mutationTask = page.evaluate(async (idx) => {
+        await window.__DSH_MUTATION__.end(idx);
+      }, actionIdx);
+      mutationTasks.set(actionIdx, mutationTask);
+    }
+
+    const task = (async () => {
+      if (engine === 'playwright' && target) {
+        const producerActionIdx = actionIdx - 1;
+        const producerMutation = mutationTasks.get(producerActionIdx);
+        if (producerMutation) {
+          await producerMutation;
+          const scoped = await page.evaluate(
+            ({ producerIdx, currentIdx }) => {
+              const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+              return window.__DSH_MUTATION__.deriveScope(producerIdx, clicked[currentIdx]!);
+            },
+            { producerIdx: producerActionIdx, currentIdx: actionIdx },
+          );
+          if (scoped) {
+            const scopeId = `sc${producerActionIdx + 1}`;
+            const producer = actionByIdx.get(producerActionIdx)!;
+            producer.produces = {
+              scopeId,
+              root: scoped.root.descriptor,
+              kind: scoped.root.kind,
+              portaled: scoped.root.portaled,
+              appearedAfterMs: scoped.root.appearedAfterMs,
+            };
+            producer.waitAfter = { scopeReady: scopeId, settleMs: 200, timeoutMs: 8_000 };
+            action.scope = scopeId;
+            action.target = scoped.target;
+            return;
+          }
+        }
+      }
+
+      // 【T-67b】scope 规则未命中后，LOW 才进入 LLM 消歧。
+      if (opts.onDisambiguation && target?.strategy === 'playwright' && target.confidence === 'LOW') {
         try {
           const disambig = await page.evaluate((idx) => {
             const collect = Reflect.get(window, '__DSH_DISAMBIG__');
@@ -108,16 +141,14 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
             context: disambig.context,
           });
           if (scoped) {
-            const replaced = actions[index] as RecordedAction;
-            replaced.target = { strategy: 'playwright', selector: scoped, confidence: 'HIGH' } as never;
+            action.target = { strategy: 'playwright', selector: scoped, confidence: 'HIGH' } as never;
           }
         } catch {
           // 消歧失败保持原 LOW 产物——回放期 heal 仍可兜底
         }
-      })();
-      disambiguationTasks.add(task);
-      void task.finally(() => disambiguationTasks.delete(task));
-    }
+      }
+    })();
+    postProcessTasks.push(task);
   });
   await installRecorderProbe(context, page, engine);
   const startedAt = new Date().toISOString();
@@ -152,8 +183,8 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   }
   page.off('domcontentloaded', onDomContentLoaded);
   await Promise.all([...pageTasks]);
-  // 【T-67b】消歧任务全部落地后再写盘（LOW→scoped 替换需在序列化前完成）
-  await Promise.all([...disambiguationTasks]);
+  await Promise.all([...mutationTasks.values()]);
+  await Promise.all(postProcessTasks);
   const network = await networkRecording.stop();
   const session: RecordSession = {
     meta: {

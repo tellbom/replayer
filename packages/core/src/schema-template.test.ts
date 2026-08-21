@@ -49,6 +49,7 @@ const context: ExecContext = {
   baseUrl: 'http://localhost:5173',
   entry: testEntry(),
   identityDigest: 'digest-placeholder',
+  scopes: {},
 };
 
 const paramDefinitions: ParamDefinition[] = [

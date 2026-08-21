@@ -36,6 +36,7 @@ test.describe('P0 implicit role regression', () => {
       await executeUiStep(page, step, {
         params: {}, vars: {}, stepResults: {}, baseUrl: page.url(),
         entry: testEntry(), identityDigest: '',
+        scopes: {},
       }, []);
 
       expect(await Promise.race([clicked, new Promise<string>((r) => setTimeout(() => r('timeout'), 3_000))])).toBe('hit');

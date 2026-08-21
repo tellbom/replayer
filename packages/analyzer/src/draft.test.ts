@@ -69,6 +69,49 @@ describe('generateDraft', () => {
     expect(() => parseSkill(result.yaml, resolver())).not.toThrow();
     expect(result.yaml).toContain('oauth2.device.authorization.grant.enabled');
   });
+
+  it('carries recorded produces, scope, requires and waitAfter into the draft', () => {
+    const session: RecordSession = {
+      meta: {
+        startedAt: '2026-08-21T00:00:00.000Z',
+        endedAt: '2026-08-21T00:00:01.000Z',
+        baseUrl: 'http://oa',
+        userAgent: 'test',
+        entryId: 'oa',
+      },
+      actions: [
+        {
+          ts: 1,
+          type: 'click',
+          text: '提交',
+          target: { strategy: 'playwright', selector: 'internal:role=button[name="提交"i]' },
+          produces: {
+            scopeId: 'sc1',
+            root: { strategy: 'playwright', selector: 'internal:role=dialog[name="确认"i]' },
+            kind: 'dialog',
+            portaled: true,
+            appearedAfterMs: 30,
+          },
+          waitAfter: { scopeReady: 'sc1', settleMs: 200, timeoutMs: 8_000 },
+        },
+        {
+          ts: 2,
+          type: 'click',
+          text: '确定',
+          scope: 'sc1',
+          target: { strategy: 'playwright', selector: 'internal:role=button[name="确定"i]', confidence: 'HIGH' },
+        },
+      ],
+      network: [],
+      pages: [],
+    };
+
+    const { skill } = generateDraft(session);
+    expect(skill.steps[0]?.produces).toMatchObject({ scopeId: 'sc1', kind: 'dialog' });
+    expect(skill.steps[0]?.waitAfter).toMatchObject({ scopeReady: 'sc1', settleMs: 200 });
+    expect(skill.steps[1]?.requires).toEqual(['sc1']);
+    expect(skill.steps[1]?.ui?.scope).toBe('sc1');
+  });
 });
 
 function recording(withHistory: boolean): RecordSession {

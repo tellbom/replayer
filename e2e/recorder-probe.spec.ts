@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { login } from './helpers';
 
 const generatorScript = await readFile('packages/locator/dist/selector-generator.iife.js', 'utf8');
+const mutationScript = await readFile('packages/locator/dist/mutation-tracker.iife.js', 'utf8');
 const probeScript = await readFile('packages/locator/dist/recorder-probe.iife.js', 'utf8');
 
 test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) => {
@@ -12,6 +13,7 @@ test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) =>
     Reflect.set(window, '__DSH_RECORDING__', true);
   });
   await page.addInitScript({ content: generatorScript });
+  await page.addInitScript({ content: mutationScript });
   await page.addInitScript({ content: probeScript });
   await login(page);
   await page.exposeBinding('__DSH_RECORD__', (_source, action: { type: string }) => {
@@ -55,5 +57,5 @@ test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) =>
   await page.getByRole('button', { name: '确认提交' }).click();
 
   const types = actions.map((action) => action.type);
-  expect(types).toEqual(['navigate', 'select', 'datetime', 'datetime', 'fill', 'click', 'click']);
+  expect(types).toEqual(['navigate', 'click', 'select', 'datetime', 'datetime', 'fill', 'click', 'click']);
 });

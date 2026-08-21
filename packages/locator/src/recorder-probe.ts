@@ -7,7 +7,11 @@ function emit(action: Record<string, unknown>, clickedElement?: Element): void {
   if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
   const actionIdx = nextActionIdx;
   nextActionIdx += 1;
-  if (clickedElement) clickedElements[actionIdx] = clickedElement;
+  if (clickedElement) {
+    clickedElements[actionIdx] = clickedElement;
+    const mutation = Reflect.get(window, '__DSH_MUTATION__') as { begin: (idx: number) => void };
+    mutation.begin(actionIdx);
+  }
   const record = Reflect.get(window, '__DSH_RECORD__');
   if (typeof record === 'function') record({ ts: Date.now(), actionIdx, ...action });
 }
@@ -61,7 +65,7 @@ document.addEventListener(
         value: text,
         text,
         target: generator(option),
-      });
+      }, option);
       openSelectLabel = null;
       return;
     }
@@ -69,6 +73,13 @@ document.addEventListener(
     const select = target.closest('.el-select');
     if (select) {
       openSelectLabel = labelFor(select) ?? null;
+      const combobox = select.querySelector('[role="combobox"]') ?? select;
+      emit({
+        type: 'click',
+        label: openSelectLabel ?? undefined,
+        text: openSelectLabel ?? undefined,
+        target: generator(combobox),
+      }, combobox);
       return;
     }
 
@@ -96,7 +107,7 @@ document.addEventListener(
       label: labelFor(target),
       value: target.value,
       target: generator(target),
-    });
+    }, target);
   },
   true,
 );

@@ -168,6 +168,7 @@ export interface UiAction {
     | undefined;
   preAction?: UiAction | undefined;
   extract?: Record<string, string> | undefined;
+  scope?: string | undefined;
 }
 
 export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
@@ -195,8 +196,27 @@ export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
       .optional(),
     preAction: UiActionSchema.optional(),
     extract: z.record(z.string()).optional(),
+    scope: z.string().optional(),
   }),
 );
+
+export const ProducesSchema = z.object({
+  scopeId: z.string(),
+  root: LocatorStrategySchema,
+  kind: z.enum(['dialog', 'drawer', 'listbox', 'menu', 'datepicker', 'table-row', 'panel', 'unknown']),
+  portaled: z.boolean().default(false),
+  appearedAfterMs: z.number().optional(),
+});
+
+export const WaitAfterSchema = z.object({
+  scopeReady: z.string().optional(),
+  urlPattern: z.string().optional(),
+  networkIdle: z.boolean().optional(),
+  requestUrlPattern: z.string().optional(),
+  notEmpty: LocatorStrategySchema.optional(),
+  settleMs: z.number().optional(),
+  timeoutMs: z.number().default(8_000),
+});
 
 export const StepSchema = z.object({
   id: z.string(),
@@ -222,6 +242,10 @@ export const StepSchema = z.object({
     .optional(),
   ui: UiActionSchema.optional(),
   postcondition: PostconditionSchema.optional(),
+  requires: z.array(z.string()).default([]),
+  produces: ProducesSchema.optional(),
+  waitAfter: WaitAfterSchema.optional(),
+  pageState: z.string().optional(),
 });
 
 export const PreflightSchema = z.object({

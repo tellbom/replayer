@@ -180,7 +180,7 @@ function makeInjectedScript() {
  * 【T-63b】对外入口：对用户真实点击的 Element 生成 Playwright Codegen 级 locator。
  * unique 语义 = 唯一命中且该元素正是用户点击的原元素（录制 oracle）。
  */
-function generateTarget(element: Element): {
+function generateTarget(element: Element, root: Element | Document = element.ownerDocument): {
   selector: string;
   unique: boolean;
   matchCount: number;
@@ -190,13 +190,14 @@ function generateTarget(element: Element): {
   const script = makeInjectedScript();
   const result = generateSelector(script as never, element, {
     ...GENERATE_SELECTOR_OPTIONS,
+    root,
     // 组件库运行时 id（el-collapse-2f8c-… 每次渲染变化）不能当锚点：
     // vendor 的 id 优先档会直接采用它——渲染即断。noCSSId 关闭 id 档，
     // 迫使算法退到 role/text 语义档（业务文案，rebuild 稳定）。
     // 代价：稳定手写 id 也一并放弃（内网页面手写 id 罕见，取舍可接受）。
   });
   const parsed = parseSelector(result.selector);
-  const matches = queryAllParts(evaluatorOf(script), parsed.parts, element.ownerDocument);
+  const matches = queryAllParts(evaluatorOf(script), parsed.parts, root);
   // 置信度（任务定义：位置依赖 = LOW）：
   // - nth 引擎（button >> nth=4）
   // - css 内的 :nth-child(/nth-of-type 结构链（section:nth-child(8) > button）

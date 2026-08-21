@@ -26,7 +26,7 @@ const draft: Skill = {
   },
   params: [{ name: 'reason', type: 'string', required: true }],
   preflight: [],
-  steps: [{ id: 's1', desc: '点击', channel: 'ui', riskLevel: 'read', hasSideEffect: false }],
+  steps: [{ id: 's1', desc: '点击', channel: 'ui', riskLevel: 'read', hasSideEffect: false, requires: [] }],
   assertions: [],
 };
 

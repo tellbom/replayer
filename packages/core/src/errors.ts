@@ -11,6 +11,10 @@ export class LocatorNotFoundError extends DSHError {
   readonly code = 'LOCATOR_NOT_FOUND';
 }
 
+export class ScopeNotReadyError extends DSHError {
+  readonly code = 'SCOPE_NOT_READY';
+}
+
 export class LoginTimeoutError extends DSHError {
   readonly code = 'LOGIN_TIMEOUT';
 }

@@ -33,6 +33,7 @@ describe('executePreflights', () => {
       baseUrl: 'http://oa',
       entry: testEntry,
       identityDigest: '',
+      scopes: {},
     };
     await expect(executePreflights({} as Page, preflights, context)).rejects.toThrow(
       /无 request.*DOM/,

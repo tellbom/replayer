@@ -31,9 +31,12 @@ interface Observation {
 
 const DEFAULT_SETTLE_MS = 800;
 const observations = new Map<number, Observation>();
+const completedRoots = new Map<number, AppearedRoot[]>();
+let activeActionIdx: number | undefined;
 
 function begin(actionIdx: number): void {
   if (observations.has(actionIdx)) throw new Error(`动作 ${actionIdx} 已开始 DOM 观测`);
+  if (activeActionIdx !== undefined) finish(activeActionIdx);
 
   const observation: Observation = {
     observer: undefined as unknown as MutationObserver,
@@ -66,17 +69,26 @@ function begin(actionIdx: number): void {
     subtree: true,
   });
   observations.set(actionIdx, observation);
+  activeActionIdx = actionIdx;
 }
 
 async function end(actionIdx: number, settleMs = DEFAULT_SETTLE_MS): Promise<AppearedRoot[]> {
+  const completed = completedRoots.get(actionIdx);
+  if (completed) return completed;
   const observation = observations.get(actionIdx);
   if (!observation) throw new Error(`动作 ${actionIdx} 未开始 DOM 观测`);
 
   await delay(settleMs);
+  return completedRoots.get(actionIdx) ?? finish(actionIdx);
+}
+
+function finish(actionIdx: number): AppearedRoot[] {
+  const observation = observations.get(actionIdx);
+  if (!observation) throw new Error(`动作 ${actionIdx} 未开始 DOM 观测`);
   observation.observer.disconnect();
   observations.delete(actionIdx);
-
-  return observation.roots
+  if (activeActionIdx === actionIdx) activeActionIdx = undefined;
+  const roots = observation.roots
     .filter(({ node }) => node.isConnected)
     .map(({ node, appearedAfterMs }) => ({
       node,
@@ -85,6 +97,50 @@ async function end(actionIdx: number, settleMs = DEFAULT_SETTLE_MS): Promise<App
       kind: classify(node),
       portaled: isPortaled(node),
     }));
+  completedRoots.set(actionIdx, roots);
+  return roots;
+}
+
+function deriveScope(
+  producerActionIdx: number,
+  target: Element,
+): { root: Omit<AppearedRoot, 'node'>; target: unknown } | null {
+  const containing = (completedRoots.get(producerActionIdx) ?? [])
+    .filter(({ node }) => node.contains(target))
+    .sort((left, right) => (left.node.contains(right.node) ? 1 : -1))[0];
+  if (!containing) return null;
+
+  const generate = Reflect.get(window, '__DSH_PWGEN__');
+  if (typeof generate !== 'function') throw new Error('Playwright locator generator 未注入');
+  const option = target.closest('[role="option"], .el-select-dropdown__item');
+  const optionText = option?.textContent?.replace(/\s+/g, ' ').trim();
+  const optionMatches = optionText
+    ? [...containing.node.querySelectorAll('[role="option"], .el-select-dropdown__item')].filter(
+        (candidate) => candidate.textContent?.replace(/\s+/g, ' ').trim() === optionText,
+      )
+    : [];
+  const generated = option && optionMatches.length === 1 && optionMatches[0] === option
+    ? {
+        selector: `internal:role=option[name=${JSON.stringify(optionText)}i]`,
+        confidence: 'HIGH' as const,
+      }
+    : generate(target, containing.node) as {
+        selector: string;
+        confidence: 'HIGH' | 'LOW';
+      };
+  return {
+    root: {
+      descriptor: containing.descriptor,
+      appearedAfterMs: containing.appearedAfterMs,
+      kind: containing.kind,
+      portaled: containing.portaled,
+    },
+    target: {
+      strategy: 'playwright',
+      selector: generated.selector,
+      confidence: generated.confidence,
+    },
+  };
 }
 
 function recordRoot(observation: Observation, node: Element): void {
@@ -192,5 +248,5 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 Object.assign(window, {
-  __DSH_MUTATION__: { begin, end },
+  __DSH_MUTATION__: { begin, end, deriveScope },
 });

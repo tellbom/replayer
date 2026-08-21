@@ -68,6 +68,7 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
         baseUrl: skill.skill.baseUrl,
         entry: opts.entry,
         identityDigest: entrySession.identityDigest,
+        scopes: {},
       };
       await executePreflights(page, skill.preflight, executionContext);
       let reentryCount = 0;
