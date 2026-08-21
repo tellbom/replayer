@@ -5,21 +5,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { record } from '../packages/recorder/src/session';
+import { oaEntry, seedProfile } from './fixture';
 
 test('record e2e: 脚本化加班流程产出完整录制', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-record-e2e-'));
+  const profileDir = join(root, 'profile');
+  await seedProfile(profileDir);
   await record({
-    url: 'http://127.0.0.1:5173/login',
-    profileDir: join(root, 'profile'),
+    entry: oaEntry,
+    profileDir,
     outDir: join(root, 'out'),
     channel: 'chrome',
     headless: true,
     stopSignal: Promise.resolve(),
     onReady: async (page) => {
-      await page.getByLabel('用户名').fill('tester');
-      await page.getByLabel('密码').fill('tester');
-      await page.getByRole('button', { name: '登录' }).click();
-      await page.waitForURL('**/home');
       await page.goto('/overtime/apply');
       await expect(page.getByRole('heading', { name: '加班申请' })).toBeVisible();
 
@@ -56,6 +55,7 @@ test('record e2e: 脚本化加班流程产出完整录制', async () => {
   );
   expect(stored.actions.slice(overtimeStart).map((action) => action.type)).toEqual([
     'navigate',
+    'click',
     'select',
     'datetime',
     'datetime',

@@ -6,24 +6,14 @@ import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import type { JSHandle } from 'playwright';
 
-import { oaEntry } from './fixture';
+import { oaEntry, seedProfile } from './fixture';
 
 test('真 LOW 场景（双同名按钮）触发回调并替换为 scoped HIGH', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
   process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-low-${browserName}`);
-  const { chromium } = await import('playwright');
-  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
-  {
-    const page = seed.pages()[0] ?? (await seed.newPage());
-    await page.goto('http://127.0.0.1:5173/login');
-    await page.getByLabel('用户名').fill('tester');
-    await page.getByLabel('密码').fill('tester');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/home');
-  }
-  await seed.close();
+  await seedProfile(profile);
 
   const calls: string[] = [];
   let stop!: () => void;
@@ -37,21 +27,19 @@ test('真 LOW 场景（双同名按钮）触发回调并替换为 scoped HIGH', 
     onDisambiguation: async (input) => {
       calls.push(input.pwResult.selector);
       // 返回 scoped selector（模拟已验证通过的提案）
-      return 'section:has-text("加班申请") >> internal:role=button[name="重复钮"i]';
+      return '[data-test-scope="order"] >> internal:role=button[name="重复钮"i]';
     },
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').first().waitFor();
       // 注入双同名按钮制造真 LOW（role+name 非唯一）
       await page.evaluate(() => {
         document.body.insertAdjacentHTML('beforeend', `
-          <section><h2>客户管理</h2><button type="button">重复钮</button></section>
-          <section><h2>订单管理</h2><button type="button">重复钮</button></section>`);
+          <div data-test-scope="customer"><button type="button">重复钮</button></div>
+          <div data-test-scope="order"><button type="button">重复钮</button></div>`);
       });
       await page.evaluate(() => {
-        const sections = [...document.querySelectorAll('section')];
-        const order = sections.find((s) => s.querySelector('h2')?.textContent === '订单管理');
-        (order!.querySelector('button') as HTMLElement).click();
+        (document.querySelector('[data-test-scope="order"] button') as HTMLElement).click();
       });
       await page.waitForTimeout(800);
       stop();
@@ -68,7 +56,7 @@ test('真 LOW 场景（双同名按钮）触发回调并替换为 scoped HIGH', 
   expect(click).toBeTruthy();
   const target = click!.target as { strategy: string; selector: string; confidence: string };
   expect(target.strategy).toBe('playwright');
-  expect(target.selector).toContain('section:has-text("加班申请")');
+  expect(target.selector).toContain('[data-test-scope="order"]');
   expect(target.confidence).toBe('HIGH');
 });
 
@@ -77,17 +65,7 @@ test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browser
   process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-${browserName}`);
-  const { chromium } = await import('playwright');
-  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
-  {
-    const page = seed.pages()[0] ?? (await seed.newPage());
-    await page.goto('http://127.0.0.1:5173/login');
-    await page.getByLabel('用户名').fill('tester');
-    await page.getByLabel('密码').fill('tester');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/home');
-  }
-  await seed.close();
+  await seedProfile(profile);
 
   const calls: string[] = [];
   let stop!: () => void;
@@ -105,7 +83,7 @@ test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browser
       return 'section:has-text("加班申请") >> internal:role=button[name="提交"i]';
     },
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').first().waitFor();
       await page.evaluate(() => {
         const btn = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '提交');
@@ -138,17 +116,7 @@ test('快速连续点击的两个 LOW 动作分别持有自己的 oracle', async
   process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-race-${browserName}`);
-  const { chromium } = await import('playwright');
-  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
-  {
-    const page = seed.pages()[0] ?? (await seed.newPage());
-    await page.goto('http://127.0.0.1:5173/login');
-    await page.getByLabel('用户名').fill('tester');
-    await page.getByLabel('密码').fill('tester');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/home');
-  }
-  await seed.close();
+  await seedProfile(profile);
 
   const observed = new Map<string, string>();
   let stop!: () => void;
@@ -167,7 +135,7 @@ test('快速连续点击的两个 LOW 动作分别持有自己的 oracle', async
       return null;
     },
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').first().waitFor();
       await page.evaluate(() => {
         document.body.insertAdjacentHTML('beforeend', `

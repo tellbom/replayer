@@ -6,6 +6,7 @@ import { login } from './helpers';
 const generatorScript = await readFile('packages/locator/dist/selector-generator.iife.js', 'utf8');
 const mutationScript = await readFile('packages/locator/dist/mutation-tracker.iife.js', 'utf8');
 const probeScript = await readFile('packages/locator/dist/recorder-probe.iife.js', 'utf8');
+const visibleHintScript = await readFile('packages/locator/dist/visible-hint.iife.js', 'utf8');
 
 test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) => {
   const actions: Array<{ type: string }> = [];
@@ -14,6 +15,7 @@ test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) =>
   });
   await page.addInitScript({ content: generatorScript });
   await page.addInitScript({ content: mutationScript });
+  await page.addInitScript({ content: visibleHintScript });
   await page.addInitScript({ content: probeScript });
   await login(page);
   await page.exposeBinding('__DSH_RECORD__', (_source, action: { type: string }) => {

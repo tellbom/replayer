@@ -3,7 +3,7 @@ entry:
   id: oa
   name: Mock OA
   via: portal
-  portalUrl: http://127.0.0.1:5173/portal
+  portalUrl: http://127.0.0.1:15173/portal
   linkText: OA办公系统
   landingUrlPattern: /home
   excludeUrlPatterns:

@@ -5,7 +5,7 @@ skill:
   name: 提交加班申请
   description: Mock OA 加班申请确定性回放技能
   system: mock-oa
-  baseUrl: http://127.0.0.1:5173
+  baseUrl: http://127.0.0.1:15173
   entry: oa
   version: 2
 params:

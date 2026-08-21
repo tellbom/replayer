@@ -59,7 +59,7 @@ test('dependency-record: 切换类型后必须重新注入审批人与 token', a
 
 function recording(token: string): RecordSession {
   return {
-    meta: { startedAt: '', endedAt: '', baseUrl: 'http://127.0.0.1:5173', userAgent: 'Chrome' },
+    meta: { startedAt: '', endedAt: '', baseUrl: 'http://127.0.0.1:15173', userAgent: 'Chrome' },
     actions: [{ ts: 1_000, type: 'select' }, { ts: 2_000, type: 'click' }],
     network: [
       {
@@ -67,7 +67,7 @@ function recording(token: string): RecordSession {
         requestTs: 1_100,
         responseTs: 1_200,
         method: 'POST',
-        url: 'http://127.0.0.1:5173/api/overtime/approver',
+        url: 'http://127.0.0.1:15173/api/overtime/approver',
         resourceType: 'fetch',
         headers: { 'content-type': 'application/json' },
         postData: JSON.stringify({ type: 'workday' }),
@@ -81,7 +81,7 @@ function recording(token: string): RecordSession {
         requestTs: 2_100,
         responseTs: 2_200,
         method: 'POST',
-        url: 'http://127.0.0.1:5173/api/overtime/submit',
+        url: 'http://127.0.0.1:15173/api/overtime/submit',
         resourceType: 'fetch',
         headers: { 'content-type': 'application/json' },
         postData: JSON.stringify({

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { stringify } from 'yaml';
 
 import { login } from './helpers';
+import { oaEntry } from './fixture';
 
 const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
 
@@ -36,7 +37,7 @@ test('heal-execute: read/fill 修复成功后写回且 YAML 可解析', async ({
     page, skill, skillPath: path, candidate, context: context(), reason: '字段改名',
   })).resolves.toMatchObject({ actionVerified: true });
   await expect(page.locator('textarea')).toHaveValue('版本上线');
-  const updated = parseSkill(await readFile(path, 'utf8'));
+  const updated = parseSkill(await readFile(path, 'utf8'), () => oaEntry);
   expect(updated.skill.version).toBe(2);
   expect(updated.steps[0]?.ui?.target).toEqual(candidate.newTarget);
 });
@@ -87,7 +88,7 @@ test('heal-execute: postcondition 失败时文件完全不变', async ({ page })
 
 function makeSkill(step: Step): Skill {
   return {
-    skill: { id: 'heal-demo', name: 'heal demo', system: 'oa', baseUrl: 'http://127.0.0.1:5173', version: 1 },
+    skill: { id: 'heal-demo', name: 'heal demo', system: 'oa', baseUrl: 'http://127.0.0.1:15173', entry: 'oa', version: 1 },
     params: [], preflight: [], steps: [step], assertions: [],
   };
 }
@@ -112,7 +113,10 @@ function healCandidate(
 }
 
 function context(): ExecContext {
-  return { params: {}, vars: {}, stepResults: {}, baseUrl: 'http://127.0.0.1:5173' };
+  return {
+    params: {}, vars: {}, stepResults: {}, baseUrl: 'http://127.0.0.1:15173',
+    entry: oaEntry, identityDigest: 'tester', scopes: {},
+  };
 }
 
 async function skillFile(skill: Skill): Promise<{ path: string; source: string }> {

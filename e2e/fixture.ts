@@ -51,7 +51,7 @@ export async function seedProfile(profileDir: string): Promise<void> {
   const ctx = await chromium.launchPersistentContext(profileDir, { channel: 'chrome', headless: true });
   try {
     const page = ctx.pages()[0] ?? (await ctx.newPage());
-    await page.goto('http://127.0.0.1:5173/login');
+    await page.goto('http://127.0.0.1:15173/login');
     await page.evaluate(() =>
       fetch('/api/login?cookieMode=persistent&_nodelay=1', {
         method: 'POST',

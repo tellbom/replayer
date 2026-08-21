@@ -5,12 +5,15 @@ import { join } from 'node:path';
 import type { RecordSession } from '@dsh/core';
 
 import { record } from '../packages/recorder/src/session';
+import { oaEntry, seedProfile } from './fixture';
 
 test('recording-session: 停止信号后写出完整 RecordSession', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-record-session-'));
+  const profileDir = join(root, 'profile');
+  await seedProfile(profileDir);
   await record({
-    url: 'http://127.0.0.1:5173/login',
-    profileDir: join(root, 'profile'),
+    entry: oaEntry,
+    profileDir,
     outDir: join(root, 'out'),
     channel: 'chrome',
     headless: true,
@@ -20,15 +23,15 @@ test('recording-session: 停止信号后写出完整 RecordSession', async () =>
     await readFile(join(root, 'out', 'record.json'), 'utf8'),
   );
 
-  expect(stored.meta.baseUrl).toBe('http://127.0.0.1:5173');
+  expect(stored.meta.baseUrl).toBe('http://127.0.0.1:15173');
   expect(stored.meta.startedAt).toBeTruthy();
   expect(stored.meta.endedAt).toBeTruthy();
   expect(stored.meta.userAgent).toContain('Chrome');
   expect(stored.actions).toEqual([
-    expect.objectContaining({ type: 'navigate', url: 'http://127.0.0.1:5173/login' }),
+    expect.objectContaining({ type: 'navigate', url: 'http://127.0.0.1:15173/home' }),
   ]);
   expect(stored.pages).toEqual([
-    expect.objectContaining({ url: 'http://127.0.0.1:5173/login' }),
+    expect.objectContaining({ url: 'http://127.0.0.1:15173/home' }),
   ]);
   expect(stored.network).toEqual([]);
 });

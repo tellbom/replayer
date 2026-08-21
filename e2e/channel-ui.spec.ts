@@ -1,10 +1,13 @@
 import { expect, test } from '@playwright/test';
+import { SkillVerificationSchema } from '@dsh/core';
 import type { Skill } from '@dsh/core';
 
 import { replay } from '../packages/replayer/src/engine';
+import { oaEntry, seedProfile } from './fixture';
 
 test('channel-ui: force channel ui completes an overtime submission', async ({ browserName }, testInfo) => {
   const profileDir = testInfo.outputPath(`ui-${browserName}-profile`);
+  await seedProfile(profileDir);
 
   const result = await replay(overtimeUiSkill(), {
     params: {
@@ -14,13 +17,14 @@ test('channel-ui: force channel ui completes an overtime submission', async ({ b
       reason: 'UI 通道验收',
     },
     profileDir,
+    entry: oaEntry,
     forceChannel: 'ui',
     noLLM: true,
     onConfirm: async () => true,
   });
 
   expect(result.ok).toBe(true);
-  expect(result.steps).toHaveLength(14);
+  expect(result.steps).toHaveLength(11);
   expect(result.steps.every((step) => step.channelUsed === 'ui')).toBe(true);
   const debugText = JSON.parse(result.steps.at(-1)?.raw?.text ?? '{}') as { value?: string };
   const debugResult = JSON.parse(debugText.value ?? '{}') as {
@@ -32,13 +36,14 @@ test('channel-ui: force channel ui completes an overtime submission', async ({ b
 });
 
 function overtimeUiSkill(): Skill {
-  const baseUrl = 'http://127.0.0.1:5173';
+  const baseUrl = 'http://127.0.0.1:15173';
   return {
     skill: {
       id: 'ui_overtime_submit',
       name: 'UI overtime submit',
       system: 'mock-oa',
-      baseUrl: `${baseUrl}/login`,
+      baseUrl,
+      entry: 'oa',
       version: 1,
     },
     params: [
@@ -57,24 +62,6 @@ function overtimeUiSkill(): Skill {
     ],
     preflight: [],
     steps: [
-      uiStep('login-user', 'fill username', {
-        action: 'fill',
-        label: '用户名',
-        kind: 'input',
-        value: 'tester',
-        preAction: { action: 'waitFor', waitFor: { selector: '.el-form-item' } },
-      }),
-      uiStep('login-password', 'fill password', {
-        action: 'fill',
-        label: '密码',
-        kind: 'input',
-        value: 'tester',
-      }),
-      uiStep('login-submit', 'login', {
-        action: 'click',
-        target: { strategy: 'text', text: '登录' },
-        waitFor: { selector: 'a[href="/overtime/apply"]' },
-      }),
       uiStep('navigate', 'open overtime form', {
         action: 'click',
         target: { strategy: 'text', text: '加班申请' },
@@ -140,6 +127,7 @@ function overtimeUiSkill(): Skill {
       }),
     ],
     assertions: [],
+    verification: SkillVerificationSchema.parse({}),
   };
 }
 

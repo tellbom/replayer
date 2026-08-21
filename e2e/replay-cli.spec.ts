@@ -1,12 +1,20 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { mkdir, writeFile } from 'node:fs/promises';
 
 import { expect, test } from '@playwright/test';
 import type { RunResult } from '@dsh/core';
+import { stringify } from 'yaml';
+
+import { oaEntry, seedProfile } from './fixture';
 
 const execFileAsync = promisify(execFile);
 
 test('replay-cli: npm-managed CLI completes the overtime skill', async ({ browserName }, testInfo) => {
+  const profileDir = testInfo.outputPath(`cli-${browserName}-profile`);
+  const entriesDir = testInfo.outputPath('entries');
+  await seedProfile(profileDir);
+  await writeProbeOnlyEntry(entriesDir);
   const { stdout } = await execFileAsync(
     process.execPath,
     [
@@ -21,7 +29,9 @@ test('replay-cli: npm-managed CLI completes the overtime skill', async ({ browse
         reason: '版本上线',
       }),
       '--profile',
-      testInfo.outputPath(`cli-${browserName}-profile`),
+      profileDir,
+      '--entries',
+      entriesDir,
       '--no-llm',
       '--yes',
     ],
@@ -44,3 +54,18 @@ test('replay-cli: npm-managed CLI completes the overtime skill', async ({ browse
   });
   expect(JSON.parse(submit?.raw?.text ?? '{}')).toMatchObject({ code: 0, no: expect.any(String) });
 });
+
+async function writeProbeOnlyEntry(directory: string): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    `${directory}/oa.yaml`,
+    stringify({
+      ...oaEntry,
+      entry: {
+        ...oaEntry.entry,
+        sessionHolding: { ...oaEntry.entry.sessionHolding, strategy: 'probe-only' },
+      },
+    }),
+    'utf8',
+  );
+}

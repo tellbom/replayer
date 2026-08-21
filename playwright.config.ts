@@ -6,7 +6,7 @@ export default defineConfig({
   outputDir: './test-results',
   reporter: [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: 'http://127.0.0.1:15173',
     channel: 'chrome',
     trace: 'retain-on-failure',
   },
@@ -18,7 +18,7 @@ export default defineConfig({
     },
     {
       command: 'npm run dev --workspace mock-oa-frontend -- --host 127.0.0.1',
-      url: 'http://127.0.0.1:5173/login',
+      url: 'http://127.0.0.1:15173/login',
       reuseExistingServer: true,
     },
   ],

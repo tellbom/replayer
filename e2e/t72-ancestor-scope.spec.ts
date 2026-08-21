@@ -27,7 +27,7 @@ test('T-72 同名 section 按钮由规则化祖先提升为 HIGH，且不调用 
       return null;
     },
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').first().waitFor();
       await page.evaluate(() => {
         const root = document.createElement('div');

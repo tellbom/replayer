@@ -1,22 +1,42 @@
 import { expect, test } from '@playwright/test';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { stringify } from 'yaml';
+
+import { oaEntry, seedProfile } from './fixture';
 
 test('record-cli: 命令行停止后产出 record.json', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-record-cli-'));
+  const profileDir = join(root, 'profile');
+  const entriesDir = join(root, 'entries');
+  await seedProfile(profileDir);
+  await mkdir(entriesDir, { recursive: true });
+  await writeFile(
+    join(entriesDir, 'oa.yaml'),
+    stringify({
+      ...oaEntry,
+      entry: {
+        ...oaEntry.entry,
+        sessionHolding: { ...oaEntry.entry.sessionHolding, strategy: 'probe-only' },
+      },
+    }),
+    'utf8',
+  );
   const child = spawn(
     process.execPath,
     [
       'packages/cli/dist/index.js',
       'record',
-      '--url',
-      'http://127.0.0.1:5173/login',
+      '--entry',
+      'oa',
+      '--entries',
+      entriesDir,
       '--out',
       join(root, 'out'),
       '--profile',
-      join(root, 'profile'),
+      profileDir,
       '--channel',
       'chrome',
     ],

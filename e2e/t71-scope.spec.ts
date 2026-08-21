@@ -27,7 +27,7 @@ test('T-71 录制后处理把动态 dialog、table-row、listbox 转成 scoped H
       return null;
     },
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').first().waitFor();
       await page.evaluate(() => {
         const harness = document.createElement('section');

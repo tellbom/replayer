@@ -24,7 +24,7 @@ test('T-68 A2/A3: 正式录制链路重跑 no-id 六场景并输出完整 option
       return null;
     },
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').first().waitFor();
       await page.evaluate(() => {
         const root = document.createElement('div');

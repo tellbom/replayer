@@ -3,7 +3,6 @@ import { generateDraft } from '@dsh/analyzer';
 import { ForbiddenError, parseSkill } from '@dsh/core';
 import type { RecordSession, Skill, Step } from '@dsh/core';
 import { record } from '@dsh/recorder';
-import { chromium } from 'playwright';
 import { replay } from '@dsh/replayer';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,7 +10,7 @@ import { join } from 'node:path';
 
 import { oaEntry, entryResolver, seedProfile } from '../fixture';
 
-const baseUrl = 'http://127.0.0.1:5173';
+const baseUrl = 'http://127.0.0.1:15173';
 
 test('A1 录制加班并生成可解析 draft.yaml', async () => {
   const session = await recordBusiness('/overtime/apply', async (page) => {
@@ -117,17 +116,7 @@ async function recordBusiness(
 ): Promise<RecordSession> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-acceptance-record-'));
   const profile = join(root, 'profile');
-  // 种子门户会话（等价于用户此前登录过一次——C16：登录不进入录制）
-  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
-  {
-    const page = seed.pages()[0] ?? (await seed.newPage());
-    await page.goto(`${baseUrl}/login`);
-    await page.getByLabel('用户名').fill('tester');
-    await page.getByLabel('密码').fill('tester');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/home');
-  }
-  await seed.close();
+  await seedProfile(profile);
 
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolveStop) => { stop = resolveStop; });

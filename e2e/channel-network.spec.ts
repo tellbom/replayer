@@ -4,6 +4,7 @@ import type { ExecContext, ParamDefinition, Step } from '@dsh/core';
 
 import { executeNetworkStep } from '../packages/replayer/src/channel-network';
 import { login } from './helpers';
+import { oaEntry } from './fixture';
 
 const params: ParamDefinition[] = [
   {
@@ -29,7 +30,10 @@ test('channel-network: 联动提交、模板缺失与响应丢失机械分类', 
     },
     vars: { csrf },
     stepResults: {},
-    baseUrl: 'http://127.0.0.1:5173',
+    baseUrl: 'http://127.0.0.1:15173',
+    entry: oaEntry,
+    identityDigest: 'tester',
+    scopes: {},
   };
   const approver = approverStep('s1');
   const submit = submitStep('s2', '/api/overtime/submit');

@@ -25,7 +25,7 @@ test('T-74 录制选择联动时推导请求与审批人非空等待', async ({ 
     headless: true,
     stopSignal,
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').filter({ hasText: '加班类型' }).locator('.el-select').click();
       await page.getByRole('option', { name: '工作日加班' }).click();
       await expect(page.getByLabel('审批人')).toHaveValue('张经理');
@@ -52,7 +52,7 @@ async function seedPersistentProfile(profileDir: string): Promise<void> {
   });
   try {
     const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto('http://127.0.0.1:5173/login');
+    await page.goto('http://127.0.0.1:15173/login');
     await page.evaluate(() =>
       fetch('/api/login?cookieMode=persistent&_nodelay=1', {
         method: 'POST',
@@ -87,7 +87,7 @@ test('T-74 回放在动作前监听响应并等待审批人赋值', async ({ pag
     params: {},
     vars: {},
     stepResults: {},
-    baseUrl: 'http://127.0.0.1:5173',
+    baseUrl: 'http://127.0.0.1:15173',
     entry: oaEntry,
     identityDigest: 'tester',
     scopes: {},

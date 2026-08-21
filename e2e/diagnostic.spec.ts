@@ -2,12 +2,14 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, test } from '@playwright/test';
-import type { Skill, Step } from '@dsh/core';
+import { SkillVerificationSchema } from '@dsh/core';
+import type { Skill } from '@dsh/core';
 import { chromium } from 'playwright';
 
 import { replay } from '../packages/replayer/src/engine';
+import { oaEntry, seedProfile } from './fixture';
 
-const baseUrl = 'http://127.0.0.1:5173';
+const baseUrl = 'http://127.0.0.1:15173';
 
 test('diagnostic: failed step writes eight sanitized artifact types', async ({ browserName }, testInfo) => {
   const secrets = {
@@ -17,6 +19,7 @@ test('diagnostic: failed step writes eight sanitized artifact types', async ({ b
     token: 'diagnostic-token-secret',
   };
   const profileDir = testInfo.outputPath(`diagnostic-${browserName}-profile`);
+  await seedProfile(profileDir);
   const seedContext = await chromium.launchPersistentContext(profileDir, {
     channel: 'chrome',
     headless: true,
@@ -34,6 +37,7 @@ test('diagnostic: failed step writes eight sanitized artifact types', async ({ b
   const result = await replay(failingSkill(secrets), {
     params: {},
     profileDir,
+    entry: oaEntry,
     noLLM: true,
   });
 
@@ -71,13 +75,13 @@ function failingSkill(secrets: Record<string, string>): Skill {
       id: 'diagnostic-failure',
       name: 'diagnostic failure',
       system: 'mock-oa',
-      baseUrl: `${baseUrl}/login`,
+      baseUrl,
+      entry: 'oa',
       version: 1,
     },
     params: [],
     preflight: [],
     steps: [
-      ...loginSteps(),
       {
         id: 'fail',
         desc: 'intentional failure',
@@ -97,39 +101,6 @@ function failingSkill(secrets: Record<string, string>): Skill {
       },
     ],
     assertions: [],
-  };
-}
-
-function loginSteps(): Step[] {
-  return [
-    uiStep('login-user', {
-      action: 'fill',
-      label: '用户名',
-      kind: 'input',
-      value: 'tester',
-      preAction: { action: 'waitFor', waitFor: { selector: '.el-form-item' } },
-    }),
-    uiStep('login-password', {
-      action: 'fill',
-      label: '密码',
-      kind: 'input',
-      value: 'tester',
-    }),
-    uiStep('login-submit', {
-      action: 'click',
-      target: { strategy: 'text', text: '登录' },
-      waitFor: { selector: 'a[href="/overtime/apply"]' },
-    }),
-  ];
-}
-
-function uiStep(id: string, ui: NonNullable<Step['ui']>): Step {
-  return {
-    id,
-    desc: id,
-    channel: 'ui',
-    riskLevel: 'read',
-    hasSideEffect: false,
-    ui,
+    verification: SkillVerificationSchema.parse({}),
   };
 }

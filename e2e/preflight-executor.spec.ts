@@ -31,7 +31,7 @@ test('preflight-executor: 提取 csrf、ViewState 与 JSON token 且诊断不泄
     params: {},
     vars: {},
     stepResults: {},
-    baseUrl: 'http://127.0.0.1:5173',
+    baseUrl: 'http://127.0.0.1:15173',
   };
   const diagnostics = await executePreflights(page, preflights, context);
 

@@ -32,7 +32,7 @@ test('T-77: session 与 persistent cookie 的浏览器属性符合契约', async
     headless: true,
   });
   let page = context.pages()[0] ?? (await context.newPage());
-  await page.goto('http://127.0.0.1:5173/home');
+  await page.goto('http://127.0.0.1:15173/home');
   await expect(
     page.evaluate(() => fetch('/api/session?_nodelay=1').then((response) => response.json())),
   ).resolves.toEqual({ loggedIn: false });
@@ -44,7 +44,7 @@ test('T-77: session 与 persistent cookie 的浏览器属性符合契约', async
     headless: true,
   });
   page = context.pages()[0] ?? (await context.newPage());
-  await page.goto('http://127.0.0.1:5173/login');
+  await page.goto('http://127.0.0.1:15173/login');
   await page.evaluate(() =>
     fetch('/api/login?cookieMode=persistent&_nodelay=1', {
       method: 'POST',
@@ -62,7 +62,7 @@ test('T-77: session 与 persistent cookie 的浏览器属性符合契约', async
     headless: true,
   });
   page = context.pages()[0] ?? (await context.newPage());
-  await page.goto('http://127.0.0.1:5173/home');
+  await page.goto('http://127.0.0.1:15173/home');
   await expect(
     page.evaluate(() => fetch('/api/session?_nodelay=1').then((response) => response.json())),
   ).resolves.toEqual({ loggedIn: true, user: 'tester' });
@@ -111,7 +111,7 @@ test('T-77: 同身份登录后续录，登录动作不入库且断点后 scope �
           );
           await expect(page.getByText('会话已过期，请重新登录')).toBeVisible({ timeout: 15_000 });
           await expect(page.locator('#__dsh_login_hint__')).toBeVisible();
-          await page.goto('http://127.0.0.1:5173/login');
+          await page.goto('http://127.0.0.1:15173/login');
           await page.getByLabel('用户名').fill('tester');
           await page.getByLabel('密码').fill('tester');
           const loginResult = await page.evaluate(() =>
@@ -208,7 +208,7 @@ test('T-77: 换身份登录立即中止并保留 partial 录制', async () => {
           );
           await expect(page.getByText('会话已过期，请重新登录')).toBeVisible({ timeout: 15_000 });
           await expect(page.locator('#__dsh_login_hint__')).toBeVisible();
-          await page.goto('http://127.0.0.1:5173/login');
+          await page.goto('http://127.0.0.1:15173/login');
           await page.getByLabel('用户名').fill('other-user');
           await page.getByLabel('密码').fill('other-user');
           const loginResult = await page.evaluate(() =>
@@ -245,7 +245,7 @@ function entry(): Entry {
       id: 'oa',
       name: 'Mock OA',
       via: 'direct',
-      directUrl: 'http://127.0.0.1:5173/home',
+      directUrl: 'http://127.0.0.1:15173/home',
       landingUrlPattern: '/home',
       excludeUrlPatterns: ['\\?token=', '/sso/redirect'],
       sessionType: 'cookie',

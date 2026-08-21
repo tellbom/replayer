@@ -201,7 +201,7 @@ function healStep(
 function oneStepSkill(step: Step): Skill {
   return {
     skill: {
-      id: 'a6', name: 'A6', system: 'oa', baseUrl: 'http://127.0.0.1:5173',
+      id: 'a6', name: 'A6', system: 'oa', baseUrl: 'http://127.0.0.1:15173',
       entry: 'oa', version: 1,
     },
     params: [], preflight: [], steps: [step], assertions: [],
@@ -210,7 +210,7 @@ function oneStepSkill(step: Step): Skill {
 
 function execContext(): ExecContext {
   return {
-    params: {}, vars: {}, stepResults: {}, baseUrl: 'http://127.0.0.1:5173',
+    params: {}, vars: {}, stepResults: {}, baseUrl: 'http://127.0.0.1:15173',
     entry: oaEntry, identityDigest: '',
     scopes: {},
   };

@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { ForbiddenError } from '@dsh/core';
+import { ForbiddenError, SkillVerificationSchema } from '@dsh/core';
 import type { Skill, Step, StepResult } from '@dsh/core';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { replay } from '../packages/replayer/src/engine';
+import { oaEntry, seedProfile } from './fixture';
 
-const baseUrl = 'http://127.0.0.1:5173';
+const baseUrl = 'http://127.0.0.1:15173';
 const runParams = {
   type: '工作日加班',
   startTime: '2026-08-18 18:00:00',
@@ -15,6 +16,8 @@ const runParams = {
 };
 
 test('fallback: not_sent permits one confirmed UI fallback', async ({ browserName }, testInfo) => {
+  const profileDir = testInfo.outputPath(`not-sent-${browserName}-profile`);
+  await seedProfile(profileDir);
   let confirmations = 0;
   const skill = makeSkill('fallback-not-sent', [
     ...loginAndOpenSteps(),
@@ -31,7 +34,8 @@ test('fallback: not_sent permits one confirmed UI fallback', async ({ browserNam
   ]);
   const result = await replay(skill, {
     params: runParams,
-    profileDir: testInfo.outputPath(`not-sent-${browserName}-profile`),
+    profileDir,
+    entry: oaEntry,
     noLLM: true,
     onConfirm: async () => {
       confirmations += 1;
@@ -47,6 +51,8 @@ test('fallback: not_sent permits one confirmed UI fallback', async ({ browserNam
 });
 
 test('fallback: drop_response resolves by postcondition without replay', async ({ browserName }, testInfo) => {
+  const profileDir = testInfo.outputPath(`drop-${browserName}-profile`);
+  await seedProfile(profileDir);
   const skill = makeSkill(
     'fallback-outcome-unknown',
     [
@@ -81,7 +87,8 @@ test('fallback: drop_response resolves by postcondition without replay', async (
   );
   const result = await replay(skill, {
     params: runParams,
-    profileDir: testInfo.outputPath(`drop-${browserName}-profile`),
+    profileDir,
+    entry: oaEntry,
     noLLM: true,
     onConfirm: async () => true,
   });
@@ -97,6 +104,8 @@ test('fallback: drop_response resolves by postcondition without replay', async (
 });
 
 test('fallback: 403 is forbidden and never enters authentication recovery', async ({ browserName }, testInfo) => {
+  const profileDir = testInfo.outputPath(`forbidden-${browserName}-profile`);
+  await seedProfile(profileDir);
   const skill = makeSkill('fallback-forbidden', [
     ...loginSteps(),
     {
@@ -112,7 +121,8 @@ test('fallback: 403 is forbidden and never enters authentication recovery', asyn
   try {
     await replay(skill, {
       params: runParams,
-      profileDir: testInfo.outputPath(`forbidden-${browserName}-profile`),
+      profileDir,
+      entry: oaEntry,
       noLLM: true,
     });
   } catch (error) {
@@ -126,7 +136,7 @@ test('fallback: 403 is forbidden and never enters authentication recovery', asyn
 
 function makeSkill(id: string, steps: Step[], postcondition?: Skill['postcondition']): Skill {
   return {
-    skill: { id, name: id, system: 'mock-oa', baseUrl: `${baseUrl}/login`, version: 1 },
+    skill: { id, name: id, system: 'mock-oa', baseUrl, entry: 'oa', version: 1 },
     params: [
       {
         name: 'type',
@@ -144,31 +154,13 @@ function makeSkill(id: string, steps: Step[], postcondition?: Skill['postconditi
     preflight: [],
     steps,
     assertions: [],
+    verification: SkillVerificationSchema.parse({}),
     ...(postcondition ? { postcondition } : {}),
   };
 }
 
 function loginSteps(): Step[] {
-  return [
-    uiStep('login-user', {
-      action: 'fill',
-      label: '用户名',
-      kind: 'input',
-      value: 'tester',
-      preAction: { action: 'waitFor', waitFor: { selector: '.el-form-item' } },
-    }),
-    uiStep('login-password', {
-      action: 'fill',
-      label: '密码',
-      kind: 'input',
-      value: 'tester',
-    }),
-    uiStep('login-submit', {
-      action: 'click',
-      target: { strategy: 'text', text: '登录' },
-      waitFor: { selector: 'a[href="/overtime/apply"]' },
-    }),
-  ];
+  return [];
 }
 
 function loginAndOpenSteps(): Step[] {

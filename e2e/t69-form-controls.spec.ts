@@ -19,7 +19,7 @@ test('T-69 G1-G5: no-id 表单控件走正式录制链路', async ({ browserName
     headless: true,
     stopSignal,
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').first().waitFor();
       await page.evaluate(() => {
         const suffix = Math.random().toString(36).slice(2, 8);

@@ -3,8 +3,9 @@
 // 回放经 channel-ui 的 page.locator(selector) 命中同一元素。
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { chromium } from 'playwright';
 
-import { oaEntry } from './fixture';
+import { oaEntry, seedProfile } from './fixture';
 
 test('playwright 引擎录制产物符合正式契约且回放命中', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
@@ -12,18 +13,7 @@ test('playwright 引擎录制产物符合正式契约且回放命中', async ({ 
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-${browserName}`);
 
-  // 种子门户会话
-  const { chromium } = await import('playwright');
-  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
-  {
-    const page = seed.pages()[0] ?? (await seed.newPage());
-    await page.goto('http://127.0.0.1:5173/login');
-    await page.getByLabel('用户名').fill('tester');
-    await page.getByLabel('密码').fill('tester');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/home');
-  }
-  await seed.close();
+  await seedProfile(profile);
 
   let stop!: () => void;
   const stopSignal = new Promise<void>((r) => { stop = r; });
@@ -34,7 +24,7 @@ test('playwright 引擎录制产物符合正式契约且回放命中', async ({ 
     headless: true,
     stopSignal,
     onReady: async (page) => {
-      await page.goto('http://127.0.0.1:5173/overtime/apply');
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
       await page.locator('.el-form-item').first().waitFor();
       // 点击「提交」按钮（role/button 形态，playwright 引擎应产出 role+name 语义 selector）
       await page.evaluate(() => {
@@ -63,7 +53,7 @@ test('playwright 引擎录制产物符合正式契约且回放命中', async ({ 
   const verify = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
   {
     const page = verify.pages()[0] ?? (await verify.newPage());
-    await page.goto('http://127.0.0.1:5173/overtime/apply');
+    await page.goto('http://127.0.0.1:15173/overtime/apply');
     await page.locator('.el-form-item').first().waitFor();
     const count = await page.locator(target.selector).count();
     expect(count).toBeGreaterThanOrEqual(1);
