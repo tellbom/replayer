@@ -87,6 +87,12 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     preflight: detectPreflight(session),
     steps,
     assertions: [{ type: 'httpStatus', expect: 200 }],
+    verification: {
+      status: 'draft',
+      requiresFirstRunVerification: steps.some(
+        (step) => step.ui?.target?.strategy === 'playwright' && step.ui.target.confidence === 'LOW',
+      ),
+    },
     ...(postcondition ? { postcondition } : {}),
     ...(reentryDraft(steps) ? { reentry: reentryDraft(steps) } : {}),
     _notes: [
@@ -206,6 +212,7 @@ function uiAction(action: RecordedAction, params: Skill['params'], discardScope 
     ...(action.label ? { label: action.label } : {}),
     ...(value !== undefined ? { value } : {}),
     ...(action.scope && !discardScope ? { scope: action.scope } : {}),
+    ...(action.recordedHint ? { recordedHint: action.recordedHint } : {}),
   };
   if (action.type === 'select') return { action: 'selectOption', ...common };
   if (action.type === 'datetime') return { action: 'setDateTime', ...common };

@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { assertNoPlainCredentials } from './sanitize.js';
 import { SchemaViolationError } from './errors.js';
-import type { ControlKind, LocatorStrategy } from './types.js';
+import type { ControlKind, LocatorStrategy, RecordedHint } from './types.js';
 
 export const ControlKindSchema: z.ZodType<ControlKind> = z.enum([
   'input',
@@ -162,6 +162,25 @@ export const ReentrySchema = z.object({
 
 export type Reentry = z.infer<typeof ReentrySchema>;
 
+export const RecordedHintSchema: z.ZodType<RecordedHint> = z.object({
+  action: z.enum(['click', 'fill', 'select', 'check', 'datetime', 'navigate']),
+  visibleText: z.string().nullable(),
+  visibleTextSource: z.enum([
+    'accessible-name', 'label', 'aria', 'placeholder', 'title', 'text', 'none',
+  ]),
+  tagName: z.string(),
+  role: z.string().nullable(),
+  matchCountAtRecord: z.number(),
+});
+
+export const SkillVerificationSchema = z.object({
+  status: z.enum(['draft', 'verified', 'needs_rerecord']).default('draft'),
+  requiresFirstRunVerification: z.boolean().default(false),
+  verifiedAt: z.string().nullable().default(null),
+  verifiedRunId: z.string().nullable().default(null),
+  verifiedBy: z.string().nullable().default(null),
+});
+
 type UiActionName =
   'navigate' | 'click' | 'fill' | 'selectOption' | 'setDateTime' | 'waitFor' | 'readValue';
 
@@ -182,6 +201,7 @@ export interface UiAction {
   preAction?: UiAction | undefined;
   extract?: Record<string, string> | undefined;
   scope?: string | undefined;
+  recordedHint?: RecordedHint | undefined;
 }
 
 export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
@@ -210,6 +230,7 @@ export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
     preAction: UiActionSchema.optional(),
     extract: z.record(z.string()).optional(),
     scope: z.string().optional(),
+    recordedHint: RecordedHintSchema.optional(),
   }),
 );
 
@@ -338,6 +359,7 @@ export const SkillSchema = z.object({
   assertions: z.array(AssertionSchema).default([]),
   postcondition: PostconditionSchema.optional(),
   reentry: ReentrySchema.optional(),
+  verification: SkillVerificationSchema.default({}),
   _healHistory: z
     .array(
       z.object({

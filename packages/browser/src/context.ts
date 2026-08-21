@@ -27,6 +27,7 @@ const INIT_SCRIPT_PATHS = [
   '../../locator/dist/selector-generator.iife.js',
   '../../locator/dist/mutation-tracker.iife.js',
   '../../locator/dist/ancestor-scope.iife.js',
+  '../../locator/dist/visible-hint.iife.js',
 ] as const;
 
 export async function launchDSHContext(options: BrowserOptions): Promise<BrowserContext> {

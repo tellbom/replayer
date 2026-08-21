@@ -148,6 +148,20 @@ describe('generateDraft', () => {
       expect.arrayContaining([expect.stringContaining('reentry.anchor 候选为 s2')]),
     );
   });
+
+  it('marks a draft with LOW locator as requiring first-run verification', () => {
+    const session = recording(false);
+    session.actions[1]!.target = {
+      strategy: 'playwright', selector: 'internal:role=textbox >> nth=5', confidence: 'LOW',
+    };
+    session.actions[1]!.recordedHint = {
+      action: 'fill', visibleText: '开始时间', visibleTextSource: 'accessible-name',
+      tagName: 'input', role: 'textbox', matchCountAtRecord: 1,
+    };
+    const result = generateDraft(session);
+    expect(result.skill.verification.requiresFirstRunVerification).toBe(true);
+    expect(result.skill.steps[1]?.ui?.recordedHint?.visibleText).toBe('开始时间');
+  });
 });
 
 function recording(withHistory: boolean): RecordSession {

@@ -22,6 +22,16 @@ export type LocatorStrategy =
 export type ControlKind =
   'input' | 'textarea' | 'select' | 'datepicker' | 'radio' | 'checkbox' | 'button' | 'text';
 
+export interface RecordedHint {
+  action: 'click' | 'fill' | 'select' | 'check' | 'datetime' | 'navigate';
+  visibleText: string | null;
+  visibleTextSource:
+    | 'accessible-name' | 'label' | 'aria' | 'placeholder' | 'title' | 'text' | 'none';
+  tagName: string;
+  role: string | null;
+  matchCountAtRecord: number;
+}
+
 export interface AppearedRoot {
   node: Element;
   descriptor: LocatorStrategy;
@@ -68,6 +78,7 @@ export interface RecordedAction {
   ts: number;
   type: 'click' | 'fill' | 'select' | 'datetime' | 'navigate';
   target?: LocatorStrategy;
+  recordedHint?: RecordedHint;
   label?: string;
   value?: string;
   text?: string;
@@ -210,5 +221,10 @@ declare global {
       targetSelector: string;
       targetConfidence: 'HIGH' | 'LOW';
     } | null;
+    __DSH_EXTRACT_RECORDED_HINT__: (
+      element: Element,
+      action: RecordedHint['action'],
+      matchCountAtRecord: number,
+    ) => RecordedHint;
   }
 }

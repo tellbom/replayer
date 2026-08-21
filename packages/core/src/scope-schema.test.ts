@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { LocatorStrategySchema, StepSchema } from './schema.js';
+import { LocatorStrategySchema, SkillSchema, StepSchema } from './schema.js';
 
 describe('T-71 scope 契约', () => {
   it('保留原字段并填充 requires、portaled、timeoutMs 默认值', () => {
@@ -59,5 +59,30 @@ describe('T-73 iframe 定位契约', () => {
         confidence: 'HIGH',
       }),
     ).toMatchObject({ strategy: 'frame-playwright', frame: '#legacy' });
+  });
+});
+
+describe('T-79 LOW 与 Skill 验证契约', () => {
+  it('保留 LOW recordedHint 并默认进入 draft', () => {
+    const skill = SkillSchema.parse({
+      skill: { id: 'low', name: 'LOW', system: 'oa', baseUrl: 'http://oa', entry: 'oa' },
+      params: [],
+      steps: [{
+        id: 's1', desc: '填写', channel: 'ui',
+        ui: {
+          action: 'fill',
+          target: { strategy: 'playwright', selector: 'internal:role=textbox >> nth=5', confidence: 'LOW' },
+          recordedHint: {
+            action: 'fill', visibleText: '开始时间', visibleTextSource: 'accessible-name',
+            tagName: 'input', role: 'textbox', matchCountAtRecord: 1,
+          },
+        },
+      }],
+    });
+    expect(skill.verification).toEqual({
+      status: 'draft', requiresFirstRunVerification: false,
+      verifiedAt: null, verifiedRunId: null, verifiedBy: null,
+    });
+    expect(skill.steps[0]?.ui?.recordedHint?.visibleText).toBe('开始时间');
   });
 });

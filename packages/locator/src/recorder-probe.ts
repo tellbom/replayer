@@ -33,11 +33,29 @@ function generator(element: Element): unknown {
         strategy: 'playwright',
         selector: generated.selector,
         confidence: generated.confidence,
+        matchCount: generated.matchCount,
       };
     }
   }
   const generate = Reflect.get(window, '__DSH_GEN__');
   return typeof generate === 'function' ? generate(element) : undefined;
+}
+
+function targetWithHint(
+  action: 'click' | 'fill' | 'select' | 'check' | 'datetime' | 'navigate',
+  element: Element,
+): { target: unknown; recordedHint: unknown } {
+  const generated = generator(element) as ({ matchCount?: number } & Record<string, unknown>) | undefined;
+  const { matchCount = 0, ...target } = generated ?? {};
+  const extractHint = Reflect.get(window, '__DSH_EXTRACT_RECORDED_HINT__') as (
+    targetElement: Element,
+    actionName: typeof action,
+    count: number,
+  ) => unknown;
+  return {
+    target,
+    recordedHint: extractHint(element, action, matchCount),
+  };
 }
 
 function labelFor(element: Element): string | undefined {
@@ -64,7 +82,7 @@ document.addEventListener(
         label: openSelectLabel,
         value: text,
         text,
-        target: generator(option),
+        ...targetWithHint('select', option),
       }, option);
       openSelectLabel = null;
       return;
@@ -78,7 +96,7 @@ document.addEventListener(
         type: 'click',
         label: openSelectLabel ?? undefined,
         text: openSelectLabel ?? undefined,
-        target: generator(combobox),
+        ...targetWithHint('click', combobox),
       }, combobox);
       return;
     }
@@ -87,7 +105,7 @@ document.addEventListener(
     if (interactive) {
       // 【T-68】每个动作持有独立 oracle，异步消歧不会被后续点击覆盖。
       emit(
-        { type: 'click', text: interactive.textContent?.trim(), target: generator(interactive) },
+        { type: 'click', text: interactive.textContent?.trim(), ...targetWithHint('click', interactive) },
         interactive,
       );
     }
@@ -106,7 +124,7 @@ document.addEventListener(
       type: dateEditor ? 'datetime' : 'fill',
       label: labelFor(target),
       value: target.value,
-      target: generator(target),
+      ...targetWithHint(dateEditor ? 'datetime' : 'fill', target),
     }, target);
   },
   true,

@@ -12,6 +12,7 @@ const entries = [
   ['snapshot', 'src/snapshot.ts'],
   ['mutation-tracker', 'src/mutation-tracker.ts'],
   ['ancestor-scope', 'src/ancestor-scope.ts'],
+  ['visible-hint', 'src/visible-hint.ts', VENDOR_TSCONFIG],
   // 【T-63b】Playwright selectorGenerator（vendor 1.62.1）浏览器侧入口
   ['pw-selector-generator', 'src/pw-selector-generator.ts', VENDOR_TSCONFIG],
   // 【T-64】LLM 消歧局部上下文收集（浏览器侧）
