@@ -4,6 +4,20 @@ import { describe, expect, it } from 'vitest';
 import { detectParams } from './params.js';
 
 describe('detectParams', () => {
+  it('normalizes business type selectors to the type parameter', () => {
+    const session = recording('工作日加班', 'unused');
+    session.actions = [{ ts: 1, type: 'select', label: '请假类型', value: '年假' }];
+    session.network = [{
+      requestId: 'types', requestTs: 0.5, responseTs: 0.8, method: 'GET',
+      url: 'http://oa/api/leave/types', resourceType: 'fetch', headers: {}, postData: null,
+      status: 200, responseBody: JSON.stringify([{ label: '年假', value: 'annual' }]),
+      mutating: false, sanitizeMode: 'structured',
+    }];
+
+    expect(detectParams(session)[0]?.definition).toMatchObject({
+      name: 'type', enumMap: { 年假: 'annual' },
+    });
+  });
   it('extracts four overtime parameters and excludes csrf', () => {
     const session = recording('工作日加班', '版本上线');
     const candidates = detectParams(session);

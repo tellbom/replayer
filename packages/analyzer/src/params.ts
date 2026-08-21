@@ -135,6 +135,7 @@ function paramName(label: string | undefined, type: RecordedAction['type']): str
     '结束时间': 'endTime',
     '事由': 'reason',
   };
+  if (label?.endsWith('类型')) return 'type';
   return (label && names[label]) || label || type;
 }
 
