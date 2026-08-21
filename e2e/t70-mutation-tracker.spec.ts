@@ -28,7 +28,7 @@ test('T-70 动作后只记录动态子树根并识别业务容器', async ({ pag
   await page.goto('/overtime/apply');
   await page.locator('.el-form-item').first().waitFor();
   await page.addScriptTag({
-    content: await readFile('packages/locator/dist/selector-generator.iife.js', 'utf8'),
+    content: await readFile('packages/locator/dist/pw-selector-generator.iife.js', 'utf8'),
   });
   await page.addScriptTag({
     content: await readFile('packages/locator/dist/mutation-tracker.iife.js', 'utf8'),

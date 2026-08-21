@@ -36,7 +36,7 @@ export async function runDoctor(options: DoctorOptions): Promise<void> {
       userAgent: navigator.userAgent,
       locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
       snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
-      generator: typeof Reflect.get(window, '__DSH_GEN__'),
+      generator: typeof Reflect.get(window, '__DSH_PWGEN__'),
     }));
     const chromeVersion = /(?:Chrome|Edg)\/([\d.]+)/.exec(runtime.userAgent)?.[1] ?? '未知';
     console.log(`✓ ${channel === 'msedge' ? 'Edge' : 'Chrome'} 已安装        版本 ${chromeVersion}`);

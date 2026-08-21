@@ -1,4 +1,4 @@
-// 【T-67a】契约闭环 e2e：DSH_LOCATOR_ENGINE=playwright 下录制 →
+// 【T-67a/T-83】单一 Playwright Locator Engine 录制 →
 // record.json 的 target 为 {strategy:'playwright', selector, confidence} →
 // 回放经 channel-ui 的 page.locator(selector) 命中同一元素。
 import { expect, test } from '@playwright/test';
@@ -9,7 +9,6 @@ import { oaEntry, seedProfile } from './fixture';
 
 test('playwright 引擎录制产物符合正式契约且回放命中', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-${browserName}`);
 

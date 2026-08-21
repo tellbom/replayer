@@ -202,11 +202,15 @@ declare global {
       version(): 'element-plus' | 'element-ui';
     };
     __DSH_SNAPSHOT__: () => string;
-    __DSH_GEN__: (element: Element) => LocatorStrategy;
+    __DSH_PWGEN__: (element: Element) => {
+      selector: string;
+      unique: boolean;
+      matchCount: number;
+      confidence: 'HIGH' | 'LOW';
+    };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     __DSH_RECORD__?: (action: any) => void;
     __DSH_RECORDING__?: boolean;
-    __DSH_LOCATOR_ENGINE__?: 'legacy' | 'playwright';
     __dsh_clicked__?: Record<number, Element>;
     __DSH_MUTATION__: {
       begin(actionIdx: number): void;

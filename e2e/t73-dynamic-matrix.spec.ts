@@ -174,7 +174,7 @@ test('T-73 I6: frame-playwright 通过 frameLocator 执行 iframe 内动作', as
 
 async function injectMutationTracker(page: Page): Promise<void> {
   await page.addScriptTag({
-    content: await readFile('packages/locator/dist/selector-generator.iife.js', 'utf8'),
+    content: await readFile('packages/locator/dist/pw-selector-generator.iife.js', 'utf8'),
   });
   await page.addScriptTag({
     content: await readFile('packages/locator/dist/mutation-tracker.iife.js', 'utf8'),

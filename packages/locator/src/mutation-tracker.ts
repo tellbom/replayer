@@ -231,16 +231,10 @@ function visible(element: Element): boolean {
 }
 
 function generateDescriptor(root: Element): unknown {
-  if (Reflect.get(window, '__DSH_LOCATOR_ENGINE__') === 'playwright') {
-    const generate = Reflect.get(window, '__DSH_PWGEN__');
-    if (typeof generate !== 'function') throw new Error('Playwright locator generator 未注入');
-    const result = generate(root) as { selector: string; confidence: 'HIGH' | 'LOW' };
-    return { strategy: 'playwright', selector: result.selector, confidence: result.confidence };
-  }
-
-  const generate = Reflect.get(window, '__DSH_GEN__');
-  if (typeof generate !== 'function') throw new Error('Legacy locator generator 未注入');
-  return generate(root);
+  const generate = Reflect.get(window, '__DSH_PWGEN__');
+  if (typeof generate !== 'function') throw new Error('Playwright locator generator 未注入');
+  const result = generate(root) as { selector: string; confidence: 'HIGH' | 'LOW' };
+  return { strategy: 'playwright', selector: result.selector, confidence: result.confidence };
 }
 
 function delay(milliseconds: number): Promise<void> {

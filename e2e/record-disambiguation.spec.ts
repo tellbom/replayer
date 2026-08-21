@@ -10,7 +10,6 @@ import { oaEntry, seedProfile } from './fixture';
 
 test('真 LOW 场景（双同名按钮）触发回调并替换为 scoped HIGH', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-low-${browserName}`);
   await seedProfile(profile);
@@ -62,7 +61,6 @@ test('真 LOW 场景（双同名按钮）触发回调并替换为 scoped HIGH', 
 
 test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-${browserName}`);
   await seedProfile(profile);
@@ -113,7 +111,6 @@ test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browser
 
 test('快速连续点击的两个 LOW 动作分别持有自己的 oracle', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-race-${browserName}`);
   await seedProfile(profile);

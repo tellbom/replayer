@@ -1,4 +1,4 @@
-import { acquireDSHContext, ensureEntry, probeSession, resolveLocatorEngine } from '@dsh/browser';
+import { acquireDSHContext, ensureEntry, probeSession } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
 import type { RecordSession, RecordedAction, SessionInterrupt } from '@dsh/core';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -60,7 +60,6 @@ export interface RecordOptions {
 export async function record(opts: RecordOptions): Promise<RecordSession> {
   await mkdir(opts.profileDir, { recursive: true });
   await mkdir(opts.outDir, { recursive: true });
-  const engine = resolveLocatorEngine();
   const lease = await acquireDSHContext(
     {
       profileDir: opts.profileDir,
@@ -102,7 +101,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       }
 
       const task = (async () => {
-        if (engine === 'playwright' && target) {
+        if (target) {
           const producerActionIdx = actionIdx - 1;
           const producerMutation = mutationTasks.get(producerActionIdx);
           if (producerMutation) {
@@ -188,7 +187,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       postProcessTasks.push(task);
     },
   );
-  const reinjectRecorderProbe = await installRecorderProbe(page, engine);
+  const reinjectRecorderProbe = await installRecorderProbe(page);
   const startedAt = new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
   actions.push({ ts: Date.now(), type: 'navigate', url: page.url() });
@@ -498,35 +497,29 @@ async function showSessionNotice(page: Page, text: string): Promise<void> {
 
 async function installRecorderProbe(
   page: Page,
-  engine: 'legacy' | 'playwright',
 ): Promise<() => Promise<void>> {
   const probePath = fileURLToPath(
     new URL('../../locator/dist/recorder-probe.iife.js', import.meta.url),
   );
   const probe = await readFile(probePath, 'utf8');
-  // 【T-63b】feature flag：legacy（默认）| playwright（vendor Codegen 算法 POC）
-  if (engine === 'playwright') {
-    const pwgenPath = fileURLToPath(
-      new URL('../../locator/dist/pw-selector-generator.iife.js', import.meta.url),
-    );
-    const pwgen = await readFile(pwgenPath, 'utf8');
-    // 【T-67b】消歧局部上下文收集器（LOW 时 Node 侧回调消费）
-    const disambigPath = fileURLToPath(
-      new URL('../../locator/dist/disambiguation-context.iife.js', import.meta.url),
-    );
-    const disambig = await readFile(disambigPath, 'utf8');
-    await page.addInitScript({ content: pwgen });
-    await page.addInitScript({ content: disambig });
-    await page.addScriptTag({ content: pwgen });
-    await page.addScriptTag({ content: disambig });
-  }
+  const pwgenPath = fileURLToPath(
+    new URL('../../locator/dist/pw-selector-generator.iife.js', import.meta.url),
+  );
+  const pwgen = await readFile(pwgenPath, 'utf8');
+  const disambigPath = fileURLToPath(
+    new URL('../../locator/dist/disambiguation-context.iife.js', import.meta.url),
+  );
+  const disambig = await readFile(disambigPath, 'utf8');
+  await page.addInitScript({ content: pwgen });
+  await page.addInitScript({ content: disambig });
+  await page.addScriptTag({ content: pwgen });
+  await page.addScriptTag({ content: disambig });
   await page.addInitScript(
     (marker) => Reflect.set(window, '__DSH_RECORDING__', !window.name.split(' ').includes(marker)),
     RECORDING_PAUSED_MARKER,
   );
   // 注意：闭包捕获外层变量的 addInitScript 实测不生效（变量不随函数序列化），
   // 必须用参数形式传递
-  await page.addInitScript((flag) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', flag), engine);
   const installBar = (marker: string): void => {
     window.addEventListener('DOMContentLoaded', () => {
       const bar = document.createElement('div');
@@ -550,9 +543,6 @@ async function installRecorderProbe(
   const guardedProbe = `if (!Reflect.get(window, '__DSH_RECORDER_PROBE_INSTALLED__')) { Reflect.set(window, '__DSH_RECORDER_PROBE_INSTALLED__', true); ${probe} }`;
   await page.addInitScript({ content: guardedProbe });
   await setRecordingState(page, true);
-  // 当前页注入路径：先设引擎旗帜再挂 probe（generator() 读取的是 window 旗帜，
-  // 顺序颠倒会让首屏动作走错引擎分支）
-  await page.evaluate((flag) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', flag), engine);
   const injectCurrentProbe = async (): Promise<void> => {
     await page.addScriptTag({ content: guardedProbe });
   };
@@ -560,10 +550,9 @@ async function installRecorderProbe(
   const injected = await page.evaluate(() => ({
     locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
     snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
-    gen: typeof Reflect.get(window, '__DSH_GEN__'),
+    generator: typeof Reflect.get(window, '__DSH_PWGEN__'),
     mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
     ancestorScope: typeof Reflect.get(window, '__DSH_ANCESTOR_SCOPE__'),
-    engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
   }));
   const missing = Object.entries(injected).filter(
     ([, value]) => value === 'undefined' || value === undefined,

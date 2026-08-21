@@ -4,7 +4,6 @@ import { oaEntry, seedProfile } from './fixture';
 
 test('T-68 A2/A3: 正式录制链路重跑 no-id 六场景并输出完整 options', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-${browserName}`);
   await seedProfile(profile);

@@ -6,7 +6,6 @@
 import { expect, test } from '@playwright/test';
 
 const PWGEN = 'packages/locator/dist/pw-selector-generator.iife.js';
-const LEGACY = 'packages/locator/dist/selector-generator.iife.js';
 
 declare global {
   interface Window {
@@ -17,7 +16,6 @@ declare global {
       confidence: 'HIGH' | 'LOW';
       source: 'playwright';
     };
-    __DSH_GEN__: (el: Element) => unknown;
   }
 }
 
@@ -43,7 +41,6 @@ async function inject(page: import('@playwright/test').Page, html: string, dynam
   );
   const fs = await import('node:fs');
   await page.addScriptTag({ content: fs.readFileSync(PWGEN, 'utf8') });
-  await page.addScriptTag({ content: fs.readFileSync(LEGACY, 'utf8') });
 }
 
 function pick(page: import('@playwright/test').Page, selector: string) {
@@ -56,9 +53,6 @@ function pick(page: import('@playwright/test').Page, selector: string) {
 test('T-65 · 六场景 no-id 重测', async ({ page }) => {
   test.setTimeout(120_000);
   const report: string[] = [];
-  const legacyOf = (page: import('@playwright/test').Page, selector: string) =>
-    page.evaluate((sel) => window.__DSH_GEN__(document.querySelector(sel)!), selector);
-
   // ---------- A：no-id 原生 button（hash class + data-v，唯一搜索钮） ----------
   await inject(
     page,
@@ -67,8 +61,7 @@ test('T-65 · 六场景 no-id 重测', async ({ page }) => {
      </div>`,
   );
   const a = await pick(page, '#poc-zone button');
-  const aLegacy = await legacyOf(page, '#poc-zone button');
-  report.push(`A  pw=${JSON.stringify(a)}  legacy=${JSON.stringify(aLegacy)}`);
+  report.push(`A  pw=${JSON.stringify(a)}`);
 
   // ---------- B：10 区域同名（无 id） ----------
   const sectionsB = Array.from({ length: 10 }, (_, i) =>
@@ -123,7 +116,7 @@ test('T-65 · 六场景 no-id 重测', async ({ page }) => {
     }
     // rebuild：hash class/data-v 全变 + 插入一层无关 wrapper（DOM 结构变化）
     const survives = await page.evaluate(
-      ({ selector, round }) => {
+      ({ round }) => {
         const btn = document.querySelector('#poc-zone button')!;
         btn.className = `_submitBtn_h${round}f9k2_zZ${round}wQ`;
         btn.removeAttribute('data-v-3a9c1b');
@@ -137,7 +130,7 @@ test('T-65 · 六场景 no-id 重测', async ({ page }) => {
         // 简化验证：重新生成 selector，看它是否还指向同一元素且不依赖旧 hash
         return window.__DSH_PWGEN__(btn);
       },
-      { selector: recordedSelector, round },
+      { round },
     );
     const stale = await page.evaluate((selector) => {
       // 旧 selector 直接查询是否还能命中唯一元素

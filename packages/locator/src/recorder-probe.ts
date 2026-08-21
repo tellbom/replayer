@@ -17,28 +17,20 @@ function emit(action: Record<string, unknown>, clickedElement?: Element): void {
 }
 
 function generator(element: Element): unknown {
-  // 【T-63b/T-67a】feature flag（由 recorder 按 DSH_LOCATOR_ENGINE 注入）：
-  // playwright 引擎产出正式 {strategy:'playwright'} 契约（Node 侧
-  // Playwright Locator API 解析执行）；legacy 保持原 LocatorStrategy。
-  if (Reflect.get(window, '__DSH_LOCATOR_ENGINE__') === 'playwright') {
-    const pwgen = Reflect.get(window, '__DSH_PWGEN__');
-    if (typeof pwgen === 'function') {
-      const generated = pwgen(element) as {
-        selector: string;
-        unique: boolean;
-        matchCount: number;
-        confidence: 'HIGH' | 'LOW';
-      };
-      return {
-        strategy: 'playwright',
-        selector: generated.selector,
-        confidence: generated.confidence,
-        matchCount: generated.matchCount,
-      };
-    }
-  }
-  const generate = Reflect.get(window, '__DSH_GEN__');
-  return typeof generate === 'function' ? generate(element) : undefined;
+  const pwgen = Reflect.get(window, '__DSH_PWGEN__');
+  if (typeof pwgen !== 'function') throw new Error('Playwright locator generator 未注入');
+  const generated = pwgen(element) as {
+    selector: string;
+    unique: boolean;
+    matchCount: number;
+    confidence: 'HIGH' | 'LOW';
+  };
+  return {
+    strategy: 'playwright',
+    selector: generated.selector,
+    confidence: generated.confidence,
+    matchCount: generated.matchCount,
+  };
 }
 
 function targetWithHint(

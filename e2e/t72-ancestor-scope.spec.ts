@@ -7,7 +7,6 @@ import { oaEntry, seedProfile } from './fixture';
 
 test('T-72 同名 section 按钮由规则化祖先提升为 HIGH，且不调用 LLM', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const profileDir = testInfo.outputPath(`profile-${browserName}`);
   await seedProfile(profileDir);
   let stop!: () => void;

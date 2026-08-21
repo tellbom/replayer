@@ -5,7 +5,6 @@ import { oaEntry, seedProfile } from './fixture';
 
 test('T-69 G1-G5: no-id 表单控件走正式录制链路', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-${browserName}`);
   await seedProfile(profile);

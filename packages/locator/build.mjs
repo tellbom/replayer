@@ -1,14 +1,15 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { build } from 'esbuild';
 
 import { assertBrowserBundle } from './dist/_guard.js';
 
 const VENDOR_TSCONFIG = '../../vendor/playwright-injected/1.62.1/tsconfig.json';
 
+await rm('dist/selector-generator.iife.js', { force: true });
+
 const entries = [
   ['el-locator', 'src/el-locator.ts'],
   ['recorder-probe', 'src/recorder-probe.ts'],
-  ['selector-generator', 'src/selector-generator.ts'],
   ['snapshot', 'src/snapshot.ts'],
   ['mutation-tracker', 'src/mutation-tracker.ts'],
   ['ancestor-scope', 'src/ancestor-scope.ts'],

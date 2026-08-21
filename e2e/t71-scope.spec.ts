@@ -8,7 +8,6 @@ import { oaEntry, seedProfile } from './fixture';
 
 test('T-71 录制后处理把动态 dialog、table-row、listbox 转成 scoped HIGH', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const profileDir = testInfo.outputPath(`profile-${browserName}`);
   await seedProfile(profileDir);
   let stop!: () => void;

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import { login } from './helpers';
 
-const generatorScript = await readFile('packages/locator/dist/selector-generator.iife.js', 'utf8');
+const generatorScript = await readFile('packages/locator/dist/pw-selector-generator.iife.js', 'utf8');
 const mutationScript = await readFile('packages/locator/dist/mutation-tracker.iife.js', 'utf8');
 const probeScript = await readFile('packages/locator/dist/recorder-probe.iife.js', 'utf8');
 const visibleHintScript = await readFile('packages/locator/dist/visible-hint.iife.js', 'utf8');

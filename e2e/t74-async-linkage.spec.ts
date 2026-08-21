@@ -12,7 +12,6 @@ const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js',
 
 test('T-74 录制选择联动时推导请求与审批人非空等待', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
-  process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const profileDir = testInfo.outputPath(`profile-${browserName}`);
   await seedPersistentProfile(profileDir);
   let stop!: () => void;

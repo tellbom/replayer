@@ -21,14 +21,10 @@ export interface BrowserLease {
   release(): Promise<void>;
 }
 
-export function resolveLocatorEngine(value = process.env.DSH_LOCATOR_ENGINE): 'legacy' | 'playwright' {
-  return value === 'legacy' ? 'legacy' : 'playwright';
-}
-
 const INIT_SCRIPT_PATHS = [
   '../../locator/dist/el-locator.iife.js',
   '../../locator/dist/snapshot.iife.js',
-  '../../locator/dist/selector-generator.iife.js',
+  '../../locator/dist/pw-selector-generator.iife.js',
   '../../locator/dist/mutation-tracker.iife.js',
   '../../locator/dist/ancestor-scope.iife.js',
   '../../locator/dist/visible-hint.iife.js',
@@ -56,20 +52,14 @@ export async function launchDSHContext(options: BrowserOptions): Promise<Browser
     const path = fileURLToPath(new URL(relativePath, import.meta.url));
     await context.addInitScript({ content: await readFile(path, 'utf8') });
   }
-  await context.addInitScript(
-    (engine) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', engine),
-    resolveLocatorEngine(),
-  );
-
   const auditPage = await context.newPage();
   try {
     const injected = await auditPage.evaluate(() => ({
       locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
       snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
-      gen: typeof Reflect.get(window, '__DSH_GEN__'),
+      generator: typeof Reflect.get(window, '__DSH_PWGEN__'),
       mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
       ancestorScope: typeof Reflect.get(window, '__DSH_ANCESTOR_SCOPE__'),
-      engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
     }));
     const missing = Object.entries(injected).filter(([, value]) =>
       value === 'undefined' || value === undefined,
