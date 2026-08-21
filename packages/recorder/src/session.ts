@@ -1,4 +1,4 @@
-import { acquireDSHContext, ensureEntry, probeSession } from '@dsh/browser';
+import { acquireDSHContext, ensureEntry, probeSession, resolveLocatorEngine } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
 import type { RecordSession, RecordedAction, SessionInterrupt } from '@dsh/core';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -60,7 +60,7 @@ export interface RecordOptions {
 export async function record(opts: RecordOptions): Promise<RecordSession> {
   await mkdir(opts.profileDir, { recursive: true });
   await mkdir(opts.outDir, { recursive: true });
-  const engine = process.env.DSH_LOCATOR_ENGINE === 'playwright' ? 'playwright' : 'legacy';
+  const engine = resolveLocatorEngine();
   const lease = await acquireDSHContext(
     {
       profileDir: opts.profileDir,

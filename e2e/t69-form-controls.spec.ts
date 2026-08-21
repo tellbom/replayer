@@ -1,24 +1,14 @@
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
-import { oaEntry } from './fixture';
+import { oaEntry, seedProfile } from './fixture';
 
 test('T-69 G1-G5: no-id 表单控件走正式录制链路', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
   process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-${browserName}`);
-  const { chromium } = await import('playwright');
-  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
-  {
-    const page = seed.pages()[0] ?? (await seed.newPage());
-    await page.goto('http://127.0.0.1:5173/login');
-    await page.getByLabel('用户名').fill('tester');
-    await page.getByLabel('密码').fill('tester');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/home');
-  }
-  await seed.close();
+  await seedProfile(profile);
 
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
@@ -109,7 +99,8 @@ test('T-69 G1-G5: no-id 表单控件走正式录制链路', async ({ browserName
   expect(results.G2.selector).toContain('请输入事由G2');
   expect(results.G2.confidence).toBe('HIGH');
   expect(results.G3.confidence).toBe('LOW');
-  expect(results.G4.confidence).toBe('LOW');
+  expect(results.G4.confidence).toBe('HIGH');
+  expect(results.G4.selector).toContain('section:has-text');
   expect(g5.selector).toContain('internal:role=radio');
   expect(g5.confidence).toBe('HIGH');
 

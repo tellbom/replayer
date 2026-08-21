@@ -19,6 +19,7 @@ const skill: Skill = {
     version: 1,
   },
   params: [], preflight: [], steps: [], assertions: [],
+  verification: { status: 'draft', requiresFirstRunVerification: false, verifiedAt: null, verifiedRunId: null, verifiedBy: null },
 };
 const entry: Entry = {
   entry: {

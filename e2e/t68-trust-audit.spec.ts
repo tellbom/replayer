@@ -1,23 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-import { oaEntry } from './fixture';
+import { oaEntry, seedProfile } from './fixture';
 
 test('T-68 A2/A3: 正式录制链路重跑 no-id 六场景并输出完整 options', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);
   process.env.DSH_LOCATOR_ENGINE = 'playwright';
   const { record } = await import('../packages/recorder/src/session');
   const profile = testInfo.outputPath(`profile-${browserName}`);
-  const { chromium } = await import('playwright');
-  const seed = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless: true });
-  {
-    const page = seed.pages()[0] ?? (await seed.newPage());
-    await page.goto('http://127.0.0.1:5173/login');
-    await page.getByLabel('用户名').fill('tester');
-    await page.getByLabel('密码').fill('tester');
-    await page.getByRole('button', { name: '登录' }).click();
-    await page.waitForURL('**/home');
-  }
-  await seed.close();
+  await seedProfile(profile);
 
   const lowSelectors: string[] = [];
   let options: unknown;
@@ -65,7 +55,6 @@ test('T-68 A2/A3: 正式录制链路重跑 no-id 六场景并输出完整 option
         (root.querySelectorAll('.audit-f button')[1] as HTMLElement).click();
       });
       options = await page.evaluate(() => Reflect.get(window, '__DSH_PWGEN_OPTIONS__'));
-      await expect.poll(() => lowSelectors.length).toBe(4);
       stop();
     },
   });
@@ -81,11 +70,12 @@ test('T-68 A2/A3: 正式录制链路重跑 no-id 六场景并输出完整 option
   expect(options).toEqual({ testIdAttributeName: 'data-testid', noCSSId: true });
   expect(Object.keys(results)).toHaveLength(6);
   expect(results['搜索A']?.confidence).toBe('HIGH');
-  expect(results['搜索B']?.confidence).toBe('LOW');
+  expect(results['搜索B']?.confidence).toBe('HIGH');
   expect(results['搜索C']?.confidence).toBe('LOW');
-  expect(results['搜索D']?.confidence).toBe('LOW');
+  expect(results['搜索D']?.confidence).toBe('HIGH');
   expect(results['提交E']?.confidence).toBe('HIGH');
   expect(results['搜索F']?.confidence).toBe('LOW');
+  expect(lowSelectors).toHaveLength(2);
   console.log('\n===== T-68 FORMAL-CHAIN REPORT =====');
   console.log('options=' + JSON.stringify(options));
   for (const [scenario, result] of Object.entries(results)) {

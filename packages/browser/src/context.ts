@@ -21,6 +21,10 @@ export interface BrowserLease {
   release(): Promise<void>;
 }
 
+export function resolveLocatorEngine(value = process.env.DSH_LOCATOR_ENGINE): 'legacy' | 'playwright' {
+  return value === 'legacy' ? 'legacy' : 'playwright';
+}
+
 const INIT_SCRIPT_PATHS = [
   '../../locator/dist/el-locator.iife.js',
   '../../locator/dist/snapshot.iife.js',
@@ -54,7 +58,7 @@ export async function launchDSHContext(options: BrowserOptions): Promise<Browser
   }
   await context.addInitScript(
     (engine) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', engine),
-    process.env.DSH_LOCATOR_ENGINE === 'playwright' ? 'playwright' : 'legacy',
+    resolveLocatorEngine(),
   );
 
   const auditPage = await context.newPage();

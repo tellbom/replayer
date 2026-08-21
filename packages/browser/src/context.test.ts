@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { launchDSHContext } from './context.js';
+import { launchDSHContext, resolveLocatorEngine } from './context.js';
 
 const profiles: string[] = [];
 
@@ -33,10 +33,16 @@ describe('T-17 Playwright 持久化上下文', () => {
         generator: 'function',
         mutation: 'object',
         ancestorScope: 'function',
-        engine: 'legacy',
+        engine: 'playwright',
       });
     } finally {
       await context.close();
     }
   }, 15_000);
+
+  it('默认使用 playwright，显式 legacy 仍可回滚', () => {
+    expect(resolveLocatorEngine(undefined)).toBe('playwright');
+    expect(resolveLocatorEngine('playwright')).toBe('playwright');
+    expect(resolveLocatorEngine('legacy')).toBe('legacy');
+  });
 });

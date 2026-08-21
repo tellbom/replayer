@@ -104,6 +104,7 @@ test('T-73 H6-H10: 动态行、懒折叠、向导、抽屉与虚拟列表', asyn
 
 test('T-73 I1-I5: 菜单、SPA 双条件、tabs、面包屑与新标签页', async ({ page, context }) => {
   await page.goto('/');
+  await page.waitForURL('**/portal');
   await page.setContent(`
     <button id="menu">考勤管理</button><div id="menu_root"></div>
     <button id="route">加班申请</button><div id="route_root"></div>
