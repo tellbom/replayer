@@ -1,12 +1,19 @@
 import { parseEntry, parseSkill } from '@dsh/core';
 import type { Entry, Step } from '@dsh/core';
 import { replay } from '@dsh/replayer';
+import type { RunResult } from '@dsh/core';
 import type { Command } from 'commander';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 import { resolveSessionEndpoint } from './session.js';
+import {
+  finishVerification,
+  prepareVerification,
+  terminalVerificationPrompter,
+} from './verification.js';
+import type { VerificationPrompter } from './verification.js';
 
 interface ReplayCliOptions {
   params: string;
@@ -17,6 +24,12 @@ interface ReplayCliOptions {
   entries: string;
   stateDir: string;
   yes?: boolean;
+}
+
+interface ReplayDependencies {
+  replayImpl?: typeof replay;
+  sessionEndpoint?: typeof resolveSessionEndpoint;
+  verificationPrompter?: VerificationPrompter;
 }
 
 export function configureReplayCommand(program: Command): void {
@@ -34,7 +47,11 @@ export function configureReplayCommand(program: Command): void {
     .action(runReplay);
 }
 
-export async function runReplay(skillPath: string, options: ReplayCliOptions): Promise<void> {
+export async function runReplay(
+  skillPath: string,
+  options: ReplayCliOptions,
+  dependencies: ReplayDependencies = {},
+): Promise<void> {
   if (options.channel !== undefined && options.channel !== 'ui' && options.channel !== 'network') {
     throw new Error(`无效通道: ${options.channel}`);
   }
@@ -52,21 +69,30 @@ export async function runReplay(skillPath: string, options: ReplayCliOptions): P
   );
   entryCache.set(entryId, entry);
   const skill = parseSkill(skillText, loadEntrySync);
+  const prompter = dependencies.verificationPrompter ?? terminalVerificationPrompter;
+  const verification = await prepareVerification(skill, skillPath, prompter, options.dryRun);
+  if (!verification.proceed) return;
   const params = await parseReplayParams(options.params);
   const cdpEndpoint = options.dryRun
     ? undefined
-    : await resolveSessionEndpoint(entry, options.stateDir);
+    : await (dependencies.sessionEndpoint ?? resolveSessionEndpoint)(entry, options.stateDir);
   const confirm = options.yes ? async () => true : confirmRisk;
-  const result = await replay(skill, {
-    params,
-    profileDir: options.profile,
-    entry,
-    cdpEndpoint,
-    dryRun: options.dryRun,
-    forceChannel: options.channel,
-    noLLM: !options.llm,
-    onConfirm: confirm,
-  });
+  let result: RunResult | undefined;
+  try {
+    result = await (dependencies.replayImpl ?? replay)(skill, {
+      params,
+      profileDir: options.profile,
+      entry,
+      cdpEndpoint,
+      dryRun: options.dryRun,
+      forceChannel: options.channel,
+      noLLM: !options.llm,
+      supervisedVerification: verification.supervised,
+      onConfirm: confirm,
+    });
+  } finally {
+    await finishVerification(skill, skillPath, verification, result, prompter);
+  }
   if (!options.dryRun) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (!result.ok) process.exitCode = 1;
 }

@@ -2,6 +2,7 @@ import { acquireDSHContext, ensureEntry } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
 import {
   ForbiddenError,
+  FirstRunVerificationRequiredError,
   LocatorNotFoundError,
   OutcomeUnknownError,
   StepExecutionError,
@@ -37,6 +38,8 @@ export interface ReplayOptions {
   dryRun?: boolean;
   forceChannel?: 'ui' | 'network';
   noLLM?: boolean;
+  /** Explicit proof that this run is being watched for first-run LOW verification. */
+  supervisedVerification?: boolean;
   cdpEndpoint?: string;
   onConfirm?: (step: Step, context: ExecContext) => Promise<boolean>;
   onLocatorFailure?: (input: {
@@ -59,6 +62,19 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
   if (opts.dryRun) {
     process.stdout.write(renderExecutionPlan(skill, opts));
     return { ok: true, skillId: skill.skill.id, steps: [], extracted: {}, reentryCount: 0 };
+  }
+  if (
+    skill.verification.status === 'draft'
+    && skill.verification.requiresFirstRunVerification
+    && skill.steps.some((step) => {
+      const target = step.ui?.target;
+      return target && 'confidence' in target && target.confidence === 'LOW';
+    })
+    && !opts.supervisedVerification
+  ) {
+    throw new FirstRunVerificationRequiredError(
+      `Skill ${skill.skill.id} contains unverified LOW-confidence locators; supervised verification is required`,
+    );
   }
 
   const lease = await acquireDSHContext({ profileDir: opts.profileDir }, opts.cdpEndpoint);

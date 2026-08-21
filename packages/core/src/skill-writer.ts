@@ -40,3 +40,14 @@ export async function commitHeal(
   await writeFile(skillPath, yaml, 'utf8');
   return updated;
 }
+
+/** Persist the user-supervised verification state while retaining YAML comments. */
+export async function writeSkillVerification(
+  skillPath: string,
+  verification: Skill['verification'],
+): Promise<void> {
+  const source = await readFile(skillPath, 'utf8');
+  const document = parseDocument(source);
+  document.set('verification', verification);
+  await writeFile(skillPath, document.toString({ lineWidth: 0 }), 'utf8');
+}

@@ -1,4 +1,4 @@
-import { parseSkill } from '@dsh/core';
+import { FirstRunVerificationRequiredError, parseSkill } from '@dsh/core';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -61,5 +61,26 @@ postcondition:
     expect(plan).toContain('断言:');
     expect(plan).toContain('postcondition: /api/overtime/history?limit=5');
     expect(existsSync(profileDir)).toBe(false);
+  });
+});
+
+describe('T-81 verification enforcement', () => {
+  it('refuses an unverified LOW skill before acquiring a browser', async () => {
+    const skill = parseSkill(`
+skill: { id: low, name: low, system: test, baseUrl: http://test, entry: oa }
+params: []
+steps:
+  - id: s1
+    desc: click
+    channel: ui
+    ui:
+      action: click
+      target: { strategy: playwright, selector: button, confidence: LOW }
+verification: { status: draft, requiresFirstRunVerification: true }
+`, () => testEntry());
+
+    await expect(replay(skill, {
+      params: {}, profileDir: 'tmp/t81-browser-must-not-start', entry: testEntry(),
+    })).rejects.toBeInstanceOf(FirstRunVerificationRequiredError);
   });
 });

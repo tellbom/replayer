@@ -30,6 +30,10 @@ export class SkillNeedsRerecordError extends DSHError {
   readonly code = 'SKILL_NEEDS_RERECORD';
 }
 
+export class FirstRunVerificationRequiredError extends DSHError {
+  readonly code = 'FIRST_RUN_VERIFICATION_REQUIRED';
+}
+
 export class ScopeNotReadyError extends DSHError {
   readonly code = 'SCOPE_NOT_READY';
 }

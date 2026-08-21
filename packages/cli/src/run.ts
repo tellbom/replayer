@@ -5,7 +5,7 @@ import {
   parseSkill,
 } from '@dsh/core';
 import type { Entry } from '@dsh/core';
-import type { ILLMProvider, Skill, Step, StepResult } from '@dsh/core';
+import type { ILLMProvider, RunResult, Skill, Step, StepResult } from '@dsh/core';
 import { DeepSeekProvider, executeHeal, proposeHeal, route } from '@dsh/llm';
 import { replay } from '@dsh/replayer';
 import type { ReplayOptions } from '@dsh/replayer';
@@ -13,6 +13,13 @@ import type { Command } from 'commander';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+
+import {
+  finishVerification,
+  prepareVerification,
+  terminalVerificationPrompter,
+} from './verification.js';
+import type { VerificationPrompter } from './verification.js';
 
 interface RunCliOptions {
   skills: string;
@@ -35,6 +42,7 @@ interface LoadedSkill {
 interface RunDependencies {
   provider?: ILLMProvider;
   replayImpl?: typeof replay;
+  verificationPrompter?: VerificationPrompter;
 }
 
 export function configureRunCommand(program: Command): void {
@@ -61,6 +69,7 @@ export async function runNaturalLanguage(
   const loaded = await loadSkills(options.skills, entryIndex);
   const confirm = options.yes ? async () => true : confirmRisk;
   const replayImpl = dependencies.replayImpl ?? replay;
+  const prompter = dependencies.verificationPrompter ?? terminalVerificationPrompter;
 
   if (!options.llm) {
     const selected = options.skill
@@ -68,9 +77,23 @@ export async function runNaturalLanguage(
       : loaded.find((item) => item.skill.skill.id === instruction || item.skill.skill.name === instruction);
     if (!selected) throw noMatchingSkill();
     const params = JSON.parse(options.params ?? '{}') as Record<string, unknown>;
-    await outputReplay(
-      await replayImpl(selected.skill, replayOptions(options, params, confirm, selected.entry)),
+    const verification = await prepareVerification(
+      selected.skill,
+      selected.path,
+      prompter,
+      options.dryRun,
     );
+    if (!verification.proceed) return;
+    let result: RunResult | undefined;
+    try {
+      result = await replayImpl(selected.skill, {
+        ...replayOptions(options, params, confirm, selected.entry),
+        supervisedVerification: verification.supervised,
+      });
+      await outputReplay(result);
+    } finally {
+      await finishVerification(selected.skill, selected.path, verification, result, prompter);
+    }
     return;
   }
 
@@ -82,7 +105,15 @@ export async function runNaturalLanguage(
   }
   const selected = loaded.find((item) => item.skill.skill.id === routed.skillId);
   if (!selected) throw noMatchingSkill();
+  const verification = await prepareVerification(
+    selected.skill,
+    selected.path,
+    prompter,
+    options.dryRun,
+  );
+  if (!verification.proceed) return;
   const optionsForReplay = replayOptions(options, routed.params, confirm, selected.entry);
+  optionsForReplay.supervisedVerification = verification.supervised;
   optionsForReplay.onLocatorFailure = async (failure: NonNullable<ReplayOptions['onLocatorFailure']> extends (input: infer I) => Promise<StepResult | null> ? I : never) => {
     const { page, skill, step, error, context } = failure;
     const snapshot = await page.evaluate(() => window.__DSH_SNAPSHOT__());
@@ -106,7 +137,13 @@ export async function runNaturalLanguage(
       healed: true,
     } : null;
   };
-  await outputReplay(await replayImpl(selected.skill, optionsForReplay));
+  let result: RunResult | undefined;
+  try {
+    result = await replayImpl(selected.skill, optionsForReplay);
+    await outputReplay(result);
+  } finally {
+    await finishVerification(selected.skill, selected.path, verification, result, prompter);
+  }
 }
 
 /** 【v2.0】加载 entries/ 目录为 id → Entry 索引。 */
