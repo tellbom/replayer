@@ -237,6 +237,7 @@ async function installRecorderProbe(
     locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
     snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
     gen: typeof Reflect.get(window, '__DSH_GEN__'),
+    mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
     engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
   }));
   const missing = Object.entries(injected).filter(([, value]) =>

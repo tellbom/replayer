@@ -23,6 +23,14 @@ export type ControlKind =
   | 'button'
   | 'text';
 
+export interface AppearedRoot {
+  node: Element;
+  descriptor: LocatorStrategy;
+  appearedAfterMs: number;
+  kind: 'dialog' | 'drawer' | 'listbox' | 'menu' | 'datepicker' | 'table-row' | 'panel' | 'unknown';
+  portaled: boolean;
+}
+
 export interface RecordSession {
   meta: {
     startedAt: string;
@@ -161,5 +169,9 @@ declare global {
     __DSH_RECORDING__?: boolean;
     __DSH_LOCATOR_ENGINE__?: 'legacy' | 'playwright';
     __dsh_clicked__?: Record<number, Element>;
+    __DSH_MUTATION__: {
+      begin(actionIdx: number): void;
+      end(actionIdx: number, settleMs?: number): Promise<AppearedRoot[]>;
+    };
   }
 }

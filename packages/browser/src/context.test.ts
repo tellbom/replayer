@@ -23,12 +23,14 @@ describe('T-17 Playwright 持久化上下文', () => {
         locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
         snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
         generator: typeof Reflect.get(window, '__DSH_GEN__'),
+        mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
         engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
       }));
       expect(globals).toEqual({
         locator: 'object',
         snapshot: 'function',
         generator: 'function',
+        mutation: 'object',
         engine: 'legacy',
       });
     } finally {
