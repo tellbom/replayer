@@ -337,6 +337,7 @@ export const ParamSchema = z.object({
   name: z.string(),
   type: z.enum(['string', 'number', 'date', 'datetime', 'enum', 'boolean']),
   values: z.array(EnumValueSchema).optional(),
+  enumMap: z.record(z.string()).optional(),
   required: z.boolean().default(true),
   format: z.string().optional(),
   prompt: z.string().optional(),
@@ -402,6 +403,11 @@ export function stepIsIdempotent(step: Step): boolean {
 
 export function parseSkill(yamlText: string, entryResolver: (id: string) => Entry): Skill {
   const skill = SkillSchema.parse(parse(yamlText));
+  if (containsUnresolvedValue(skill)) {
+    throw new SchemaViolationError(
+      'Skill 含 TODO_UNRESOLVED，必须人工确认参数来源后才能加载。',
+    );
+  }
   const entry = entryResolver(skill.skill.entry);
 
   // 【C17】明文凭证拒绝
@@ -436,6 +442,13 @@ export function parseSkill(yamlText: string, entryResolver: (id: string) => Entr
     }
   }
   return skill;
+}
+
+function containsUnresolvedValue(value: unknown): boolean {
+  if (typeof value === 'string') return value.includes('TODO_UNRESOLVED');
+  if (Array.isArray(value)) return value.some(containsUnresolvedValue);
+  if (typeof value !== 'object' || value === null) return false;
+  return Object.values(value).some(containsUnresolvedValue);
 }
 
 export function parseEntry(yamlText: string): Entry {

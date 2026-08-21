@@ -1,4 +1,4 @@
-import { SkillSchema } from '@dsh/core';
+import { SkillSchema, UnusedParameterError } from '@dsh/core';
 import type { RecordedAction, RecordedRequest, RecordSession, Skill } from '@dsh/core';
 import { Document, isNode, isSeq } from 'yaml';
 
@@ -26,13 +26,30 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   const params = detectParams(session, secondSession).map((candidate) => candidate.definition);
   const items: DraftItem[] = [];
   const interruptionIndexes = new Set(session.interruptions?.map((item) => item.atActionIdx) ?? []);
+  const networkOwnedScopes = new Set(
+    correlated.flatMap((producer, producerIndex) => {
+      const scopeId = producer.action?.produces?.scopeId;
+      if (!scopeId || producer.requests.length > 0) return [];
+      const consumer = correlated
+        .slice(producerIndex + 1)
+        .find((candidate) => candidate.action?.scope === scopeId);
+      return consumer?.requests.some((request) => request.mutating) ? [scopeId] : [];
+    }),
+  );
   for (const step of correlated) {
-    const actionIndex = step.action ? session.actions.indexOf(step.action) : -1;
+    const recordedAction = step.action;
+    const actionIndex = recordedAction ? session.actions.indexOf(recordedAction) : -1;
+    if (recordedAction?.produces && networkOwnedScopes.has(recordedAction.produces.scopeId)) {
+      continue;
+    }
+    const action = recordedAction?.scope && networkOwnedScopes.has(recordedAction.scope)
+      ? { ...recordedAction, scope: undefined }
+      : recordedAction;
     const afterSessionInterrupt = interruptionIndexes.has(actionIndex);
-    if (step.requests.length === 0 && step.action) {
+    if (step.requests.length === 0 && action) {
       items.push({
         id: '',
-        action: step.action,
+        action,
         request: null,
         hasSideEffect: false,
         afterSessionInterrupt,
@@ -43,7 +60,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     step.requests.forEach((request, index) => {
       items.push({
         id: '',
-        action: index === 0 ? step.action : null,
+        action: index === 0 ? action : null,
         request,
         hasSideEffect: request.mutating,
         afterSessionInterrupt: index === 0 && afterSessionInterrupt,
@@ -106,7 +123,51 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     ],
   };
   const skill = SkillSchema.parse(raw);
+  assertParametersUsed(skill);
+  assertNoIndexedResponseTemplates(skill);
   return { skill, yaml: renderDraftYaml(skill, Boolean(postcondition)) };
+}
+
+export function assertParametersUsed(skill: Skill): void {
+  for (const param of skill.params) {
+    const used = skill.steps.some((step) => {
+      const targets = [step.network?.url, step.network?.headers, step.network?.body, step.ui?.value];
+      return targets.some((target) => containsParameterTemplate(target, param.name));
+    });
+    if (used) continue;
+    const candidates = skill.steps
+      .filter((step) => step.ui?.label === param.prompt || bodyContainsKey(step.network?.body, param.name))
+      .map((step) => step.id);
+    throw new UnusedParameterError(
+      `参数 '${param.name}' 已声明但未被任何步骤引用。` +
+        '这通常意味着参数化失败——该值可能被硬编码或从响应中取值。' +
+        `请检查步骤 ${candidates.length > 0 ? candidates.join('、') : '中与该参数对应的 body/ui.value'}。`,
+    );
+  }
+}
+
+function containsParameterTemplate(value: unknown, name: string): boolean {
+  if (typeof value === 'string') {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\{\\{\\s*${escaped}(?:\\s*\\||\\s*\\}|[.[])`).test(value);
+  }
+  if (Array.isArray(value)) return value.some((item) => containsParameterTemplate(item, name));
+  if (typeof value !== 'object' || value === null) return false;
+  return Object.values(value).some((item) => containsParameterTemplate(item, name));
+}
+
+function bodyContainsKey(value: unknown, key: string): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return Object.entries(value).some(
+    ([name, child]) => name === key || bodyContainsKey(child, key),
+  );
+}
+
+function assertNoIndexedResponseTemplates(skill: Skill): void {
+  const serialized = JSON.stringify(skill.steps);
+  if (/\{\{\s*s\d+[^{}]*\[\d+\]/.test(serialized)) {
+    throw new Error('禁止生成包含固定数组下标的响应模板');
+  }
 }
 
 /** 【C22】reentry 草稿：anchor 取第一个非幂等步骤之前的那一步。 */
@@ -146,7 +207,9 @@ function draftStep(
     id: item.id,
     desc: stepDescription(item),
     channel:
-      request?.mutating || item.action?.type === 'navigate' || (request && !ui)
+      item.action?.type === 'navigate'
+        ? 'ui'
+        : request?.mutating || (request && !ui)
         ? 'network'
         : item.action?.type === 'fill' || item.action?.type === 'datetime'
           ? 'merged'
@@ -189,6 +252,12 @@ function networkAction(
   const body = requestBody(request, contentType);
   parameterizeBody(body, params);
   for (const dependency of request.dependsOn) {
+    const targetParam = params.find((param) => dependency.to.split('.').at(-1) === param.name);
+    if (targetParam) continue;
+    if (/\[\d+\]/.test(dependency.path)) {
+      setBodyPath(body, dependency.to, 'TODO_UNRESOLVED');
+      continue;
+    }
     const sourceStep = stepByRequest.get(dependency.from);
     if (!sourceStep) throw new Error(`依赖源请求未生成步骤: ${dependency.from}`);
     setBodyPath(body, dependency.to, `{{${sourceStep}${dependency.path.slice(1)}}}`);
@@ -224,6 +293,7 @@ function dependencyExtracts(items: DraftItem[]): Map<string, Record<string, stri
   const extracts = new Map<string, Record<string, string>>();
   for (const item of items) {
     for (const dependency of item.request?.dependsOn ?? []) {
+      if (/\[\d+\]/.test(dependency.path)) continue;
       const name = dependency.path.split('.').at(-1);
       if (!name) continue;
       const current = extracts.get(dependency.from) ?? {};

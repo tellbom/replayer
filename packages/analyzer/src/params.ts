@@ -35,6 +35,7 @@ export function detectParams(
       if (changed) existing.confidence = 1;
       if (values && existing.definition.values) {
         existing.definition.values = mergeEnumValues(existing.definition.values, values);
+        existing.definition.enumMap = enumMap(existing.definition.values);
       }
       return;
     }
@@ -43,6 +44,7 @@ export function detectParams(
         name,
         type: paramType(action),
         values,
+        ...(values ? { enumMap: enumMap(values) } : {}),
         required: true,
         prompt: action.label,
       },
@@ -73,18 +75,50 @@ function enumValues(
 ): Array<{ label: string; value: string }> {
   const values: Array<{ label: string; value: string }> = [];
   if (action.value !== undefined) {
-    values.push({
-      label: action.value,
-      value: networkFieldForAction(session, actionIndex, name) ?? action.value,
-    });
+    const responseOptions = enumOptionsFromResponses(session, action.value);
+    values.push(...(responseOptions.length > 0
+      ? responseOptions
+      : [{
+          label: action.value,
+          value: networkFieldForAction(session, actionIndex, name) ?? action.value,
+        }]));
   }
   if (secondAction?.type === 'select' && secondAction.value !== undefined && secondSession) {
-    values.push({
-      label: secondAction.value,
-      value: networkFieldForAction(secondSession, actionIndex, name) ?? secondAction.value,
-    });
+    const responseOptions = enumOptionsFromResponses(secondSession, secondAction.value);
+    values.push(...(responseOptions.length > 0
+      ? responseOptions
+      : [{
+          label: secondAction.value,
+          value: networkFieldForAction(secondSession, actionIndex, name) ?? secondAction.value,
+        }]));
   }
   return mergeEnumValues([], values);
+}
+
+function enumOptionsFromResponses(
+  session: RecordSession,
+  selectedLabel: string,
+): Array<{ label: string; value: string }> {
+  for (const request of session.network) {
+    if (!request.responseBody) continue;
+    try {
+      const body: unknown = JSON.parse(request.responseBody);
+      if (!Array.isArray(body)) continue;
+      const options = body.flatMap((item) => {
+        if (typeof item !== 'object' || item === null) return [];
+        const { label, value } = item as { label?: unknown; value?: unknown };
+        return typeof label === 'string' && typeof value === 'string' ? [{ label, value }] : [];
+      });
+      if (options.some((item) => item.label === selectedLabel)) return options;
+    } catch {
+      continue;
+    }
+  }
+  return [];
+}
+
+function enumMap(values: Array<{ label: string; value: string }>): Record<string, string> {
+  return Object.fromEntries(values.map((item) => [item.label, item.value]));
 }
 
 function mergeEnumValues(

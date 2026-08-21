@@ -70,6 +70,10 @@ export class TokenBudgetExceededError extends DSHError {
   readonly code = 'TOKEN_BUDGET_EXCEEDED';
 }
 
+export class UnusedParameterError extends DSHError {
+  readonly code = 'UNUSED_PARAMETER';
+}
+
 /** 【v2.0 C21】认证恢复后身份不一致 */
 export class IdentityChangedError extends DSHError {
   readonly code = 'IDENTITY_CHANGED';

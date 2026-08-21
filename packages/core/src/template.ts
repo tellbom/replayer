@@ -114,10 +114,12 @@ function resolveEnumValue(
 ): string {
   const paramName = parsePath(path)[0];
   const definition = paramDefinitions.find((param) => param.name === paramName);
-  if (!definition || definition.type !== 'enum' || !definition.values) {
+  if (!definition || definition.type !== 'enum') {
     throw new Error(`枚举参数缺少 label/value 映射: ${paramName ?? path}`);
   }
-  const mapping = definition.values.find((item) => item.label === String(currentValue));
+  const mapped = definition.enumMap?.[String(currentValue)];
+  if (mapped !== undefined) return mapped;
+  const mapping = definition.values?.find((item) => item.label === String(currentValue));
   if (!mapping) throw new Error(`枚举参数不存在 label: ${String(currentValue)}`);
   return mapping.value;
 }

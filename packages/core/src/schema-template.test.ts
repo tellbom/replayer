@@ -82,6 +82,16 @@ describe('模板引擎', () => {
     expect(resolveTemplate('{{type|enumValue}}', context, paramDefinitions)).toBe('workday');
   });
 
+  it('优先使用 enumMap 解析 enumValue', () => {
+    const definitions = [{
+      name: 'type', type: 'enum' as const, required: true,
+      values: [{ label: '周末加班', value: 'wrong' }],
+      enumMap: { 周末加班: 'weekend' },
+    }];
+    const weekend = { ...context, params: { ...context.params, type: '周末加班' } };
+    expect(resolveTemplate('{{type|enumValue}}', weekend, definitions)).toBe('weekend');
+  });
+
   it('格式化日期', () => {
     expect(resolveTemplate('{{startTime|date:YYYY-MM-DD}}', context)).toBe('2026-08-18');
   });
@@ -115,6 +125,18 @@ describe('模板引擎', () => {
 });
 
 describe('Skill Schema', () => {
+  it('拒绝加载仍含 TODO_UNRESOLVED 的草稿', () => {
+    expect(() => parseSkill(`
+skill: { id: unresolved, name: unresolved, system: mock, baseUrl: http://localhost, entry: oa }
+params: []
+steps:
+  - id: s1
+    desc: unresolved
+    channel: network
+    network: { method: POST, url: /api/submit, body: { type: TODO_UNRESOLVED } }
+`, entryResolver(testEntry()))).toThrow(/TODO_UNRESOLVED/);
+  });
+
   it('解析包含 step/skill postcondition 的 YAML 并应用默认值', () => {
     const skill = parseSkill(`
 skill:

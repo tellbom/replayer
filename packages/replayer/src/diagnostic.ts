@@ -67,18 +67,18 @@ export function startDiagnosticSession(page: Page): DiagnosticSession {
     };
     entries.push(entry);
     byRequest.set(request, entry);
-    track(
-      request.allHeaders().then((allHeaders) => {
-        entry.request.headers = sanitizer.sanitizeHeaders(allHeaders);
-      }),
-    );
   };
   const onResponse = (response: Response): void => {
     const entry = byRequest.get(response.request());
     if (!entry) return;
     track(
-      Promise.all([response.allHeaders(), response.text().catch(() => null)]).then(
-        ([headers, body]) => {
+      Promise.all([
+        response.request().allHeaders(),
+        response.allHeaders(),
+        response.text().catch(() => null),
+      ]).then(
+        ([requestHeaders, headers, body]) => {
+          entry.request.headers = sanitizer.sanitizeHeaders(requestHeaders);
           entry.response.status = response.status();
           entry.response.headers = sanitizer.sanitizeHeaders(headers);
           entry.response.content =

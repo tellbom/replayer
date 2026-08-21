@@ -18,6 +18,7 @@ describe('detectParams', () => {
       expect.objectContaining({
         type: 'enum',
         values: [{ label: '工作日加班', value: 'workday' }],
+        enumMap: { 工作日加班: 'workday' },
       }),
     );
     expect(candidates.find((item) => item.definition.name === 'startTime')?.definition.type).toBe(
@@ -37,6 +38,26 @@ describe('detectParams', () => {
       { label: '工作日加班', value: 'workday' },
       { label: '周末加班', value: 'weekend' },
     ]);
+  });
+
+  it('collects the complete enum map from a recorded options response', () => {
+    const session = recording('工作日加班', '版本上线');
+    session.network.unshift({
+      requestId: 'types', requestTs: 0.5, responseTs: 0.8, method: 'GET',
+      url: 'http://oa/api/overtime/types', resourceType: 'fetch', headers: {}, postData: null,
+      status: 200,
+      responseBody: JSON.stringify([
+        { label: '工作日加班', value: 'workday' },
+        { label: '周末加班', value: 'weekend' },
+        { label: '节假日加班', value: 'holiday' },
+      ]),
+      mutating: false, sanitizeMode: 'structured',
+    });
+
+    const type = detectParams(session).find((item) => item.definition.name === 'type')?.definition;
+    expect(type?.enumMap).toEqual({
+      工作日加班: 'workday', 周末加班: 'weekend', 节假日加班: 'holiday',
+    });
   });
 });
 

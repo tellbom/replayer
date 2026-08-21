@@ -25,7 +25,7 @@ const testEntry: Entry = {
 const resolver = (): ((id: string) => Entry) => () => testEntry;
 import { describe, expect, it } from 'vitest';
 
-import { generateDraft } from './draft.js';
+import { assertParametersUsed, generateDraft } from './draft.js';
 
 describe('generateDraft', () => {
   it('creates a schema-valid YAML draft with dependency templates and TODO comments', () => {
@@ -161,6 +161,53 @@ describe('generateDraft', () => {
     const result = generateDraft(session);
     expect(result.skill.verification.requiresFirstRunVerification).toBe(true);
     expect(result.skill.steps[1]?.ui?.recordedHint?.visibleText).toBe('开始时间');
+  });
+
+  it('binds enum request fields to the caller parameter and rejects indexed response templates', () => {
+    const session = recording(false);
+    session.network.unshift({
+      requestId: 'types', requestTs: 900, responseTs: 950, method: 'GET',
+      url: 'http://oa/api/overtime/types', resourceType: 'fetch', headers: {}, postData: null,
+      status: 200,
+      responseBody: JSON.stringify([
+        { label: '工作日加班', value: 'workday' },
+        { label: '周末加班', value: 'weekend' },
+        { label: '节假日加班', value: 'holiday' },
+      ]),
+      mutating: false, sanitizeMode: 'structured',
+    });
+
+    const result = generateDraft(session);
+    const type = result.skill.params.find((param) => param.name === 'type');
+    const bodies = result.skill.steps
+      .filter((step) => step.network?.url.includes('/approver') || step.network?.url.includes('/submit'))
+      .map((step) => step.network?.body?.type);
+
+    expect(type?.enumMap).toEqual({
+      工作日加班: 'workday', 周末加班: 'weekend', 节假日加班: 'holiday',
+    });
+    expect(bodies).toEqual(['{{type|enumValue}}', '{{type|enumValue}}']);
+    expect(result.yaml).not.toMatch(/\{\{s\d+[^}]*\[\d+\]/);
+    expect(result.skill.steps.find((step) => step.network?.url.includes('/submit'))?.network?.body)
+      .toEqual(expect.objectContaining({
+        approverId: expect.stringMatching(/^\{\{s\d+\.approverId\}\}$/),
+        approvalToken: expect.stringMatching(/^\{\{s\d+\.approvalToken\}\}$/),
+      }));
+  });
+
+  it('throws when a declared parameter is not referenced by any executable field', () => {
+    const skill = generateDraft(recording(false)).skill;
+    const reason = skill.params.find((param) => param.name === 'reason')!;
+    const invalid = {
+      ...skill,
+      params: [reason],
+      steps: skill.steps.map((step) => ({
+        ...step,
+        network: step.network ? { ...step.network, body: {} } : undefined,
+        ui: step.ui ? { ...step.ui, value: '硬编码事由' } : undefined,
+      })),
+    };
+    expect(() => assertParametersUsed(invalid)).toThrow(/参数 'reason' 已声明但未被任何步骤引用/);
   });
 });
 
