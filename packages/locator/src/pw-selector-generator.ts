@@ -1,17 +1,23 @@
 // 【T-63b】DSH Adapter：Playwright selectorGenerator（vendor 1.62.1）的浏览器侧入口。
 // Playwright 原算法零修改（vendor/ 目录）；本文件只做接口适配：
-//   InjectedScript 桩 = SelectorEvaluatorImpl（vendor）+ 四个生成器实际用到的引擎
-//   （css / text / role / nth）——引擎分派循上游 injectedScript.querySelectorAll 主循环
+//   InjectedScript 桩 = SelectorEvaluatorImpl（vendor）+ 生成器实际用到的引擎
+//   （css / text / role / attr / label / nth）——引擎分派循上游 injectedScript.querySelectorAll 主循环
 //   的同一结构（roots Set → 逐 part 过滤），css AST 执行走 evaluator.query 原实现。
 import { SelectorEvaluatorImpl } from '../../../vendor/playwright-injected/1.62.1/selectorEvaluator';
 import { generateSelector } from '../../../vendor/playwright-injected/1.62.1/selectorGenerator';
-import { parseSelector } from '../../../vendor/playwright-injected/1.62.1/selectorParser';
+import { parseAttributeSelector, parseSelector } from '../../../vendor/playwright-injected/1.62.1/selectorParser';
 import type { ParsedSelector } from '../../../vendor/playwright-injected/1.62.1/selectorParser';
 import { parseCSS } from '../../../vendor/playwright-injected/1.62.1/cssParser';
 import { customCSSNames } from '../../../vendor/playwright-injected/1.62.1/selectorParser';
 import { beginAriaCaches, endAriaCaches } from '../../../vendor/playwright-injected/1.62.1/roleUtils';
-import { elementMatchesText, elementText } from '../../../vendor/playwright-injected/1.62.1/selectorUtils';
+import {
+  elementMatchesText,
+  getElementLabels,
+  matchesAttributePart,
+} from '../../../vendor/playwright-injected/1.62.1/selectorUtils';
+import type { ElementText } from '../../../vendor/playwright-injected/1.62.1/selectorUtils';
 import { createRoleEngine } from '../../../vendor/playwright-injected/1.62.1/roleSelectorEngine';
+import { normalizeWhiteSpace } from '../../../vendor/playwright-injected/1.62.1/stringUtils';
 
 type Part = { name: string; body: unknown; source: string };
 
@@ -84,12 +90,71 @@ function queryAllParts(
       } finally {
         endAriaCaches();
       }
+    } else if (part.name === 'internal:attr') {
+      const parsed = parseAttributeSelector(String(part.body), true);
+      if (parsed.name || parsed.attributes.length !== 1) throw new Error('Malformed internal:attr selector');
+      const attribute = parsed.attributes[0]!;
+      const next = new Set<Element>();
+      for (const scope of roots) {
+        for (const el of allElements(evaluator, scope)) {
+          if (el.hasAttribute(attribute.name) && matchesAttributePart(el.getAttribute(attribute.name), attribute)) {
+            next.add(el);
+          }
+        }
+      }
+      roots = next;
+    } else if (part.name === 'internal:label') {
+      const matcher = createInternalTextMatcher(String(part.body));
+      const next = new Set<Element>();
+      for (const scope of roots) {
+        for (const el of allElements(evaluator, scope)) {
+          if (getElementLabels(evaluator._cacheText, el).some(matcher)) next.add(el);
+        }
+      }
+      roots = next;
     } else {
-      // 其余 internal:attr/label 等——POC 场景尚未接；视为空使该候选被否决
+      // 尚未接入的内部引擎不参与候选验证。
       return [];
     }
   }
   return [...roots];
+}
+
+function createInternalTextMatcher(selector: string): (text: ElementText) => boolean {
+  if (selector[0] === '/' && selector.lastIndexOf('/') > 0) {
+    const lastSlash = selector.lastIndexOf('/');
+    const expression = new RegExp(
+      selector.substring(1, lastSlash),
+      selector.substring(lastSlash + 1),
+    );
+    return (text) => expression.test(text.full);
+  }
+
+  let strict = false;
+  if (
+    selector.length > 1 &&
+    selector[0] === '"' &&
+    selector[selector.length - 2] === '"' &&
+    selector[selector.length - 1] === 's'
+  ) {
+    selector = JSON.parse(selector.substring(0, selector.length - 1)) as string;
+    strict = true;
+  } else if (
+    selector.length > 1 &&
+    selector[0] === '"' &&
+    selector[selector.length - 2] === '"' &&
+    selector[selector.length - 1] === 'i'
+  ) {
+    selector = JSON.parse(selector.substring(0, selector.length - 1)) as string;
+  } else if (selector.length > 1 && selector[0] === '"' && selector[selector.length - 1] === '"') {
+    selector = JSON.parse(selector) as string;
+    strict = true;
+  }
+
+  selector = normalizeWhiteSpace(selector);
+  if (strict) return (text) => text.normalized === selector;
+  const expected = selector.toLowerCase();
+  return (text) => text.normalized.toLowerCase().includes(expected);
 }
 
 function allElements(evaluator: SelectorEvaluatorImpl, root: Element | Document): Element[] {
