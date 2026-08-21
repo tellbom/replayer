@@ -195,5 +195,10 @@ declare global {
         target: Element,
       ): { root: AppearedRootRecord; target: LocatorStrategy } | null;
     };
+    __DSH_ANCESTOR_SCOPE__: (element: Element) => {
+      scopeSelector: string;
+      targetSelector: string;
+      targetConfidence: 'HIGH' | 'LOW';
+    } | null;
   }
 }

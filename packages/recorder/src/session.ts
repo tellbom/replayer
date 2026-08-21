@@ -112,6 +112,18 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
         }
       }
 
+      if (target?.strategy === 'playwright' && target.confidence === 'LOW') {
+        const promoted = await promoteByAncestor(page, actionIdx);
+        if (promoted) {
+          action.target = {
+            strategy: 'playwright',
+            selector: `${promoted.scopeSelector} >> ${promoted.targetSelector}`,
+            confidence: 'HIGH',
+          };
+          return;
+        }
+      }
+
       // 【T-67b】scope 规则未命中后，LOW 才进入 LLM 消歧。
       if (opts.onDisambiguation && target?.strategy === 'playwright' && target.confidence === 'LOW') {
         try {
@@ -269,6 +281,7 @@ async function installRecorderProbe(
     snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
     gen: typeof Reflect.get(window, '__DSH_GEN__'),
     mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
+    ancestorScope: typeof Reflect.get(window, '__DSH_ANCESTOR_SCOPE__'),
     engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
   }));
   const missing = Object.entries(injected).filter(([, value]) =>
@@ -279,6 +292,36 @@ async function installRecorderProbe(
       `[注入自检失败] ${JSON.stringify(injected)} — 缺失: ${missing.map(([name]) => name).join(',')}`,
     );
   }
+}
+
+async function promoteByAncestor(
+  page: Page,
+  actionIdx: number,
+): Promise<{ scopeSelector: string; targetSelector: string } | null> {
+  const candidate = await page.evaluate((idx) => {
+    const derive = Reflect.get(window, '__DSH_ANCESTOR_SCOPE__') as (element: Element) => {
+      scopeSelector: string;
+      targetSelector: string;
+      targetConfidence: 'HIGH' | 'LOW';
+    } | null;
+    const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+    return derive(clicked[idx]!);
+  }, actionIdx);
+  if (!candidate || candidate.targetConfidence !== 'HIGH') return null;
+
+  const scope = page.locator(candidate.scopeSelector);
+  if (await scope.count() !== 1) return null;
+  const target = scope.locator(candidate.targetSelector);
+  if (await target.count() !== 1) return null;
+  const handle = await target.elementHandle();
+  const matchesOracle = await page.evaluate(
+    ({ element, idx }) => {
+      const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+      return element === clicked[idx];
+    },
+    { element: handle, idx: actionIdx },
+  );
+  return matchesOracle ? candidate : null;
 }
 
 async function showRecordingBar(page: Page): Promise<void> {

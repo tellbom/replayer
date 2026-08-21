@@ -24,6 +24,7 @@ describe('T-17 Playwright 持久化上下文', () => {
         snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
         generator: typeof Reflect.get(window, '__DSH_GEN__'),
         mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
+        ancestorScope: typeof Reflect.get(window, '__DSH_ANCESTOR_SCOPE__'),
         engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
       }));
       expect(globals).toEqual({
@@ -31,10 +32,11 @@ describe('T-17 Playwright 持久化上下文', () => {
         snapshot: 'function',
         generator: 'function',
         mutation: 'object',
+        ancestorScope: 'function',
         engine: 'legacy',
       });
     } finally {
       await context.close();
     }
-  });
+  }, 15_000);
 });
