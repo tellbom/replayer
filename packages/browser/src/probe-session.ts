@@ -11,6 +11,16 @@ export interface SessionTypeProbeResult {
   evidence: string[];
 }
 
+export type CookieKind = 'persistent' | 'session' | 'mixed' | 'unknown';
+
+export function classifyCookieKind(cookies: Array<{ expires: number }>): CookieKind {
+  if (cookies.length === 0) return 'unknown';
+  const hasPersistent = cookies.some((cookie) => cookie.expires > 0);
+  const hasSession = cookies.some((cookie) => cookie.expires <= 0);
+  if (hasPersistent && hasSession) return 'mixed';
+  return hasPersistent ? 'persistent' : 'session';
+}
+
 /**
  * 【T-57】探测子系统的会话类型。触发一次页面自身的无害请求，
  * 用 CDP 观察该请求的认证头，据此判定 cookie / bearer / mixed。
@@ -100,7 +110,10 @@ export async function locateBearerSource(
 export function draftEntryYaml(
   partial: Pick<Entry['entry'], 'id' | 'name' | 'via'> &
     Partial<Pick<Entry['entry'], 'portalUrl' | 'linkText' | 'directUrl' | 'landingUrlPattern'>> &
-    Pick<SessionTypeProbeResult, 'sessionType' | 'bearerSource' | 'channelCapability'>,
+    Pick<SessionTypeProbeResult, 'sessionType' | 'bearerSource' | 'channelCapability'> & {
+      cookieKind?: CookieKind;
+      sessionStrategy?: Entry['entry']['sessionHolding']['strategy'];
+    },
 ): string {
   const lines = [
     `entry:`,
@@ -132,6 +145,11 @@ export function draftEntryYaml(
     `  channelCapability:`,
     `    network: ${partial.channelCapability.network}`,
     `    ui: ${partial.channelCapability.ui}`,
+    `  sessionHolding:`,
+    `    strategy: ${partial.sessionStrategy ?? 'daemon'}`,
+    `    probeIntervalMs: 30000`,
+    `    stateTtlMs: 1800000`,
+    `    cookieKind: ${partial.cookieKind ?? 'unknown'}`,
     `  # TODO: 请人工复核 sessionProbe / identityProbe / loginUrlPatterns`,
     `  sessionProbe: { url: '', okStatus: [200] }`,
     `  identityProbe: { url: '', jsonPath: $.sub }`,

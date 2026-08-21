@@ -124,6 +124,15 @@ export const EntrySchema = z.object({
     loginDomMarkers: z.array(z.string()).optional(),
     loginTimeoutMs: z.number().default(300_000),
 
+    sessionHolding: z
+      .object({
+        strategy: z.enum(['daemon', 'storage-state', 'probe-only']).default('daemon'),
+        probeIntervalMs: z.number().default(30_000),
+        stateTtlMs: z.number().default(1_800_000),
+        cookieKind: z.enum(['persistent', 'session', 'mixed', 'unknown']).default('unknown'),
+      })
+      .default({}),
+
     /** 【二期预留，一期恒 none】 */
     credentialProvider: z
       .object({

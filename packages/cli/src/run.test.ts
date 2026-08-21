@@ -33,6 +33,7 @@ const entry: Entry = {
     identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
     loginUrlPatterns: [],
     loginTimeoutMs: 300_000,
+    sessionHolding: { strategy: 'daemon', probeIntervalMs: 30_000, stateTtlMs: 1_800_000, cookieKind: 'unknown' },
     credentialProvider: { type: 'none', ref: '', ttlMs: 30_000 },
   },
 };

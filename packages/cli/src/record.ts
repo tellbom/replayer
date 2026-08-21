@@ -19,12 +19,15 @@ import type { Command } from 'commander';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { resolveSessionEndpoint } from './session.js';
+
 interface RecordCliOptions {
   entry: string;
   out: string;
   profile: string;
   channel: 'chrome' | 'msedge';
   entries: string;
+  stateDir: string;
   /** 【T-67b】启用录制期 LLM 消歧（仅 LOW 置信产物触发） */
   disambiguate: boolean;
 }
@@ -38,6 +41,7 @@ export function configureRecordCommand(program: Command): void {
     .option('--entries <directory>', 'entry 配置目录', './entries')
     .option('--profile <directory>', '持久化浏览器配置目录', './profiles/default')
     .option('--channel <channel>', '浏览器通道：chrome 或 msedge', 'chrome')
+    .option('--state-dir <directory>', '会话状态目录', './.dsh')
     .option('--disambiguate', 'LOW 置信定位产物触发 LLM 局部上下文消歧（需 DSH_LLM_* 配置）')
     .action(runRecord);
 }
@@ -45,6 +49,7 @@ export function configureRecordCommand(program: Command): void {
 export async function runRecord(options: RecordCliOptions): Promise<void> {
   const entryPath = resolve(options.entries, `${options.entry}.yaml`);
   const entry: Entry = parseEntry(await readFile(entryPath, 'utf8'));
+  const cdpEndpoint = await resolveSessionEndpoint(entry, options.stateDir);
   // 【T-67b】消歧回调：LLM 提案 → Playwright 再验证（count==1 且命中原元素）→
   // 通过返回 scoped selector（playwright 引擎语法），否则 null 保持 LOW 产物
   const onDisambiguation = options.disambiguate
@@ -71,6 +76,7 @@ export async function runRecord(options: RecordCliOptions): Promise<void> {
     outDir: options.out,
     profileDir: options.profile,
     channel: options.channel,
+    cdpEndpoint,
     onDisambiguation,
   });
   process.stdout.write(`录制已写入 ${options.out}/record.json\n`);

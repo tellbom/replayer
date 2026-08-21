@@ -27,3 +27,24 @@ describe('T-71 scope 契约', () => {
     expect(step.ui?.scope).toBe('sc1');
   });
 });
+
+describe('T-76 sessionHolding 契约', () => {
+  it('使用 daemon 主路径默认值', async () => {
+    const { parseEntry } = await import('./schema.js');
+    const entry = parseEntry(`entry:
+  id: oa
+  name: OA
+  via: direct
+  directUrl: http://oa/home
+  landingUrlPattern: /home
+  sessionProbe: { url: /api/session, okStatus: [200] }
+  identityProbe: { url: /api/userinfo, jsonPath: $.sub }
+`);
+    expect(entry.entry.sessionHolding).toEqual({
+      strategy: 'daemon',
+      probeIntervalMs: 30_000,
+      stateTtlMs: 1_800_000,
+      cookieKind: 'unknown',
+    });
+  });
+});

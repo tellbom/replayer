@@ -13,6 +13,12 @@ export interface BrowserOptions {
   authServerAllowlist?: string;
   clientCertificates?: Array<{ origin: string; pfxPath: string; passphrase?: string }>;
   timeoutMs?: number;
+  args?: string[];
+}
+
+export interface BrowserLease {
+  context: BrowserContext;
+  release(): Promise<void>;
 }
 
 const INIT_SCRIPT_PATHS = [
@@ -24,12 +30,13 @@ const INIT_SCRIPT_PATHS = [
 ] as const;
 
 export async function launchDSHContext(options: BrowserOptions): Promise<BrowserContext> {
-  const args = options.authServerAllowlist
+  const authArgs = options.authServerAllowlist
     ? [
         `--auth-server-allowlist=${options.authServerAllowlist}`,
         `--auth-negotiate-delegate-allowlist=${options.authServerAllowlist}`,
       ]
     : [];
+  const args = [...authArgs, ...(options.args ?? [])];
   const context = await chromium.launchPersistentContext(options.profileDir, {
     channel: options.channel ?? 'chrome',
     executablePath: options.executablePath,
@@ -71,6 +78,20 @@ export async function launchDSHContext(options: BrowserOptions): Promise<Browser
     await auditPage.close();
   }
   return context;
+}
+
+export async function acquireDSHContext(
+  options: BrowserOptions,
+  cdpEndpoint?: string,
+): Promise<BrowserLease> {
+  if (cdpEndpoint) {
+    const browser = await chromium.connectOverCDP(cdpEndpoint);
+    const context = browser.contexts()[0];
+    if (!context) throw new Error(`CDP 会话没有默认 context: ${cdpEndpoint}`);
+    return { context, release: () => browser.close() };
+  }
+  const context = await launchDSHContext(options);
+  return { context, release: () => context.close() };
 }
 
 /**

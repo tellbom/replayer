@@ -10,6 +10,7 @@ import { configureDiffCommand } from './diff.js';
 import { configureRecordCommand } from './record.js';
 import { configureReplayCommand } from './replay.js';
 import { configureRunCommand } from './run.js';
+import { configureSessionCommand } from './session.js';
 
 export function createProgram(): Command {
   const program = new Command();
@@ -25,11 +26,13 @@ export function createProgram(): Command {
     .option('--target <id>', 'entry 探测：目标系统 id', 'oa')
     .option('--entries <directory>', 'entry 配置输出目录', './entries')
     .option('--profile <directory>', 'probe-entry 使用的持久 profile（需已登录）')
+    .option('--session-strategy <strategy>', 'entry 会话持有策略', 'daemon')
     .action(async (options: import('./doctor.js').DoctorOptions) => runDoctor(options));
   configureRecordCommand(program);
   configureDiffCommand(program);
   configureReplayCommand(program);
   configureRunCommand(program);
+  configureSessionCommand(program);
   return program;
 }
 

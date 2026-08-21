@@ -1,4 +1,4 @@
-import { ensureEntry, launchDSHContext } from '@dsh/browser';
+import { acquireDSHContext, ensureEntry } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
 import {
   ForbiddenError,
@@ -34,6 +34,7 @@ export interface ReplayOptions {
   dryRun?: boolean;
   forceChannel?: 'ui' | 'network';
   noLLM?: boolean;
+  cdpEndpoint?: string;
   onConfirm?: (step: Step, context: ExecContext) => Promise<boolean>;
   onLocatorFailure?: (input: {
     page: Page;
@@ -51,7 +52,8 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
     return { ok: true, skillId: skill.skill.id, steps: [], extracted: {}, reentryCount: 0 };
   }
 
-  const browserContext = await launchDSHContext({ profileDir: opts.profileDir });
+  const lease = await acquireDSHContext({ profileDir: opts.profileDir }, opts.cdpEndpoint);
+  const browserContext = lease.context;
   try {
     const page = browserContext.pages()[0] ?? (await browserContext.newPage());
     const diagnostic = startDiagnosticSession(page);
@@ -208,24 +210,7 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
       throw error;
     }
   } finally {
-    await browserContext.close();
-  }
-}
-
-/** 等待重定向链静止：URL 在短窗口内不再变化且无进行中的整页导航。 */
-async function settleNavigation(page: Page, stableMs = 1_500, timeoutMs = 30_000): Promise<void> {
-  const startedAt = Date.now();
-  let lastUrl = page.url();
-  let lastChange = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    await page.waitForTimeout(250);
-    const current = page.url();
-    if (current !== lastUrl) {
-      lastUrl = current;
-      lastChange = Date.now();
-      continue;
-    }
-    if (Date.now() - lastChange >= stableMs) return;
+    await lease.release();
   }
 }
 

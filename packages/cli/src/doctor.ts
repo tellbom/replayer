@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { launchDSHContext, probeSessionType } from '@dsh/browser';
+import { classifyCookieKind, launchDSHContext, probeSessionType } from '@dsh/browser';
 import { draftEntryYaml } from '@dsh/browser';
 
 export interface FrontendProbeResult {
@@ -22,6 +22,7 @@ export interface DoctorOptions {
   entries?: string;
   /** 【probe-entry 专用】使用指定持久 profile（探测需在已登录会话上进行） */
   profile?: string;
+  sessionStrategy?: 'daemon' | 'storage-state' | 'probe-only';
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<void> {
@@ -76,7 +77,12 @@ async function printEntryProbe(
   await page.waitForTimeout(2_000);
 
   const probe = await probeSessionType(page);
+  const cookieKind = classifyCookieKind(await page.context().cookies());
   console.log(`sessionType     ${probe.sessionType}`);
+  console.log(`cookieKind      ${cookieKind}`);
+  if (cookieKind === 'session' && options.sessionStrategy === 'storage-state') {
+    console.log('⚠ 会话 cookie 依赖快照文件保存真实凭证，风险较高，建议改用 daemon');
+  }
   if (probe.bearerSource) console.log(`bearerSource    ${probe.bearerSource.strategy}`);
   console.log(
     `通道能力        network ${probe.channelCapability.network ? '✓' : '✗'}   ui ${probe.channelCapability.ui ? '✓' : '✗'}`,
@@ -95,6 +101,8 @@ async function printEntryProbe(
     sessionType: probe.sessionType,
     ...(probe.bearerSource ? { bearerSource: probe.bearerSource } : {}),
     channelCapability: probe.channelCapability,
+    cookieKind,
+    ...(options.sessionStrategy ? { sessionStrategy: options.sessionStrategy } : {}),
   });
   const entriesDir = options.entries ?? './entries';
   const { mkdir, writeFile: writeEntryFile } = await import('node:fs/promises');

@@ -6,6 +6,7 @@ playwright-report/
 test-results/
 runs/
 profiles/
+.dsh/
 .env
 .env.*
 !.env.example

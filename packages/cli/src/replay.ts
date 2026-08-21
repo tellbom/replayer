@@ -6,6 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
+import { resolveSessionEndpoint } from './session.js';
+
 interface ReplayCliOptions {
   params: string;
   dryRun?: boolean;
@@ -13,6 +15,7 @@ interface ReplayCliOptions {
   llm: boolean;
   profile: string;
   entries: string;
+  stateDir: string;
   yes?: boolean;
 }
 
@@ -26,6 +29,7 @@ export function configureReplayCommand(program: Command): void {
     .option('--no-llm', '禁用 LLM')
     .option('--entries <directory>', 'entry 认证载体配置目录', './entries')
     .option('--profile <directory>', '持久化浏览器配置目录', './profiles/default')
+    .option('--state-dir <directory>', '会话状态目录', './.dsh')
     .option('--yes', '跳过高风险确认，仅用于自动化测试')
     .action(runReplay);
 }
@@ -49,11 +53,15 @@ export async function runReplay(skillPath: string, options: ReplayCliOptions): P
   entryCache.set(entryId, entry);
   const skill = parseSkill(skillText, loadEntrySync);
   const params = await parseReplayParams(options.params);
+  const cdpEndpoint = options.dryRun
+    ? undefined
+    : await resolveSessionEndpoint(entry, options.stateDir);
   const confirm = options.yes ? async () => true : confirmRisk;
   const result = await replay(skill, {
     params,
     profileDir: options.profile,
     entry,
+    cdpEndpoint,
     dryRun: options.dryRun,
     forceChannel: options.channel,
     noLLM: !options.llm,

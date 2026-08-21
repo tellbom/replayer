@@ -1,4 +1,4 @@
-import { ensureEntry, launchDSHContext } from '@dsh/browser';
+import { acquireDSHContext, ensureEntry } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
 import type { RecordSession, RecordedAction } from '@dsh/core';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -15,6 +15,7 @@ export interface RecordOptions {
   outDir: string;
   channel?: 'chrome' | 'msedge';
   headless?: boolean;
+  cdpEndpoint?: string;
   stopSignal?: Promise<void>;
   onReady?: (page: Page) => Promise<void>;
   /**
@@ -47,11 +48,12 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   await mkdir(opts.profileDir, { recursive: true });
   await mkdir(opts.outDir, { recursive: true });
   const engine = process.env.DSH_LOCATOR_ENGINE === 'playwright' ? 'playwright' : 'legacy';
-  const context = await launchDSHContext({
+  const lease = await acquireDSHContext({
     profileDir: opts.profileDir,
     channel: opts.channel,
     headless: opts.headless,
-  });
+  }, opts.cdpEndpoint);
+  const context = lease.context;
   const page = context.pages()[0] ?? (await context.newPage());
   const excludeMatchers = compileExcludePatterns(opts.entry.entry.excludeUrlPatterns);
 
@@ -190,7 +192,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   } catch (error) {
     page.off('domcontentloaded', onDomContentLoaded);
     await networkRecording.stop();
-    await context.close();
+    await lease.release();
     throw error;
   }
   page.off('domcontentloaded', onDomContentLoaded);
@@ -211,7 +213,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     pages,
   };
   await writeFile(`${opts.outDir}/record.json`, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
-  await context.close();
+  await lease.release();
   void entrySession;
   return session;
 }
