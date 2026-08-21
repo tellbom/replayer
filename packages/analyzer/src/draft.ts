@@ -11,6 +11,8 @@ interface DraftItem {
   action: RecordedAction | null;
   request: CorrelatedRequest | null;
   hasSideEffect: boolean;
+  afterSessionInterrupt: boolean;
+  sourceActionIndex: number;
 }
 
 export interface DraftResult {
@@ -23,9 +25,19 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   const correlated = correlate(session);
   const params = detectParams(session, secondSession).map((candidate) => candidate.definition);
   const items: DraftItem[] = [];
+  const interruptionIndexes = new Set(session.interruptions?.map((item) => item.atActionIdx) ?? []);
   for (const step of correlated) {
+    const actionIndex = step.action ? session.actions.indexOf(step.action) : -1;
+    const afterSessionInterrupt = interruptionIndexes.has(actionIndex);
     if (step.requests.length === 0 && step.action) {
-      items.push({ id: '', action: step.action, request: null, hasSideEffect: false });
+      items.push({
+        id: '',
+        action: step.action,
+        request: null,
+        hasSideEffect: false,
+        afterSessionInterrupt,
+        sourceActionIndex: actionIndex,
+      });
       continue;
     }
     step.requests.forEach((request, index) => {
@@ -34,6 +46,8 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
         action: index === 0 ? step.action : null,
         request,
         hasSideEffect: request.mutating,
+        afterSessionInterrupt: index === 0 && afterSessionInterrupt,
+        sourceActionIndex: actionIndex,
       });
     });
   }
@@ -46,8 +60,15 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       .map((item) => [item.request.requestId, item.id]),
   );
   const extracts = dependencyExtracts(items);
-  const steps: Skill['steps'] = items.map((item) =>
-    draftStep(item, params, stepByRequest, extracts, session.meta.baseUrl) as Skill['steps'][number],
+  const steps: Skill['steps'] = items.map(
+    (item) =>
+      draftStep(
+        item,
+        params,
+        stepByRequest,
+        extracts,
+        session.meta.baseUrl,
+      ) as Skill['steps'][number],
   );
   const postcondition = inferPostcondition(items, params, session.meta.baseUrl);
   // 【C16】技能不含 auth 段：认证载体在 entries/<id>.yaml，录制时由 record 记录 entryId。
@@ -75,6 +96,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       '所有 TODO 项必须在发布前人工确认。',
       '认证载体见 entries/ 目录（C16：技能不含登录环节）。',
       '若未生成 reentry：首步即写时无幂等 anchor 可用，请人工前移幂等步骤（C22）。',
+      ...sessionInterruptNotes(items, session),
     ],
   };
   const skill = SkillSchema.parse(raw);
@@ -82,9 +104,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
 }
 
 /** 【C22】reentry 草稿：anchor 取第一个非幂等步骤之前的那一步。 */
-function reentryDraft(
-  steps: Skill['steps'],
-): { anchor: string; maxReentries: number } | undefined {
+function reentryDraft(steps: Skill['steps']): { anchor: string; maxReentries: number } | undefined {
   if (steps.length === 0) return undefined;
   const firstNonIdempotent = steps.findIndex(
     (step) => !(step.idempotent ?? step.riskLevel === 'read'),
@@ -105,29 +125,47 @@ function draftStep(
   baseUrl: string,
 ): unknown {
   const request = item.request;
-  const ui = item.action ? uiAction(item.action, params) : undefined;
+  const ui = item.action ? uiAction(item.action, params, item.afterSessionInterrupt) : undefined;
   const network = request
     ? networkAction(request, params, stepByRequest, extracts.get(request.requestId), baseUrl)
     : item.action?.type === 'navigate'
-      ? { method: 'GET', url: relativeUrl(item.action.url ?? baseUrl, baseUrl), contentType: 'json' }
+      ? {
+          method: 'GET',
+          url: relativeUrl(item.action.url ?? baseUrl, baseUrl),
+          contentType: 'json',
+        }
       : undefined;
   const critical = request && /approve|delete|pay/i.test(request.url);
   return {
     id: item.id,
     desc: stepDescription(item),
-    channel: request?.mutating || item.action?.type === 'navigate' || (request && !ui)
-      ? 'network'
-      : item.action?.type === 'fill' || item.action?.type === 'datetime'
-        ? 'merged'
-        : 'ui',
+    channel:
+      request?.mutating || item.action?.type === 'navigate' || (request && !ui)
+        ? 'network'
+        : item.action?.type === 'fill' || item.action?.type === 'datetime'
+          ? 'merged'
+          : 'ui',
     riskLevel: critical ? 'critical' : request?.mutating ? 'write' : 'read',
     hasSideEffect: item.hasSideEffect,
     ...(network ? { network } : {}),
     ...(ui ? { ui } : {}),
-    ...(item.action?.scope ? { requires: [item.action.scope] } : {}),
+    ...(item.action?.scope && !item.afterSessionInterrupt ? { requires: [item.action.scope] } : {}),
     ...(item.action?.produces ? { produces: item.action.produces } : {}),
     ...(item.action?.waitAfter ? { waitAfter: item.action.waitAfter } : {}),
   };
+}
+
+function sessionInterruptNotes(items: DraftItem[], session: RecordSession): string[] {
+  if (!session.interruptions?.length) return [];
+  const notes = session.interruptions.map((interruption) => {
+    const candidate =
+      items.find((item) => item.sourceActionIndex === interruption.atActionIdx)?.id ?? '录制末尾';
+    return `会话曾在动作 ${interruption.atActionIdx} 后中断；reentry.anchor 候选为 ${candidate}，前后步骤的 scope 关系可能不连续，请人工确认。`;
+  });
+  if (session.meta.identityChanged) {
+    notes.push('录制恢复时身份发生变化，已在断点处中止；不得拼接为同一技能。');
+  }
+  return notes;
 }
 
 function networkAction(
@@ -160,14 +198,14 @@ function networkAction(
   };
 }
 
-function uiAction(action: RecordedAction, params: Skill['params']): unknown {
+function uiAction(action: RecordedAction, params: Skill['params'], discardScope = false): unknown {
   const name = params.find((param) => param.prompt === action.label)?.name;
   const value = name ? `{{${name}}}` : action.value;
   const common = {
     ...(action.target ? { target: action.target } : {}),
     ...(action.label ? { label: action.label } : {}),
     ...(value !== undefined ? { value } : {}),
-    ...(action.scope ? { scope: action.scope } : {}),
+    ...(action.scope && !discardScope ? { scope: action.scope } : {}),
   };
   if (action.type === 'select') return { action: 'selectOption', ...common };
   if (action.type === 'datetime') return { action: 'setDateTime', ...common };
@@ -189,7 +227,10 @@ function dependencyExtracts(items: DraftItem[]): Map<string, Record<string, stri
   return extracts;
 }
 
-function requestBody(request: RecordedRequest, contentType: 'json' | 'form'): Record<string, unknown> {
+function requestBody(
+  request: RecordedRequest,
+  contentType: 'json' | 'form',
+): Record<string, unknown> {
   if (!request.postData) return {};
   return contentType === 'json'
     ? JSON.parse(request.postData)
@@ -307,7 +348,9 @@ function relativeUrl(url: string, baseUrl: string): string {
 }
 
 function stepDescription(item: DraftItem): string {
-  return item.action?.label ?? item.action?.text ?? item.action?.type ?? item.request?.url ?? item.id;
+  return (
+    item.action?.label ?? item.action?.text ?? item.action?.type ?? item.request?.url ?? item.id
+  );
 }
 
 function skillId(items: DraftItem[]): string {

@@ -4,6 +4,7 @@ import type { Page, Request, Response } from 'playwright';
 
 export interface NetworkRecording {
   readonly records: RecordedRequest[];
+  setEnabled(enabled: boolean): void;
   stop(): Promise<RecordedRequest[]>;
 }
 
@@ -11,12 +12,16 @@ export interface NetworkRecording {
  * 监听 Playwright 网络事件，并且只在内存中保留脱敏后的记录。
  * 【C19】excludeMatchers 命中的一跳认证 URL 不录制。
  */
-export function startNetworkRecording(page: Page, excludeMatchers: RegExp[] = []): NetworkRecording {
+export function startNetworkRecording(
+  page: Page,
+  excludeMatchers: RegExp[] = [],
+): NetworkRecording {
   const sanitizer = createSanitizer();
   const records: RecordedRequest[] = [];
   const byRequest = new Map<Request, RecordedRequest>();
   const pending = new Set<Promise<void>>();
   let sequence = 0;
+  let enabled = true;
 
   const track = (task: Promise<void>): void => {
     pending.add(task);
@@ -24,6 +29,7 @@ export function startNetworkRecording(page: Page, excludeMatchers: RegExp[] = []
   };
 
   const onRequest = (request: Request): void => {
+    if (!enabled) return;
     const method = request.method();
     const resourceType = request.resourceType();
     const rawUrl = request.url();
@@ -87,6 +93,9 @@ export function startNetworkRecording(page: Page, excludeMatchers: RegExp[] = []
 
   return {
     records,
+    setEnabled(value) {
+      enabled = value;
+    },
     async stop() {
       page.off('request', onRequest);
       page.off('response', onResponse);

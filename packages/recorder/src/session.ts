@@ -1,9 +1,10 @@
-import { acquireDSHContext, ensureEntry } from '@dsh/browser';
+import { acquireDSHContext, ensureEntry, probeSession } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
-import type { RecordSession, RecordedAction } from '@dsh/core';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import type { RecordSession, RecordedAction, SessionInterrupt } from '@dsh/core';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { BrowserContext, Page } from 'playwright';
 
 import { startNetworkRecording } from './network.js';
@@ -31,8 +32,20 @@ export interface RecordOptions {
     pwResult: { selector: string; matchCount: number; confidence: 'HIGH' | 'LOW' };
     /** 浏览器侧 __DSH_DISAMBIG__ 局部上下文 */
     context: {
-      target: { tag: string; role: string | null; text: string; type: string | null; name: string | null; placeholder: string | null };
-      ancestors: Array<{ tag: string; role: string | null; heading: string | null; sameNameCount: number }>;
+      target: {
+        tag: string;
+        role: string | null;
+        text: string;
+        type: string | null;
+        name: string | null;
+        placeholder: string | null;
+      };
+      ancestors: Array<{
+        tag: string;
+        role: string | null;
+        heading: string | null;
+        sameNameCount: number;
+      }>;
       siblings: Array<{ role: string | null; text: string; type: string | null }>;
       sameNameCandidates: Array<{ index: number; nearestHeading: string | null }>;
     };
@@ -48,11 +61,14 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   await mkdir(opts.profileDir, { recursive: true });
   await mkdir(opts.outDir, { recursive: true });
   const engine = process.env.DSH_LOCATOR_ENGINE === 'playwright' ? 'playwright' : 'legacy';
-  const lease = await acquireDSHContext({
-    profileDir: opts.profileDir,
-    channel: opts.channel,
-    headless: opts.headless,
-  }, opts.cdpEndpoint);
+  const lease = await acquireDSHContext(
+    {
+      profileDir: opts.profileDir,
+      channel: opts.channel,
+      headless: opts.headless,
+    },
+    opts.cdpEndpoint,
+  );
   const context = lease.context;
   const page = context.pages()[0] ?? (await context.newPage());
   const excludeMatchers = compileExcludePatterns(opts.entry.entry.excludeUrlPatterns);
@@ -62,109 +78,117 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const baseUrl = new URL(page.url()).origin;
 
   const actions: RecordedAction[] = [];
+  const interruptions: SessionInterrupt[] = [];
+  let recordingEnabled = true;
   const actionByIdx = new Map<number, RecordedAction>();
   const mutationTasks = new Map<number, Promise<void>>();
   const postProcessTasks: Promise<void>[] = [];
-  await page.exposeBinding('__DSH_RECORD__', async (
-    _source,
-    emitted: RecordedAction & { actionIdx: number },
-  ) => {
-    const { actionIdx, ...action } = emitted;
-    // 【C19】一次性认证跳转不记录
-    const actionUrl = action.url ?? '';
-    if (actionUrl && excludeMatchers.some((re) => re.test(actionUrl))) return;
-    actions.push(action);
-    actionByIdx.set(actionIdx, action);
-    const target = action.target as { strategy?: string; confidence?: string } | undefined;
-    if (target) {
-      const mutationTask = page.evaluate(async (idx) => {
-        await window.__DSH_MUTATION__.end(idx);
-      }, actionIdx);
-      mutationTasks.set(actionIdx, mutationTask);
-    }
+  await page.exposeBinding(
+    '__DSH_RECORD__',
+    async (_source, emitted: RecordedAction & { actionIdx: number }) => {
+      if (!recordingEnabled) return;
+      const { actionIdx, ...action } = emitted;
+      // 【C19】一次性认证跳转不记录
+      const actionUrl = action.url ?? '';
+      if (actionUrl && excludeMatchers.some((re) => re.test(actionUrl))) return;
+      actions.push(action);
+      actionByIdx.set(actionIdx, action);
+      const target = action.target as { strategy?: string; confidence?: string } | undefined;
+      if (target) {
+        const mutationTask = page.evaluate(async (idx) => {
+          await window.__DSH_MUTATION__.end(idx);
+        }, actionIdx);
+        mutationTasks.set(actionIdx, mutationTask);
+      }
 
-    const task = (async () => {
-      if (engine === 'playwright' && target) {
-        const producerActionIdx = actionIdx - 1;
-        const producerMutation = mutationTasks.get(producerActionIdx);
-        if (producerMutation) {
-          await producerMutation;
-          const scoped = await page.evaluate(
-            ({ producerIdx, currentIdx }) => {
-              const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
-              return window.__DSH_MUTATION__.deriveScope(producerIdx, clicked[currentIdx]!);
-            },
-            { producerIdx: producerActionIdx, currentIdx: actionIdx },
-          );
-          if (scoped) {
-            const scopeId = `sc${producerActionIdx + 1}`;
-            const producer = actionByIdx.get(producerActionIdx)!;
-            producer.produces = {
-              scopeId,
-              root: scoped.root.descriptor,
-              kind: scoped.root.kind,
-              portaled: scoped.root.portaled,
-              appearedAfterMs: scoped.root.appearedAfterMs,
+      const task = (async () => {
+        if (engine === 'playwright' && target) {
+          const producerActionIdx = actionIdx - 1;
+          const producerMutation = mutationTasks.get(producerActionIdx);
+          if (producerMutation) {
+            await producerMutation;
+            const scoped = await page.evaluate(
+              ({ producerIdx, currentIdx }) => {
+                const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+                return window.__DSH_MUTATION__.deriveScope(producerIdx, clicked[currentIdx]!);
+              },
+              { producerIdx: producerActionIdx, currentIdx: actionIdx },
+            );
+            if (scoped) {
+              const scopeId = `sc${producerActionIdx + 1}`;
+              const producer = actionByIdx.get(producerActionIdx)!;
+              producer.produces = {
+                scopeId,
+                root: scoped.root.descriptor,
+                kind: scoped.root.kind,
+                portaled: scoped.root.portaled,
+                appearedAfterMs: scoped.root.appearedAfterMs,
+              };
+              producer.waitAfter = { scopeReady: scopeId, settleMs: 200, timeoutMs: 8_000 };
+              action.scope = scopeId;
+              action.target = scoped.target;
+              return;
+            }
+          }
+        }
+
+        if (target?.strategy === 'playwright' && target.confidence === 'LOW') {
+          const promoted = await promoteByAncestor(page, actionIdx);
+          if (promoted) {
+            action.target = {
+              strategy: 'playwright',
+              selector: `${promoted.scopeSelector} >> ${promoted.targetSelector}`,
+              confidence: 'HIGH',
             };
-            producer.waitAfter = { scopeReady: scopeId, settleMs: 200, timeoutMs: 8_000 };
-            action.scope = scopeId;
-            action.target = scoped.target;
             return;
           }
         }
-      }
 
-      if (target?.strategy === 'playwright' && target.confidence === 'LOW') {
-        const promoted = await promoteByAncestor(page, actionIdx);
-        if (promoted) {
-          action.target = {
-            strategy: 'playwright',
-            selector: `${promoted.scopeSelector} >> ${promoted.targetSelector}`,
-            confidence: 'HIGH',
-          };
-          return;
-        }
-      }
-
-      // 【T-67b】scope 规则未命中后，LOW 才进入 LLM 消歧。
-      if (opts.onDisambiguation && target?.strategy === 'playwright' && target.confidence === 'LOW') {
-        try {
-          const disambig = await page.evaluate((idx) => {
-            const collect = Reflect.get(window, '__DSH_DISAMBIG__');
-            const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
-            const el = clicked[idx];
-            if (typeof collect !== 'function' || !el) return null;
-            return { context: collect(el) };
-          }, actionIdx);
-          const pwResult = {
-            selector: (target as { selector: string }).selector,
-            matchCount: -1,
-            confidence: 'LOW' as const,
-          };
-          if (!disambig) return;
-          const scoped = await opts.onDisambiguation!({
-            page,
-            targetElement: await page.evaluateHandle(
-              (idx) => {
+        // 【T-67b】scope 规则未命中后，LOW 才进入 LLM 消歧。
+        if (
+          opts.onDisambiguation &&
+          target?.strategy === 'playwright' &&
+          target.confidence === 'LOW'
+        ) {
+          try {
+            const disambig = await page.evaluate((idx) => {
+              const collect = Reflect.get(window, '__DSH_DISAMBIG__');
+              const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+              const el = clicked[idx];
+              if (typeof collect !== 'function' || !el) return null;
+              return { context: collect(el) };
+            }, actionIdx);
+            const pwResult = {
+              selector: (target as { selector: string }).selector,
+              matchCount: -1,
+              confidence: 'LOW' as const,
+            };
+            if (!disambig) return;
+            const scoped = await opts.onDisambiguation!({
+              page,
+              targetElement: await page.evaluateHandle((idx) => {
                 const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
                 return clicked[idx];
-              },
-              actionIdx,
-            ),
-            pwResult,
-            context: disambig.context,
-          });
-          if (scoped) {
-            action.target = { strategy: 'playwright', selector: scoped, confidence: 'HIGH' } as never;
+              }, actionIdx),
+              pwResult,
+              context: disambig.context,
+            });
+            if (scoped) {
+              action.target = {
+                strategy: 'playwright',
+                selector: scoped,
+                confidence: 'HIGH',
+              } as never;
+            }
+          } catch {
+            // 消歧失败保持原 LOW 产物——回放期 heal 仍可兜底
           }
-        } catch {
-          // 消歧失败保持原 LOW 产物——回放期 heal 仍可兜底
         }
-      }
-    })();
-    postProcessTasks.push(task);
-  });
-  await installRecorderProbe(context, page, engine);
+      })();
+      postProcessTasks.push(task);
+    },
+  );
+  const reinjectRecorderProbe = await installRecorderProbe(page, engine);
   const startedAt = new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
   actions.push({ ts: Date.now(), type: 'navigate', url: page.url() });
@@ -175,7 +199,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const pageTasks = new Set<Promise<void>>();
   const onDomContentLoaded = (): void => {
     const task = page.title().then((title) => {
-      if (!excludeMatchers.some((re) => re.test(page.url()))) {
+      if (recordingEnabled && !excludeMatchers.some((re) => re.test(page.url()))) {
         pages.push({ ts: Date.now(), url: page.url(), title });
       }
     });
@@ -183,13 +207,47 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     void task.finally(() => pageTasks.delete(task));
   };
   page.on('domcontentloaded', onDomContentLoaded);
-  const networkRecording = startNetworkRecording(page, excludeMatchers);
+  const probeMatchers = [opts.entry.entry.sessionProbe.url, opts.entry.entry.identityProbe.url].map(
+    (url) => new RegExp(escapeRegExp(new URL(url, baseUrl).href)),
+  );
+  const networkRecording = startNetworkRecording(page, [...excludeMatchers, ...probeMatchers]);
+  const monitorAbort = new AbortController();
+  let identityChanged = false;
 
   try {
     await showRecordingBar(page);
     if (opts.onReady) await opts.onReady(page);
-    await (opts.stopSignal ?? waitForManualStop(context, page));
+    const monitor = monitorRecordingSession({
+      page,
+      entry: opts.entry,
+      initialIdentityDigest: entrySession.identityDigest,
+      actions,
+      interruptions,
+      networkRecording,
+      outputPath: `${opts.outDir}/record.partial.json`,
+      startedAt,
+      baseUrl,
+      userAgent,
+      pages,
+      mutationTasks,
+      postProcessTasks,
+      onRecordingState(enabled) {
+        recordingEnabled = enabled;
+      },
+      onSessionBoundary() {
+        actionByIdx.clear();
+        mutationTasks.clear();
+      },
+      onResume: reinjectRecorderProbe,
+      signal: monitorAbort.signal,
+    });
+    const stopSignal = opts.stopSignal ?? waitForManualStop(context, page);
+    const outcome = await Promise.race([stopSignal.then(() => 'stopped' as const), monitor]);
+    identityChanged = outcome === 'identityChanged';
+    monitorAbort.abort();
+    await monitor;
   } catch (error) {
+    monitorAbort.abort();
     page.off('domcontentloaded', onDomContentLoaded);
     await networkRecording.stop();
     await lease.release();
@@ -207,12 +265,15 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       baseUrl,
       userAgent,
       entryId: opts.entry.entry.id,
+      ...(identityChanged ? { identityChanged: true } : {}),
     },
     actions,
     network,
     pages,
+    ...(interruptions.length > 0 ? { interruptions } : {}),
   };
   await writeFile(`${opts.outDir}/record.json`, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+  if (!identityChanged) await rm(`${opts.outDir}/record.partial.json`, { force: true });
   await lease.release();
   void entrySession;
   return session;
@@ -223,11 +284,136 @@ function compileExcludePatterns(patterns: readonly string[]): RegExp[] {
   return patterns.map((pattern) => new RegExp(pattern));
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+interface SessionMonitorOptions {
+  page: Page;
+  entry: Entry;
+  initialIdentityDigest: string;
+  actions: RecordedAction[];
+  interruptions: SessionInterrupt[];
+  networkRecording: ReturnType<typeof startNetworkRecording>;
+  outputPath: string;
+  startedAt: string;
+  baseUrl: string;
+  userAgent: string;
+  pages: RecordSession['pages'];
+  mutationTasks: Map<number, Promise<void>>;
+  postProcessTasks: Promise<void>[];
+  onRecordingState(enabled: boolean): void;
+  onSessionBoundary(): void;
+  onResume(): Promise<void>;
+  signal: AbortSignal;
+}
+
+async function monitorRecordingSession(
+  options: SessionMonitorOptions,
+): Promise<'identityChanged' | 'stopped'> {
+  try {
+    while (!options.signal.aborted) {
+      await delay(options.entry.entry.sessionHolding.probeIntervalMs, undefined, {
+        signal: options.signal,
+      });
+      if (await probeSession(options.page, options.entry)) continue;
+
+      options.onRecordingState(false);
+      options.networkRecording.setEnabled(false);
+      await setRecordingState(options.page, false);
+      await Promise.all([...options.mutationTasks.values()]);
+      await Promise.all(options.postProcessTasks);
+      options.onSessionBoundary();
+
+      const interruption: SessionInterrupt = {
+        type: 'session-interrupt',
+        atActionIdx: options.actions.length,
+        detectedAt: new Date().toISOString(),
+      };
+      options.interruptions.push(interruption);
+      await writePartialRecording(options);
+      await showSessionNotice(options.page, '会话已过期，请重新登录；登录后可继续录制');
+
+      const resumed = await ensureEntry(options.page, options.entry);
+      if (resumed.identityDigest !== options.initialIdentityDigest) {
+        interruption.identityChanged = true;
+        await writePartialRecording(options, true);
+        return 'identityChanged';
+      }
+
+      interruption.resumedAt = new Date().toISOString();
+      await options.onResume();
+      await setRecordingState(options.page, true);
+      options.networkRecording.setEnabled(true);
+      options.onRecordingState(true);
+      await showSessionNotice(options.page, '会话已恢复。页面状态可能已重置，请回到中断前的位置');
+    }
+  } catch (error) {
+    if (!options.signal.aborted) throw error;
+  }
+  return 'stopped';
+}
+
+async function writePartialRecording(
+  options: SessionMonitorOptions,
+  identityChanged = false,
+): Promise<void> {
+  const partial: RecordSession = {
+    meta: {
+      startedAt: options.startedAt,
+      endedAt: new Date().toISOString(),
+      baseUrl: options.baseUrl,
+      userAgent: options.userAgent,
+      entryId: options.entry.entry.id,
+      ...(identityChanged ? { identityChanged: true } : {}),
+    },
+    actions: options.actions,
+    network: options.networkRecording.records,
+    pages: options.pages,
+    interruptions: options.interruptions,
+  };
+  await writeFile(options.outputPath, `${JSON.stringify(partial, null, 2)}\n`, 'utf8');
+}
+
+const RECORDING_PAUSED_MARKER = '__DSH_RECORDING_PAUSED__';
+
+async function setRecordingState(page: Page, enabled: boolean): Promise<void> {
+  await page.evaluate(
+    ({ active, marker }) => {
+      Reflect.set(window, '__DSH_RECORDING__', active);
+      const tokens = window.name.split(' ').filter((token) => token && token !== marker);
+      if (!active) tokens.push(marker);
+      window.name = tokens.join(' ');
+    },
+    { active: enabled, marker: RECORDING_PAUSED_MARKER },
+  );
+}
+
+async function showSessionNotice(page: Page, text: string): Promise<void> {
+  await page.evaluate((message) => {
+    let bar = document.querySelector<HTMLDivElement>('#__dsh_recording_bar__');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = '__dsh_recording_bar__';
+      document.body.append(bar);
+    }
+    bar.textContent = message;
+    Object.assign(bar.style, {
+      position: 'fixed',
+      inset: '0 0 auto 0',
+      zIndex: '2147483647',
+      padding: '6px',
+      color: 'white',
+      background: '#d93025',
+      textAlign: 'center',
+    });
+  }, text);
+}
+
 async function installRecorderProbe(
-  context: BrowserContext,
   page: Page,
   engine: 'legacy' | 'playwright',
-): Promise<void> {
+): Promise<() => Promise<void>> {
   const probePath = fileURLToPath(
     new URL('../../locator/dist/recorder-probe.iife.js', import.meta.url),
   );
@@ -243,23 +429,25 @@ async function installRecorderProbe(
       new URL('../../locator/dist/disambiguation-context.iife.js', import.meta.url),
     );
     const disambig = await readFile(disambigPath, 'utf8');
-    await context.addInitScript({ content: pwgen });
-    await context.addInitScript({ content: disambig });
+    await page.addInitScript({ content: pwgen });
+    await page.addInitScript({ content: disambig });
     await page.addScriptTag({ content: pwgen });
     await page.addScriptTag({ content: disambig });
   }
-  await context.addInitScript(() => Reflect.set(window, '__DSH_RECORDING__', true));
+  await page.addInitScript(
+    (marker) => Reflect.set(window, '__DSH_RECORDING__', !window.name.split(' ').includes(marker)),
+    RECORDING_PAUSED_MARKER,
+  );
   // 注意：闭包捕获外层变量的 addInitScript 实测不生效（变量不随函数序列化），
   // 必须用参数形式传递
-  await context.addInitScript(
-    (flag) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', flag),
-    engine,
-  );
-  await context.addInitScript(() => {
+  await page.addInitScript((flag) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', flag), engine);
+  const installBar = (marker: string): void => {
     window.addEventListener('DOMContentLoaded', () => {
       const bar = document.createElement('div');
       bar.id = '__dsh_recording_bar__';
-      bar.textContent = 'DSH 正在录制';
+      bar.textContent = window.name.split(' ').includes(marker)
+        ? '会话已过期，请重新登录；登录后可继续录制'
+        : 'DSH 正在录制';
       Object.assign(bar.style, {
         position: 'fixed',
         inset: '0 0 auto 0',
@@ -271,13 +459,17 @@ async function installRecorderProbe(
       });
       document.body.append(bar);
     });
-  });
-  await context.addInitScript({ content: probe });
-  await page.evaluate(() => Reflect.set(window, '__DSH_RECORDING__', true));
+  };
+  await page.addInitScript(installBar, RECORDING_PAUSED_MARKER);
+  const guardedProbe = `if (!Reflect.get(window, '__DSH_RECORDER_PROBE_INSTALLED__')) { Reflect.set(window, '__DSH_RECORDER_PROBE_INSTALLED__', true); ${probe} }`;
+  await setRecordingState(page, true);
   // 当前页注入路径：先设引擎旗帜再挂 probe（generator() 读取的是 window 旗帜，
   // 顺序颠倒会让首屏动作走错引擎分支）
   await page.evaluate((flag) => Reflect.set(window, '__DSH_LOCATOR_ENGINE__', flag), engine);
-  await page.addScriptTag({ content: probe });
+  const injectCurrentProbe = async (): Promise<void> => {
+    await page.addScriptTag({ content: guardedProbe });
+  };
+  await injectCurrentProbe();
   const injected = await page.evaluate(() => ({
     locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
     snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
@@ -286,14 +478,15 @@ async function installRecorderProbe(
     ancestorScope: typeof Reflect.get(window, '__DSH_ANCESTOR_SCOPE__'),
     engine: Reflect.get(window, '__DSH_LOCATOR_ENGINE__'),
   }));
-  const missing = Object.entries(injected).filter(([, value]) =>
-    value === 'undefined' || value === undefined,
+  const missing = Object.entries(injected).filter(
+    ([, value]) => value === 'undefined' || value === undefined,
   );
   if (missing.length > 0) {
     throw new Error(
       `[注入自检失败] ${JSON.stringify(injected)} — 缺失: ${missing.map(([name]) => name).join(',')}`,
     );
   }
+  return injectCurrentProbe;
 }
 
 async function promoteByAncestor(
@@ -312,9 +505,9 @@ async function promoteByAncestor(
   if (!candidate || candidate.targetConfidence !== 'HIGH') return null;
 
   const scope = page.locator(candidate.scopeSelector);
-  if (await scope.count() !== 1) return null;
+  if ((await scope.count()) !== 1) return null;
   const target = scope.locator(candidate.targetSelector);
-  if (await target.count() !== 1) return null;
+  if ((await target.count()) !== 1) return null;
   const handle = await target.elementHandle();
   const matchesOracle = await page.evaluate(
     ({ element, idx }) => {

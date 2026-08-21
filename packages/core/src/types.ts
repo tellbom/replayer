@@ -14,14 +14,7 @@ export type LocatorStrategy =
   | { strategy: 'playwright'; selector: string; confidence?: 'HIGH' | 'LOW' };
 
 export type ControlKind =
-  | 'input'
-  | 'textarea'
-  | 'select'
-  | 'datepicker'
-  | 'radio'
-  | 'checkbox'
-  | 'button'
-  | 'text';
+  'input' | 'textarea' | 'select' | 'datepicker' | 'radio' | 'checkbox' | 'button' | 'text';
 
 export interface AppearedRoot {
   node: Element;
@@ -49,10 +42,20 @@ export interface RecordSession {
     userAgent: string;
     /** 【v2.0】本次录制使用的 entry 配置 id */
     entryId: string;
+    identityChanged?: boolean;
   };
   actions: RecordedAction[];
   network: RecordedRequest[];
   pages: { ts: number; url: string; title: string }[];
+  interruptions?: SessionInterrupt[];
+}
+
+export interface SessionInterrupt {
+  type: 'session-interrupt';
+  atActionIdx: number;
+  detectedAt: string;
+  resumedAt?: string;
+  identityChanged?: boolean;
 }
 
 export interface RecordedAction {
@@ -93,10 +96,7 @@ export interface RecordedRequest {
 export type AuthState = 'authenticated' | 'unauthenticated' | 'forbidden' | 'unknown';
 
 export type ExecutionOutcome =
-  | 'not_sent'
-  | 'confirmed_success'
-  | 'confirmed_failure'
-  | 'outcome_unknown';
+  'not_sent' | 'confirmed_success' | 'confirmed_failure' | 'outcome_unknown';
 
 export interface ExecContext {
   // 冻结契约允许保存任意参数与步骤返回值。

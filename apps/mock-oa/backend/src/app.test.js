@@ -18,13 +18,21 @@ afterAll(async () => {
   );
 });
 
-async function login() {
-  const response = await fetch(`${baseUrl}/api/login?_nodelay=1`, {
+async function login(cookieMode = 'session') {
+  const response = await fetch(`${baseUrl}/api/login?_nodelay=1&cookieMode=${cookieMode}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: 'tester', password: 'tester' }),
   });
   return response.headers.get('set-cookie').split(';', 1)[0];
+}
+
+async function loginResponse(cookieMode) {
+  return fetch(`${baseUrl}/api/login?_nodelay=1&cookieMode=${cookieMode}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'tester', password: 'tester' }),
+  });
 }
 
 async function authenticatedSession() {
@@ -65,6 +73,15 @@ describe('T-04 Mock OA 后端骨架', () => {
       headers: { Cookie: cookie },
     });
     expect(await response.json()).toEqual({ loggedIn: true, user: 'tester' });
+  });
+
+  it('默认 session cookie 不带持久属性，persistent 模式带 Max-Age', async () => {
+    const sessionCookie = (await loginResponse('session')).headers.get('set-cookie');
+    const defaultCookie = (await loginResponse('invalid')).headers.get('set-cookie');
+    const persistentCookie = (await loginResponse('persistent')).headers.get('set-cookie');
+    expect(sessionCookie).not.toMatch(/Max-Age|Expires/i);
+    expect(defaultCookie).not.toMatch(/Max-Age|Expires/i);
+    expect(persistentCookie).toMatch(/Expires=/i);
   });
 
   it('CSRF token 与 session 绑定并保持稳定', async () => {
@@ -203,9 +220,7 @@ describe('T-05 业务接口与依赖陷阱', () => {
       reason: '响应丢失专项',
     };
 
-    await expect(
-      postJson('/api/overtime/submit?drop_response=1', body, session),
-    ).rejects.toThrow();
+    await expect(postJson('/api/overtime/submit?drop_response=1', body, session)).rejects.toThrow();
     const debug = await fetch(`${baseUrl}/api/_debug/submissions?_nodelay=1`, {
       headers: { Cookie: session.cookie },
     });

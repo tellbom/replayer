@@ -2,11 +2,23 @@ import { parseSkill, type Entry, type RecordSession } from '@dsh/core';
 
 const testEntry: Entry = {
   entry: {
-    id: 'oa', name: 'OA', via: 'direct', directUrl: 'http://oa/login',
-    landingUrlPattern: '/home', excludeUrlPatterns: [], sessionType: 'cookie',
+    id: 'oa',
+    name: 'OA',
+    via: 'direct',
+    directUrl: 'http://oa/login',
+    landingUrlPattern: '/home',
+    excludeUrlPatterns: [],
+    sessionType: 'cookie',
     sessionProbe: { url: '/api/session', okStatus: [200] },
     identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
-    loginUrlPatterns: [], loginTimeoutMs: 300_000,
+    loginUrlPatterns: [],
+    loginTimeoutMs: 300_000,
+    sessionHolding: {
+      strategy: 'daemon',
+      probeIntervalMs: 30_000,
+      stateTtlMs: 1_800_000,
+      cookieKind: 'unknown',
+    },
     credentialProvider: { type: 'none', ref: '', ttlMs: 30_000 },
   },
 };
@@ -99,7 +111,11 @@ describe('generateDraft', () => {
           type: 'click',
           text: '确定',
           scope: 'sc1',
-          target: { strategy: 'playwright', selector: 'internal:role=button[name="确定"i]', confidence: 'HIGH' },
+          target: {
+            strategy: 'playwright',
+            selector: 'internal:role=button[name="确定"i]',
+            confidence: 'HIGH',
+          },
         },
       ],
       network: [],
@@ -111,6 +127,26 @@ describe('generateDraft', () => {
     expect(skill.steps[0]?.waitAfter).toMatchObject({ scopeReady: 'sc1', settleMs: 200 });
     expect(skill.steps[1]?.requires).toEqual(['sc1']);
     expect(skill.steps[1]?.ui?.scope).toBe('sc1');
+  });
+
+  it('marks a session interruption and drops the stale scope from the first resumed action', () => {
+    const session = recording(false);
+    session.actions[1]!.scope = 'stale-listbox';
+    session.interruptions = [
+      {
+        type: 'session-interrupt',
+        atActionIdx: 1,
+        detectedAt: '2026-08-21T00:00:00.000Z',
+        resumedAt: '2026-08-21T00:00:02.000Z',
+      },
+    ];
+
+    const result = generateDraft(session);
+    expect(result.skill.steps[1]?.requires).toEqual([]);
+    expect(result.skill.steps[1]?.ui?.scope).toBeUndefined();
+    expect(result.skill._notes).toEqual(
+      expect.arrayContaining([expect.stringContaining('reentry.anchor 候选为 s2')]),
+    );
   });
 });
 

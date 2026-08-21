@@ -26,9 +26,8 @@ export function createApp() {
       secret: SESSION.secret,
       resave: false,
       saveUninitialized: false,
-      // maxAge 模拟真实企业门户的持久会话（session cookie 关闭浏览器即失效，
-      // 会导致每次重开 profile 都要重新登录——与内网门户行为不符）
-      cookie: { httpOnly: true, sameSite: 'lax', maxAge: SESSION.maxAgeMs },
+      // 默认使用更严格的 session cookie；登录接口可显式切换 persistent。
+      cookie: { httpOnly: true, sameSite: 'lax' },
     }),
   );
   app.use('/api', apiDelay);
@@ -42,6 +41,8 @@ export function createApp() {
     // 登录即建立门户认证；子系统会话由 /sso/redirect 单独建立
     request.session.portalUser = String(username);
     request.session.user = String(username);
+    const cookieMode = request.query.cookieMode === 'persistent' ? 'persistent' : 'session';
+    request.session.cookie.maxAge = cookieMode === 'persistent' ? SESSION.maxAgeMs : null;
     response.json({ loggedIn: true, user: request.session.user });
   });
 
@@ -114,7 +115,7 @@ export function createApp() {
     // 只清子系统会话，保留门户认证（真实内网拓扑）。
     // 用 regenerate 销毁旧 session 内容但保留门户态：先取出 portalUser，
     // 重建 session 后只回填门户字段——子系统字段（user）不复存在。
-    const portal = request.session.portalUser;
+    const portal = request.query.portal === '1' ? undefined : request.session.portalUser;
     request.session.regenerate((error) => {
       if (error) {
         next(error);
