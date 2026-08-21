@@ -1,4 +1,4 @@
-import { generateDraft } from '@dsh/analyzer';
+import { generateDraft, renderLocatorQualitySummary } from '@dsh/analyzer';
 import type { ILLMProvider, RecordSession } from '@dsh/core';
 import { annotate, DeepSeekProvider } from '@dsh/llm';
 import type { Command } from 'commander';
@@ -33,6 +33,7 @@ export async function runAnalyze(
   await mkdir(dirname(options.out), { recursive: true });
   await writeFile(options.out, result.yaml, 'utf8');
   process.stdout.write(`技能草稿已写入 ${options.out}\n`);
+  process.stdout.write(renderLocatorQualitySummary(result.skill));
 }
 
 async function readRecording(path: string): Promise<RecordSession> {

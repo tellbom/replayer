@@ -32,7 +32,7 @@ const draft: Skill = {
   preflight: [],
   steps: [{ id: 's1', desc: '点击', channel: 'ui', riskLevel: 'read', hasSideEffect: false, requires: [] }],
   assertions: [],
-  verification: { status: 'draft', requiresFirstRunVerification: false, verifiedAt: null, verifiedRunId: null, verifiedBy: null },
+  verification: { status: 'draft', requiresFirstRunVerification: false, verifiedAt: null, verifiedRunId: null, verifiedBy: null, verifiedTtlDays: 30, rerecordReason: null },
 };
 
 describe('annotate', () => {

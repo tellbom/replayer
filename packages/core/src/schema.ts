@@ -179,6 +179,19 @@ export const SkillVerificationSchema = z.object({
   verifiedAt: z.string().nullable().default(null),
   verifiedRunId: z.string().nullable().default(null),
   verifiedBy: z.string().nullable().default(null),
+  verifiedTtlDays: z.number().default(30),
+  rerecordReason: z
+    .object({
+      at: z.string(),
+      stepId: z.string(),
+      kind: z.enum([
+        'not-found', 'strict-multiple', 'semantic-drift',
+        'scope-missing', 'frame-missing', 'action-failed',
+      ]),
+      detail: z.string(),
+    })
+    .nullable()
+    .default(null),
 });
 
 type UiActionName =

@@ -6,6 +6,9 @@ import {
   OutcomeUnknownError,
   StepExecutionError,
   resolveTemplate,
+  SemanticDriftError,
+  SkillNeedsRerecordError,
+  ScopeNotReadyError,
 } from '@dsh/core';
 import type {
   ExecContext,
@@ -47,6 +50,12 @@ export interface ReplayOptions {
 
 /** 回放统一入口；各执行器按任务顺序接入此编排。 */
 export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResult> {
+  refreshVerification(skill);
+  if (skill.verification.status === 'needs_rerecord') {
+    throw new SkillNeedsRerecordError(
+      `Skill ${skill.skill.id} 已标记为需要重新录制：${skill.verification.rerecordReason?.detail ?? '页面结构已变化'}`,
+    );
+  }
   if (opts.dryRun) {
     process.stdout.write(renderExecutionPlan(skill, opts));
     return { ok: true, skillId: skill.skill.id, steps: [], extracted: {}, reentryCount: 0 };
@@ -198,6 +207,8 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
       }
       return runResult;
     } catch (error) {
+      const failedStep = skill.steps.find((step) => step.id === currentStepId);
+      if (failedStep) markSkillNeedsRerecord(skill, failedStep, error);
       const diagnosticDir = await writeDiagnosticBundle({
         page,
         stepId: currentStepId,
@@ -212,6 +223,42 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
   } finally {
     await lease.release();
   }
+}
+
+export function refreshVerification(skill: Skill, now = new Date()): void {
+  const verification = skill.verification;
+  if (verification.status !== 'verified' || !verification.verifiedAt) return;
+  const ageMs = now.getTime() - new Date(verification.verifiedAt).getTime();
+  if (ageMs <= verification.verifiedTtlDays * 86_400_000) return;
+  verification.status = 'draft';
+  verification.requiresFirstRunVerification = true;
+}
+
+export function markSkillNeedsRerecord(skill: Skill, step: Step, error: unknown): void {
+  const classified = classifyRerecordFailure(step, error);
+  skill.verification.status = 'needs_rerecord';
+  skill.verification.rerecordReason = {
+    at: new Date().toISOString(),
+    stepId: step.id,
+    kind: classified.kind,
+    detail: classified.detail,
+  };
+}
+
+function classifyRerecordFailure(
+  step: Step,
+  error: unknown,
+): { kind: NonNullable<Skill['verification']['rerecordReason']>['kind']; detail: string } {
+  const detail = error instanceof Error ? error.message : String(error);
+  if (error instanceof SemanticDriftError) return { kind: 'semantic-drift', detail };
+  if (error instanceof ScopeNotReadyError) return { kind: 'scope-missing', detail };
+  if (error instanceof LocatorNotFoundError) {
+    const count = /实际\s*(\d+)/.exec(detail)?.[1];
+    if (count && Number(count) > 1) return { kind: 'strict-multiple', detail };
+    if (step.ui?.target?.strategy === 'frame-playwright') return { kind: 'frame-missing', detail };
+    if (count === '0') return { kind: 'not-found', detail };
+  }
+  return { kind: 'action-failed', detail };
 }
 
 async function resolveNetworkOutcome(
@@ -396,6 +443,7 @@ async function confirmStep(
   context: ExecContext,
   opts: ReplayOptions,
 ): Promise<boolean> {
+  // verified 只免除首次全流程监督；write/critical 的 C6 每次执行确认始终独立保留。
   if (step.riskLevel === 'read') return true;
   return opts.onConfirm ? opts.onConfirm(step, context) : true;
 }

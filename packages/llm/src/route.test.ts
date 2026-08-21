@@ -28,7 +28,7 @@ const skill: Skill = {
   preflight: [],
   steps: [],
   assertions: [],
-  verification: { status: 'draft', requiresFirstRunVerification: false, verifiedAt: null, verifiedRunId: null, verifiedBy: null },
+  verification: { status: 'draft', requiresFirstRunVerification: false, verifiedAt: null, verifiedRunId: null, verifiedBy: null, verifiedTtlDays: 30, rerecordReason: null },
 };
 
 function mockLLM(response: object): ILLMProvider {

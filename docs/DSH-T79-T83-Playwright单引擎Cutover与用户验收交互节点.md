@@ -57,6 +57,8 @@ recordedHint:
 
 `recordedHint` 仅用于提示、日志、首次验证和诊断，不得偷偷转成框架特化 Locator。
 
+【T-84 补充】`recordedHint` 同时作为 LOW 步骤的执行前置语义断言；只做同源字符串归一化精确比对，详见《DSH-T84-LOW语义漂移防护与状态机契约澄清》。“不得转成框架特化 Locator”的产品裁决不变。
+
 ## 3. Skill 生命周期
 
 状态：
@@ -322,6 +324,8 @@ Playwright 单引擎
 本测试不是要求自动发现，而是记录：
 `Accepted product limitation`
 
+【T-84 补充】本场景已拆分为 V8-a（漂移到不同语义，必须硬停）与 V8-b（漂移到相同语义，Accepted product limitation）。
+
 防止后续 Agent 再把它扩成复杂自愈任务。
 
 ## 14. T-82 最终报告格式
@@ -340,6 +344,14 @@ T74:
 
 HIGH steps:
 LOW steps:
+  可语义校验:
+  无法校验:
+
+T-84 语义漂移防护:
+  V8-a (漂移到不同语义):  PASS / FAIL
+  V8-b (漂移到相同语义):  Accepted product limitation
+  V9-V17:                 PASS / FAIL
+  假阳性次数:
 
 LOW supervised verification:
 PASS / FAIL

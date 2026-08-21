@@ -1,6 +1,8 @@
-import { LocatorNotFoundError, ScopeNotReadyError, resolveTemplate } from '@dsh/core';
+import { LocatorNotFoundError, SemanticDriftError, ScopeNotReadyError, resolveTemplate } from '@dsh/core';
 import type { ExecContext, LocatorStrategy, ParamDefinition, Step, StepResult } from '@dsh/core';
 import type { Locator, Page } from 'playwright';
+
+import { assertLowSemantic } from './semantic-guard.js';
 
 type UiAction = NonNullable<Step['ui']>;
 
@@ -22,6 +24,17 @@ export async function executeUiStep(
   }
 
   try {
+    if (
+      (action.target?.strategy === 'playwright' || action.target?.strategy === 'frame-playwright') &&
+      action.target.confidence === 'LOW' &&
+      action.recordedHint
+    ) {
+      await assertLowSemantic(
+        await resolvePlaywrightTarget(page, action, context),
+        action.recordedHint,
+        step.id,
+      );
+    }
     const requestWait = step.waitAfter?.requestUrlPattern
       ? page.waitForResponse(
           (response) => response.url().includes(step.waitAfter!.requestUrlPattern!),
@@ -42,7 +55,7 @@ export async function executeUiStep(
       raw: action.action === 'readValue' ? { text: JSON.stringify(value) } : undefined,
     };
   } catch (error) {
-    if (error instanceof ScopeNotReadyError) throw error;
+    if (error instanceof ScopeNotReadyError || error instanceof SemanticDriftError) throw error;
     throw locatorFailure(step, action.target ?? shortcutTarget(action), error);
   }
 }

@@ -11,6 +11,25 @@ export class LocatorNotFoundError extends DSHError {
   readonly code = 'LOCATOR_NOT_FOUND';
 }
 
+export class SemanticDriftError extends DSHError {
+  readonly code = 'SEMANTIC_DRIFT';
+
+  constructor(
+    readonly stepId: string,
+    readonly recordedText: string,
+    readonly currentText: string,
+  ) {
+    super(
+      `步骤 ${stepId}：录制时此处为「${recordedText}」，当前为「${currentText}」。` +
+      '该位置型定位已发生语义漂移；为避免错误业务操作，执行已停止，请重新录制。',
+    );
+  }
+}
+
+export class SkillNeedsRerecordError extends DSHError {
+  readonly code = 'SKILL_NEEDS_RERECORD';
+}
+
 export class ScopeNotReadyError extends DSHError {
   readonly code = 'SCOPE_NOT_READY';
 }

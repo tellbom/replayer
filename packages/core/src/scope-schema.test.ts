@@ -82,6 +82,7 @@ describe('T-79 LOW 与 Skill 验证契约', () => {
     expect(skill.verification).toEqual({
       status: 'draft', requiresFirstRunVerification: false,
       verifiedAt: null, verifiedRunId: null, verifiedBy: null,
+      verifiedTtlDays: 30, rerecordReason: null,
     });
     expect(skill.steps[0]?.ui?.recordedHint?.visibleText).toBe('开始时间');
   });
