@@ -177,6 +177,16 @@ describe('统一脱敏器', () => {
     expect(result.sanitizeMode).toBe('fallback');
     expect(result.value).not.toContain('secret-token');
   });
+
+  it('缓存响应缺少 content-type 时仍结构化处理有效 JSON', () => {
+    const result = createSanitizer().sanitizeBodyWithMode(
+      '{"token":"secret-token"}',
+      '',
+    );
+
+    expect(result.sanitizeMode).toBe('structured');
+    expect(result.value).not.toContain('secret-token');
+  });
 });
 
 describe('错误代码契约', () => {

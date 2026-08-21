@@ -92,6 +92,7 @@ export function createSanitizer(): Sanitizer {
 
   const sanitizeBodyWithMode = (body: string, contentType: string): SanitizedBody => {
     const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase();
+    if (body.length === 0) return { value: body, sanitizeMode: 'none' };
     try {
       if (mediaType === 'application/json' || mediaType?.endsWith('+json')) {
         return { value: JSON.stringify(sanitizeUnknown(JSON.parse(body))), sanitizeMode: 'structured' };
@@ -113,7 +114,9 @@ export function createSanitizer(): Sanitizer {
       if (mediaType === 'text/html') {
         return { value: sanitizeHiddenInputs(body, fingerprint), sanitizeMode: 'structured' };
       }
-      if (body.length === 0) return { value: body, sanitizeMode: 'none' };
+      if ((mediaType === '' || mediaType === undefined) && /^[\s]*[\[{]/.test(body)) {
+        return { value: JSON.stringify(sanitizeUnknown(JSON.parse(body))), sanitizeMode: 'structured' };
+      }
     } catch {
       return { value: sanitizeText(body), sanitizeMode: 'fallback' };
     }

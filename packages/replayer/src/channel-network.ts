@@ -65,7 +65,7 @@ export async function executeNetworkStep(
         outcome: 'outcome_unknown',
         channelUsed: 'network',
         durationMs: Date.now() - startedAt,
-        error: result.error,
+        error: `status=null: ${result.error ?? 'fetch failed'}`,
       };
     }
     lastRaw = { status: result.status, text: result.text ?? undefined };

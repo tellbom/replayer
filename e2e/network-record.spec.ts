@@ -9,9 +9,9 @@ const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js',
 test('network-record: 加班请求按发出时间录入并结构化脱敏', async ({ page }) => {
   await page.addInitScript({ content: locatorScript });
   await login(page);
+  const recording = startNetworkRecording(page);
   await page.goto('/overtime/apply');
   await expect(page.getByRole('heading', { name: '加班申请' })).toBeVisible();
-  const recording = startNetworkRecording(page);
 
   await page.evaluate(async () => {
     const locator = window.__DSH_LOCATOR__;
@@ -42,6 +42,11 @@ test('network-record: 加班请求按发出时间录入并结构化脱敏', asyn
   expect(submit).toBeDefined();
   expect(approver?.sanitizeMode).toBe('structured');
   expect(submit?.sanitizeMode).toBe('structured');
+  expect(records.filter((record) => record.sanitizeMode === 'fallback')).toHaveLength(0);
+  expect(records.every((record) => record.sanitizeMode === 'structured')).toBe(true);
+  console.log(`T88_SANITIZE=${JSON.stringify(Object.fromEntries(
+    ['structured', 'none', 'fallback'].map((mode) => [mode, records.filter((record) => record.sanitizeMode === mode).length]),
+  ))}`);
 
   for (const record of records) {
     expect(record.responseTs).not.toBeNull();

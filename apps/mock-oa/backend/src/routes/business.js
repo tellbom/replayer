@@ -85,7 +85,18 @@ export function createBusinessRouter() {
     getSubmissions(request).push(submission);
 
     if (request.query.drop_response === '1') {
-      request.session.save(() => request.socket.destroy());
+      request.session.save(() => {
+        if (request.query.direct_disconnect === '1') {
+          response.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Content-Length': '64',
+          });
+          response.write('{"code":0');
+          setImmediate(() => request.socket.destroy());
+        } else {
+          request.socket.destroy();
+        }
+      });
       return;
     }
     response.json({ code: 0, no: submission.no });
