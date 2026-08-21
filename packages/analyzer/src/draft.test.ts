@@ -209,6 +209,24 @@ describe('generateDraft', () => {
     };
     expect(() => assertParametersUsed(invalid)).toThrow(/参数 'reason' 已声明但未被任何步骤引用/);
   });
+
+  it('persists high-confidence value correlation and comments low-confidence fallback', () => {
+    const session = recording(false);
+    session.network.unshift({
+      requestId: 'types', requestTs: 900, responseTs: 950, method: 'GET',
+      url: 'http://oa/api/overtime/types', resourceType: 'fetch', headers: {}, postData: null,
+      status: 200, responseBody: JSON.stringify([{ label: '工作日加班', value: 'workday' }]),
+      mutating: false, sanitizeMode: 'structured',
+    });
+    session.network.find((item) => item.requestId === 'approver')!.requestTs = 4_500;
+
+    const result = generateDraft(session);
+    const approver = result.skill.steps.find((step) => step.network?.url.includes('/approver'));
+    expect(approver?._correlation).toMatchObject({
+      method: 'request-value-match', confidence: 'high', ownerAction: approver?.id,
+    });
+    expect(result.yaml).toContain('TODO: 此请求的归属由时间窗推断（置信度低）');
+  });
 });
 
 function recording(withHistory: boolean): RecordSession {

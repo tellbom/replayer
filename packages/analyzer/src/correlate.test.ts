@@ -139,6 +139,63 @@ describe('correlate', () => {
     ];
     expect(() => correlate(session)).toThrow(/structured/);
   });
+
+  it('uses a unique request value match instead of the nearest fast-paced action', () => {
+    const session = baseSession();
+    session.actions = [
+      { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
+      { ts: 1_120, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },
+      { ts: 1_240, type: 'fill', label: '事由', value: '版本上线' },
+    ];
+    session.network = [
+      {
+        ...request('types', 900, 950), method: 'GET', postData: null, mutating: false,
+        responseBody: JSON.stringify([
+          { label: '工作日加班', value: 'workday' },
+          { label: '周末加班', value: 'weekend' },
+        ]),
+      },
+      { ...request('approver', 1_505, 1_600), postData: JSON.stringify({ type: 'workday' }) },
+    ];
+
+    const owner = correlate(session).find((step) => step.requests.some((item) => item.requestId === 'approver'));
+    expect(owner?.action?.type).toBe('select');
+    expect(owner?.requests[0]?.correlation).toMatchObject({
+      method: 'request-value-match', confidence: 'high', ownerActionIndex: 0,
+    });
+  });
+
+  it('keeps request value causality when later actions are more than 1.5 seconds apart', () => {
+    const session = baseSession();
+    session.actions = [
+      { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
+      { ts: 3_000, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },
+      { ts: 5_000, type: 'fill', label: '事由', value: '版本上线' },
+    ];
+    session.network = [
+      {
+        ...request('types', 900, 950), method: 'GET', postData: null, mutating: false,
+        responseBody: JSON.stringify([{ label: '工作日加班', value: 'workday' }]),
+      },
+      { ...request('approver', 6_700, 6_800), postData: JSON.stringify({ type: 'workday' }) },
+    ];
+
+    const owner = correlate(session).find((step) => step.requests.some((item) => item.requestId === 'approver'));
+    expect(owner?.action?.type).toBe('select');
+    expect(owner?.requests[0]?.correlation?.method).toBe('request-value-match');
+  });
+
+  it('marks the time-window fallback as low confidence', () => {
+    const session = baseSession();
+    session.actions = [{ ts: 1_000, type: 'click', text: '刷新' }];
+    session.network = [{ ...request('telemetry', 1_137, 1_200), postData: '{}' }];
+
+    const correlated = correlate(session)[0]?.requests[0]?.correlation;
+    expect(correlated).toMatchObject({
+      method: 'time-window', confidence: 'low', ownerActionIndex: 0,
+    });
+    expect(correlated?.evidence).toContain('137ms');
+  });
 });
 
 function baseSession(): RecordSession {

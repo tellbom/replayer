@@ -302,6 +302,14 @@ export const StepSchema = z.object({
   produces: ProducesSchema.optional(),
   waitAfter: WaitAfterSchema.optional(),
   pageState: z.string().optional(),
+  _correlation: z
+    .object({
+      method: z.enum(['dom-causality', 'request-value-match', 'time-window']),
+      confidence: z.enum(['high', 'low']),
+      ownerAction: z.string(),
+      evidence: z.string(),
+    })
+    .optional(),
 });
 
 export const PreflightSchema = z.object({

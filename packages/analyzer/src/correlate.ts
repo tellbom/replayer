@@ -20,6 +20,14 @@ export interface RequestDependency {
 export interface CorrelatedRequest extends RecordedRequest {
   dependsOn: RequestDependency[];
   isSubmit: boolean;
+  correlation?: RequestCorrelation;
+}
+
+export interface RequestCorrelation {
+  method: 'dom-causality' | 'request-value-match' | 'time-window';
+  confidence: 'high' | 'low';
+  ownerActionIndex: number;
+  evidence: string;
 }
 
 /**
@@ -37,7 +45,9 @@ export function correlate(session: RecordSession): CorrelatedStep[] {
   const orphanRequests: CorrelatedRequest[] = [];
 
   for (const request of requests) {
-    const actionIndex = ownerActionIndex(session.actions, request.requestTs);
+    const correlation = correlateRequest(session, request);
+    const actionIndex = correlation?.ownerActionIndex ?? -1;
+    request.correlation = correlation;
     const owner = actionIndex === -1 ? undefined : steps[actionIndex];
     if (owner) {
       owner.requests.push(request);
@@ -62,6 +72,86 @@ export function correlate(session: RecordSession): CorrelatedStep[] {
     steps.splice(insertBefore === -1 ? steps.length : insertBefore, 0, orphanStep);
   }
   return steps;
+}
+
+function correlateRequest(
+  session: RecordSession,
+  request: CorrelatedRequest,
+): RequestCorrelation | undefined {
+  const eligible = session.actions
+    .map((action, index) => ({ action, index }))
+    .filter(({ action }) => action.ts <= request.requestTs);
+
+  const responseValues = responseBodyLeaves(request).map((leaf) => String(leaf.value));
+  const domOwner = [...eligible].reverse().find(({ action }) => {
+    if (!action.produces) return false;
+    const mutation = JSON.stringify(action.produces);
+    return responseValues.some((value) => value.length > 0 && mutation.includes(value));
+  });
+  if (domOwner) {
+    const mutation = JSON.stringify(domOwner.action.produces);
+    const value = responseValues.find((candidate) => mutation.includes(candidate));
+    return {
+      method: 'dom-causality',
+      confidence: 'high',
+      ownerActionIndex: domOwner.index,
+      evidence: `响应值 ${value ?? ''} 出现在该动作的 DOM 变更中`,
+    };
+  }
+
+  const requestValues = new Set(requestBodyLeaves(request).map((leaf) => String(leaf.value)));
+  const aliases = enumAliases(session.network);
+  const valueOwners = [...eligible].reverse().filter(({ action }) =>
+    action.value !== undefined &&
+    actionValues(action.value, aliases).some((value) => requestValues.has(value)),
+  );
+  const valueOwner = valueOwners.length === 1 ? valueOwners[0] : undefined;
+  if (valueOwner) {
+    const matched = actionValues(valueOwner.action.value!, aliases).find((value) => requestValues.has(value));
+    return {
+      method: 'request-value-match',
+      confidence: 'high',
+      ownerActionIndex: valueOwner.index,
+      evidence: `请求体值 ${matched ?? ''} 匹配动作输入 ${valueOwner.action.value}`,
+    };
+  }
+
+  const timeOwner = ownerActionIndex(session.actions, request.requestTs);
+  if (timeOwner === -1) return undefined;
+  const distance = request.requestTs - session.actions[timeOwner]!.ts;
+  return {
+    method: 'time-window',
+    confidence: 'low',
+    ownerActionIndex: timeOwner,
+    evidence: `请求距最近前置动作 ${distance}ms，无 DOM 或请求值因果证据`,
+  };
+}
+
+function enumAliases(requests: RecordedRequest[]): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const request of requests) {
+    if (!request.responseBody) continue;
+    let body: unknown;
+    try {
+      body = JSON.parse(request.responseBody);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(body)) continue;
+    for (const item of body) {
+      if (typeof item !== 'object' || item === null) continue;
+      const { label, value } = item as { label?: unknown; value?: unknown };
+      if (typeof label === 'string' && (typeof value === 'string' || typeof value === 'number')) {
+        aliases.set(label, String(value));
+      }
+    }
+  }
+  return aliases;
+}
+
+function actionValues(value: string, aliases: Map<string, string>): string[] {
+  const alias = aliases.get(value);
+  return alias === undefined ? [value] : [value, alias];
 }
 
 function analyzeDependencies(requests: RecordedRequest[]): CorrelatedRequest[] {

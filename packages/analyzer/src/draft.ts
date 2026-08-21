@@ -1,6 +1,6 @@
 import { SkillSchema, UnusedParameterError } from '@dsh/core';
 import type { RecordedAction, RecordedRequest, RecordSession, Skill } from '@dsh/core';
-import { Document, isNode, isSeq } from 'yaml';
+import { Document, isMap, isNode, isSeq } from 'yaml';
 
 import { correlate, type CorrelatedRequest } from './correlate.js';
 import { detectParams } from './params.js';
@@ -76,6 +76,11 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       .filter((item): item is DraftItem & { request: CorrelatedRequest } => item.request !== null)
       .map((item) => [item.request.requestId, item.id]),
   );
+  const stepByActionIndex = new Map(
+    items
+      .filter((item) => item.sourceActionIndex >= 0)
+      .map((item) => [item.sourceActionIndex, item.id]),
+  );
   const extracts = dependencyExtracts(items);
   const steps: Skill['steps'] = items.map(
     (item) =>
@@ -85,6 +90,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
         stepByRequest,
         extracts,
         session.meta.baseUrl,
+        stepByActionIndex,
       ) as Skill['steps'][number],
   );
   const postcondition = inferPostcondition(items, params, session.meta.baseUrl);
@@ -190,6 +196,7 @@ function draftStep(
   stepByRequest: Map<string, string>,
   extracts: Map<string, Record<string, string>>,
   baseUrl: string,
+  stepByActionIndex: Map<number, string>,
 ): unknown {
   const request = item.request;
   const ui = item.action ? uiAction(item.action, params, item.afterSessionInterrupt) : undefined;
@@ -221,6 +228,16 @@ function draftStep(
     ...(item.action?.scope && !item.afterSessionInterrupt ? { requires: [item.action.scope] } : {}),
     ...(item.action?.produces ? { produces: item.action.produces } : {}),
     ...(item.action?.waitAfter ? { waitAfter: item.action.waitAfter } : {}),
+    ...(request?.correlation
+      ? {
+          _correlation: {
+            method: request.correlation.method,
+            confidence: request.correlation.confidence,
+            ownerAction: stepByActionIndex.get(request.correlation.ownerActionIndex) ?? item.id,
+            evidence: request.correlation.evidence,
+          },
+        }
+      : {}),
   };
 }
 
@@ -395,6 +412,7 @@ function renderDraftYaml(skill: Skill, hasPostcondition: boolean): string {
   commentSequence(document, 'params', ' TODO: 请复核此参数推断');
   commentSequence(document, 'preflight', ' TODO: 请复核此 preflight 推断');
   commentSequence(document, 'steps', ' TODO: 请复核此录制步骤');
+  commentLowCorrelations(document, skill);
   if (hasPostcondition) {
     const node = document.get('postcondition', true);
     if (isNode(node)) node.commentBefore = ' TODO: 请确认此查询能唯一定位本次提交';
@@ -407,6 +425,20 @@ function renderDraftYaml(skill: Skill, hasPostcondition: boolean): string {
     ].join('\n');
   }
   return document.toString({ lineWidth: 0 });
+}
+
+function commentLowCorrelations(document: Document, skill: Skill): void {
+  const sequence = document.get('steps', true);
+  if (!isSeq(sequence)) return;
+  sequence.items.forEach((item, index) => {
+    const correlation = skill.steps[index]?._correlation;
+    if (!isMap(item) || correlation?.confidence !== 'low') return;
+    item.commentBefore = [
+      item.commentBefore,
+      ' TODO: 此请求的归属由时间窗推断（置信度低）。',
+      ` ${correlation.evidence}。请确认它是否应归属于 ${correlation.ownerAction}。`,
+    ].filter(Boolean).join('\n');
+  });
 }
 
 function commentSequence(document: Document, key: string, comment: string): void {
