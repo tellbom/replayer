@@ -38,6 +38,8 @@ test('auth-state: sessionApi 200 登录 HTML 判为 unauthenticated', async ({ p
     }),
   );
   await page.goto('/login');
+  await page.evaluate(() => history.replaceState({}, '', '/neutral'));
+  await page.setContent('<main>neutral page</main>');
   await expect(
     getAuthState(page, {
       ...auth,

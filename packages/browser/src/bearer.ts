@@ -30,7 +30,7 @@ export async function getLiveAuthHeader(page: Page, source: BearerSource): Promi
           }
         }
         return null;
-      }, source.key ?? 'token|auth|kc-');
+      }, source.key ?? 'token|auth|bearer');
 
     case 'global':
       return page.evaluate((path) => {

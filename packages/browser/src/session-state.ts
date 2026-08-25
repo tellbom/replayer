@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export interface SessionState {
@@ -31,6 +31,7 @@ export async function readLiveSession(
     process.kill(state.pid, 0);
     return state;
   } catch {
+    await rm(sessionStatePath(stateDir, entryId), { force: true });
     return null;
   }
 }

@@ -62,6 +62,8 @@ test('T-92 非 JSON 响应只按通用登录证据判定，403 保持 forbidden'
   await expect(probeEntryAuthState(page, entry)).resolves.toBe('forbidden');
 
   await page.unroute('**/probe-state');
+  await page.evaluate(() => history.replaceState({}, '', '/neutral'));
+  await page.setContent('<main>neutral page</main>');
   await page.route('**/probe-state', (route) =>
     route.fulfill({ status: 200, contentType: 'text/html', body: '<main>indeterminate</main>' }),
   );

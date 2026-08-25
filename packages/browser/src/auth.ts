@@ -1,6 +1,9 @@
 import { ForbiddenError, LoginTimeoutError, TIMEOUTS, type AuthState, type Entry } from '@dsh/core';
 import type { Page } from 'playwright';
 
+import { getLiveAuthHeader } from './bearer.js';
+import { requestProbe } from './probe-request.js';
+
 export interface AuthConfig {
   probeUrl: string;
   sessionApi?: string;
@@ -8,41 +11,49 @@ export interface AuthConfig {
   loginUrlPatterns: string[];
   loginDomMarkers?: string[];
   loginTimeoutMs: number;
+  okStatus?: number[];
+  authorization?: string | null;
+  authorizationProvider?: () => Promise<string | null>;
 }
 
 export async function getAuthState(page: Page, auth: AuthConfig): Promise<AuthState> {
+  let probeText = '';
   if (auth.sessionApi) {
-    const result = await page.evaluate(async (sessionApi) => {
-      try {
-        const response = await fetch(sessionApi, { credentials: 'include' });
-        return { status: response.status, text: await response.text() };
-      } catch {
-        return null;
-      }
-    }, auth.sessionApi);
-    if (!result) return 'unknown';
+    let sessionUrl = auth.sessionApi;
+    try {
+      sessionUrl = new URL(auth.sessionApi, page.url()).href;
+    } catch {
+      // requestProbe 会把不可解析或不可达的请求归为 status=0，判定链继续使用页面证据。
+    }
+    const result = await requestProbe(page, {
+      url: sessionUrl,
+      jsonPath: auth.loggedInJsonPath,
+      authorization: auth.authorizationProvider
+        ? await auth.authorizationProvider()
+        : auth.authorization,
+    });
+    probeText = result.text;
     if (result.status === 401) return 'unauthenticated';
     if (result.status === 403) return 'forbidden';
-    if (result.status < 200 || result.status >= 300) return 'unknown';
-
-    if (auth.loggedInJsonPath) {
-      try {
-        const value = readJsonPath(JSON.parse(result.text), auth.loggedInJsonPath);
-        if (typeof value === 'boolean') return value ? 'authenticated' : 'unauthenticated';
-      } catch {
-        return matchesLoginHtml(result.text, auth.loginDomMarkers)
-          ? 'unauthenticated'
-          : 'unknown';
-      }
+    const accepted = auth.okStatus
+      ? auth.okStatus.includes(result.status)
+      : result.status >= 200 && result.status < 300;
+    if (accepted && auth.loggedInJsonPath && typeof result.value === 'boolean') {
+      return result.value ? 'authenticated' : 'unauthenticated';
     }
-    if (matchesLoginHtml(result.text, auth.loginDomMarkers)) return 'unauthenticated';
-    return 'unknown';
+    if (
+      accepted
+      && !auth.loggedInJsonPath
+      && result.format === 'json'
+      && !matchesLoginHtml(result.text, auth.loginDomMarkers)
+    ) return 'authenticated';
   }
 
   if (auth.loginUrlPatterns.some((pattern) => page.url().includes(pattern))) {
     return 'unauthenticated';
   }
   if (await pageMatchesLoginMarker(page, auth.loginDomMarkers)) return 'unauthenticated';
+  if (matchesLoginHtml(probeText, auth.loginDomMarkers)) return 'unauthenticated';
   return 'unknown';
 }
 
@@ -51,15 +62,25 @@ export async function ensureLoggedIn(page: Page, auth: AuthConfig): Promise<void
   if (state === 'authenticated') return;
   if (state === 'forbidden') throw new ForbiddenError('当前用户无权访问目标系统');
   if (state === 'unknown') {
-    await page.goto(new URL(auth.probeUrl, page.url()).href);
+    let probeUrl = auth.probeUrl;
+    try {
+      probeUrl = new URL(auth.probeUrl, page.url()).href;
+    } catch {
+      // 保留原配置交给 Playwright；导航失败会作为真实导航错误上抛。
+    }
+    await page.goto(probeUrl);
     state = await getAuthState(page, auth);
     if (state === 'authenticated') return;
     if (state === 'forbidden') throw new ForbiddenError('当前用户无权访问目标系统');
-    if (state === 'unknown') throw new Error('认证状态未知，probe 后仍无法判断');
   }
 
   await page.bringToFront();
-  await showLoginHint(page);
+  await showLoginHint(
+    page,
+    state === 'unknown'
+      ? 'DSH 无法确认登录状态，请在本窗口完成登录后继续'
+      : 'DSH：请在当前窗口完成登录',
+  );
   const startedAt = Date.now();
   while (Date.now() - startedAt < auth.loginTimeoutMs) {
     await page.waitForTimeout(TIMEOUTS.loginPoll);
@@ -85,10 +106,13 @@ export async function recoverAuthentication(page: Page, auth: AuthConfig): Promi
  * 需要用户登录时只等待（横幅提示），绝不代替用户登录（C16/C17）。
  */
 export async function recoverEntryAuthentication(page: Page, entry: Entry): Promise<void> {
-  await ensureLoggedIn(page, entryToAuthConfig(entry));
+  await ensureLoggedIn(page, entryToAuthConfig(entry, () => entryAuthorization(page, entry)));
 }
 
-export function entryToAuthConfig(entry: Entry): AuthConfig {
+export function entryToAuthConfig(
+  entry: Entry,
+  authorizationProvider?: () => Promise<string | null>,
+): AuthConfig {
   return {
     probeUrl: entry.entry.directUrl ?? entry.entry.portalUrl ?? entry.entry.landingUrlPattern,
     sessionApi: entry.entry.sessionProbe.url,
@@ -96,7 +120,16 @@ export function entryToAuthConfig(entry: Entry): AuthConfig {
     loginUrlPatterns: entry.entry.loginUrlPatterns,
     loginDomMarkers: entry.entry.loginDomMarkers,
     loginTimeoutMs: entry.entry.loginTimeoutMs,
+    okStatus: entry.entry.sessionProbe.okStatus,
+    authorizationProvider,
   };
+}
+
+async function entryAuthorization(page: Page, entry: Entry): Promise<string | null> {
+  if (!['bearer', 'mixed'].includes(entry.entry.sessionType) || !entry.entry.bearerSource) {
+    return null;
+  }
+  return getLiveAuthHeader(page, entry.entry.bearerSource);
 }
 
 export function classifyAuthFromResponse(
@@ -110,11 +143,12 @@ export function classifyAuthFromResponse(
   return null;
 }
 
-async function showLoginHint(page: Page): Promise<void> {
-  await page.evaluate(() => {
+async function showLoginHint(page: Page, message: string): Promise<void> {
+  await page.evaluate((text) => {
+    document.querySelector('#__dsh_login_hint__')?.remove();
     const hint = document.createElement('div');
     hint.id = '__dsh_login_hint__';
-    hint.textContent = 'DSH：请在当前窗口完成登录';
+    hint.textContent = text;
     Object.assign(hint.style, {
       position: 'fixed',
       inset: '0 0 auto 0',
@@ -124,22 +158,12 @@ async function showLoginHint(page: Page): Promise<void> {
       background: '#1677ff',
       textAlign: 'center',
     });
-    document.body.append(hint);
-  });
+    (document.body ?? document.documentElement).append(hint);
+  }, message);
 }
 
 async function removeLoginHint(page: Page): Promise<void> {
   await page.evaluate(() => document.querySelector('#__dsh_login_hint__')?.remove());
-}
-
-function readJsonPath(value: unknown, path: string): unknown {
-  const segments = path.replace(/^\$\.?/, '').split('.').filter(Boolean);
-  let current = value;
-  for (const segment of segments) {
-    if (typeof current !== 'object' || current === null || !(segment in current)) return undefined;
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
 }
 
 function matchesLoginHtml(html: string, markers: string[] | undefined): boolean {

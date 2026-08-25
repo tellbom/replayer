@@ -1,7 +1,7 @@
 import {
   ensureEntry,
   launchDSHContext,
-  probeSession,
+  probeEntryAuthState,
   readIdentityDigest,
   type SessionState,
 } from '@dsh/browser';
@@ -37,7 +37,19 @@ export async function runSessionDaemon(options: DaemonOptions): Promise<void> {
   };
   await writeState(options.statePath, baseState);
 
-  const session = await ensureEntry(page, entry);
+  let session: Awaited<ReturnType<typeof ensureEntry>>;
+  try {
+    session = await ensureEntry(page, entry);
+  } catch (error) {
+    await writeState(options.statePath, {
+      ...baseState,
+      status: 'invalid',
+      lastProbeAt: new Date().toISOString(),
+      pageUrl: page.url(),
+    });
+    await context.close();
+    throw error;
+  }
   let state: SessionState = {
     ...baseState,
     status: 'active',
@@ -52,7 +64,27 @@ export async function runSessionDaemon(options: DaemonOptions): Promise<void> {
     if (probing) return;
     probing = true;
     void (async () => {
-      const valid = await probeSession(page, entry);
+      const authState = await probeEntryAuthState(page, entry);
+      if (authState !== 'authenticated' && authState !== 'forbidden') {
+        state = {
+          ...state,
+          status: 'starting',
+          lastProbeAt: new Date().toISOString(),
+          pageUrl: page.url(),
+        };
+        await writeState(options.statePath, state);
+        const recovered = await ensureEntry(page, entry);
+        state = {
+          ...state,
+          status: 'active',
+          identityDigest: recovered.identityDigest,
+          lastProbeAt: new Date().toISOString(),
+          pageUrl: page.url(),
+        };
+        await writeState(options.statePath, state);
+        return;
+      }
+      const valid = authState === 'authenticated';
       state = {
         ...state,
         status: valid ? 'active' : 'invalid',
@@ -62,9 +94,19 @@ export async function runSessionDaemon(options: DaemonOptions): Promise<void> {
       };
       await writeState(options.statePath, state);
       if (!valid) await page.bringToFront();
-    })().finally(() => {
-      probing = false;
-    });
+    })()
+      .catch(async () => {
+        state = {
+          ...state,
+          status: 'invalid',
+          lastProbeAt: new Date().toISOString(),
+          pageUrl: page.url(),
+        };
+        await writeState(options.statePath, state);
+      })
+      .finally(() => {
+        probing = false;
+      });
   }, entry.entry.sessionHolding.probeIntervalMs);
 
   await new Promise<void>((resolveStop) => {

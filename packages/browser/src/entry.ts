@@ -3,7 +3,7 @@ import type { AuthState, Entry } from '@dsh/core';
 import { createHash } from 'node:crypto';
 import type { Page } from 'playwright';
 
-import { ensureLoggedIn, entryToAuthConfig } from './auth.js';
+import { ensureLoggedIn, entryToAuthConfig, getAuthState } from './auth.js';
 import { getLiveAuthHeader } from './bearer.js';
 import { settleNavigation } from './context.js';
 import { requestProbe } from './probe-request.js';
@@ -43,15 +43,21 @@ export async function ensureEntry(page: Page, entry: Entry): Promise<EntrySessio
     await enterViaPortal(page, entry);
   }
 
+  // 3. 会话确认。先确认认证再等待落地，避免登录页上的 30 秒无横幅死等。
+  let authState = await probeEntryAuthState(page, entry);
+  if (authState !== 'authenticated') {
+    // 门户/子系统要求登录：等待用户完成，不代替用户登录
+    await ensureLoggedIn(page, entryToAuthConfig(entry, () => liveAuthorization(page, entry)));
+    authState = 'authenticated';
+  }
+
+  if (entry.entry.via === 'direct' && !urlMatches(page.url(), entry.entry.landingUrlPattern)) {
+    await page.goto(entry.entry.directUrl ?? entry.entry.landingUrlPattern);
+    await settleNavigation(page);
+  }
+
   // 【C19】等待通过一次性认证跳转（只等待，不记录、不重放）
   await waitForLanding(page, entry);
-
-  // 3. 会话确认
-  const authState = (await probeSession(page, entry)) ? 'authenticated' : 'unauthenticated';
-  if (authState === 'unauthenticated') {
-    // 门户/子系统要求登录：等待用户完成，不代替用户登录
-    await ensureLoggedIn(page, entryToAuthConfig(entry));
-  }
 
   // 4. 身份摘要
   return { authState, identityDigest: await readIdentityDigest(page, entry), reused: false };
@@ -70,7 +76,7 @@ async function enterViaPortal(page: Page, entry: Entry): Promise<void> {
   } catch {
     // 门户未登录：部分门户会把 401 重定向到自身登录页（当前页面可能已不在门户）。
     // 等待用户完成认证后，重新回到门户页找入口链接。
-    await ensureLoggedIn(page, entryToAuthConfig(entry));
+    await ensureLoggedIn(page, entryToAuthConfig(entry, () => liveAuthorization(page, entry)));
     await page.goto(portalUrl);
     await settleNavigation(page);
     await link.waitFor({ state: 'visible', timeout: TIMEOUTS.entryProbe });
@@ -99,28 +105,9 @@ export async function probeSession(page: Page, entry: Entry): Promise<boolean> {
 
 /** 基于 HTTP 状态、结构化值与登录页证据判定；不依赖端点名或认证产品。 */
 export async function probeEntryAuthState(page: Page, entry: Entry): Promise<AuthState> {
-  const probe = entry.entry.sessionProbe;
-  const result = await requestProbe(page, {
-    url: new URL(probe.url, page.url()).href,
-    jsonPath: probe.jsonPath,
-    authorization: await liveAuthorization(page, entry),
+  return getAuthState(page, {
+    ...entryToAuthConfig(entry, () => liveAuthorization(page, entry)),
   });
-  if (result.status === 401) return 'unauthenticated';
-  if (result.status === 403) return 'forbidden';
-  if (!probe.okStatus.includes(result.status)) return 'unknown';
-  if (result.format !== 'json') {
-    return result.format === 'text' && matchesLoginEvidence(result.text, entry.entry.loginDomMarkers)
-      ? 'unauthenticated'
-      : 'unknown';
-  }
-  // 配置了 jsonPath 时按布尔值判定（$.loggedIn=false → 会话无效），
-  // 未配置则仅按状态码（与 v1 AuthConfig 语义一致）
-  if (probe.jsonPath) {
-    return typeof result.value === 'boolean'
-      ? (result.value ? 'authenticated' : 'unauthenticated')
-      : 'unknown';
-  }
-  return 'authenticated';
 }
 
 /** 【C21】身份摘要：只取 identityProbe 指定的标识字段，立即摘要，不保留原值。 */
@@ -142,15 +129,4 @@ async function liveAuthorization(page: Page, entry: Entry): Promise<string | nul
   return entry.entry.bearerSource
     ? getLiveAuthHeader(page, entry.entry.bearerSource)
     : null;
-}
-
-function matchesLoginEvidence(text: string, markers: string[] | undefined): boolean {
-  if (!markers?.length) return false;
-  return markers.some((marker) => {
-    if (marker === 'form') return /<form\b/i.test(text);
-    if (/^input\[type=["']?password["']?\]$/i.test(marker)) {
-      return /<input\b[^>]*type=["']password["']/i.test(text);
-    }
-    return text.includes(marker);
-  });
 }

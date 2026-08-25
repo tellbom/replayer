@@ -1,5 +1,5 @@
 import type { Entry } from '@dsh/core';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -21,6 +21,7 @@ describe('T-76 会话策略', () => {
   it('进程已退出时如实拒绝', async () => {
     const root = await stateDir({ status: 'active', pid: 2_147_483_647 });
     await expect(resolveSessionEndpoint(entry('daemon'), root)).rejects.toThrow('无常驻会话');
+    await expect(access(join(root, 'session-oa.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('invalid 会话不得被录制或回放复用', async () => {

@@ -1,0 +1,10 @@
+{
+  "name": "mock-portal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "start-all": "node start-all.mjs"
+  }
+}

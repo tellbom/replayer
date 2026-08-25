@@ -75,7 +75,7 @@ export async function locateBearerSource(
   triggerUrl?: string,
 ): Promise<BearerSource> {
   const fromStorage = await page.evaluate(() => {
-    const re = /token|auth|kc-/i;
+    const re = /token|auth|bearer/i;
     for (const store of [sessionStorage, localStorage]) {
       for (const k of Object.keys(store)) {
         if (!re.test(k)) continue;
@@ -91,14 +91,31 @@ export async function locateBearerSource(
     }
     return null;
   });
-  if (fromStorage) return { strategy: 'storage', key: 'token|auth|kc-' };
+  if (fromStorage) return { strategy: 'storage', key: 'token|auth|bearer' };
 
   const fromGlobal = await page.evaluate(() => {
-    // 常见全局挂载点：keycloak.token
-    const kc = (window as unknown as Record<string, unknown>).keycloak as
-      | { token?: string }
-      | undefined;
-    return kc?.token ? 'keycloak.token' : null;
+    const tokenKey = /token|auth|bearer/i;
+    const root = window as unknown as Record<string, unknown>;
+    for (const rootKey of Object.keys(root)) {
+      let value: unknown;
+      try {
+        value = root[rootKey];
+      } catch {
+        continue;
+      }
+      if (!value || typeof value !== 'object') continue;
+      for (const key of Object.keys(value)) {
+        if (!tokenKey.test(key)) continue;
+        let candidate: unknown;
+        try {
+          candidate = (value as Record<string, unknown>)[key];
+        } catch {
+          continue;
+        }
+        if (typeof candidate === 'string' && candidate) return `${rootKey}.${key}`;
+      }
+    }
+    return null;
   });
   if (fromGlobal) return { strategy: 'global', globalPath: fromGlobal };
 
