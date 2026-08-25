@@ -1,13 +1,20 @@
-import type { RecordSession } from '@dsh/core';
+import type { RecordedRequest, RecordSession } from '@dsh/core';
 import { describe, expect, it } from 'vitest';
 
 import { detectParams } from './params.js';
+
+const NO_CAUSALITY = {
+  actionIdx: null,
+  causality: 'none',
+  causalityDebug: null,
+} as const satisfies Pick<RecordedRequest, 'actionIdx' | 'causality' | 'causalityDebug'>;
 
 describe('detectParams', () => {
   it('uses the standard DOM name instead of a business-label dictionary', () => {
     const session = recording('工作日加班', 'unused');
     session.actions = [{ ts: 1, type: 'select', label: '请假类型', name: 'type', value: '年假' }];
     session.network = [{
+      ...NO_CAUSALITY,
       requestId: 'types', requestTs: 0.5, responseTs: 0.8, method: 'GET',
       url: 'http://oa/api/leave/types', resourceType: 'fetch', headers: {}, postData: null,
       status: 200, responseBody: JSON.stringify([{ label: '年假', value: 'annual' }]),
@@ -57,6 +64,7 @@ describe('detectParams', () => {
   it('collects the complete enum map from a recorded options response', () => {
     const session = recording('工作日加班', '版本上线');
     session.network.unshift({
+      ...NO_CAUSALITY,
       requestId: 'types', requestTs: 0.5, responseTs: 0.8, method: 'GET',
       url: 'http://oa/api/overtime/types', resourceType: 'fetch', headers: {}, postData: null,
       status: 200,
@@ -87,6 +95,13 @@ function recording(type: string, reason: string): RecordSession {
     ],
     network: [
       {
+        ...NO_CAUSALITY,
+        actionIdx: 0,
+        causality: 'active-action',
+        causalityDebug: {
+          targetKey: 'select|type|select-one|0', kind: 'select', valueAtRequest: type,
+          msSinceTouched: 10,
+        },
         requestId: 'approver',
         requestTs: 1.5,
         responseTs: 1.8,

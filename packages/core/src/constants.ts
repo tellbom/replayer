@@ -33,6 +33,12 @@ export const DEPENDENCY = {
   minNumberAbs: 1000,
 } as const;
 
+/** Browser-observed action/request causality windows. */
+export const CAUSALITY = {
+  activeWindowMs: 1_500,
+  blurGraceMs: 300,
+} as const;
+
 export const NOISE_PATTERNS: RegExp[] = [
   /\.(js|css|png|jpe?g|gif|svg|woff2?|ttf|ico|map)(\?|$)/i,
   /\/(heartbeat|ping|track|collect|analytics|log|sockjs|__vite)/i,

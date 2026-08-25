@@ -120,6 +120,17 @@ export interface RecordedAction {
 
 export type SanitizeMode = 'structured' | 'fallback' | 'none';
 
+export interface ActiveAction {
+  actionIdx: number;
+  targetKey: string;
+  target: LocatorStrategy;
+  kind: 'input' | 'click' | 'select' | 'check';
+  value: string | null;
+  startedAt: number;
+  touchedAt: number;
+  blurAt: number | null;
+}
+
 export interface RecordedRequest {
   requestId: string;
   requestTs: number;
@@ -133,6 +144,14 @@ export interface RecordedRequest {
   responseBody: string | null;
   mutating: boolean;
   sanitizeMode: SanitizeMode;
+  actionIdx: number | null;
+  causality: 'active-action' | 'none';
+  causalityDebug: {
+    targetKey: string;
+    kind: string;
+    valueAtRequest: string | null;
+    msSinceTouched: number;
+  } | null;
   networkError?: string;
 }
 
@@ -232,6 +251,8 @@ declare global {
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     __DSH_RECORD__?: (action: any) => void;
+    __DSH_ACTIVE_ACTION__?: ActiveAction | null;
+    __DSH_ACTIVE_ACTION_UPDATE__?: (action: ActiveAction | null) => void;
     __DSH_RECORD_INITIAL_STATE__?: (state: RecordedFormState) => void;
     __DSH_INITIAL_FORM_STATE__?: () => void;
     __DSH_RECORDING__?: boolean;

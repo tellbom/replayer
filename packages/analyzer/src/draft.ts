@@ -21,9 +21,60 @@ export interface DraftResult {
   yaml: string;
 }
 
+/** Collapse progressive input requests using browser-observed causality, never endpoint names. */
+export function collapseIntermediateRequests(
+  requests: RecordedRequest[],
+): RecordedRequest[] {
+  const groups = new Map<string, Array<{ request: RecordedRequest; value: string }>>();
+  for (const request of requests) {
+    if (request.mutating || request.actionIdx === null || request.actionIdx === undefined) continue;
+    if (request.causality !== 'active-action' || request.causalityDebug?.kind !== 'input') continue;
+    const value = request.causalityDebug.valueAtRequest;
+    if (value === null) continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(request.url, 'http://dsh.invalid');
+    } catch {
+      continue;
+    }
+    const matchingKeys = [...parsed.searchParams.entries()]
+      .filter(([, candidate]) => candidate === value)
+      .map(([key]) => key);
+    if (matchingKeys.length !== 1) continue;
+    const activeKey = matchingKeys[0]!;
+    const shape = [...parsed.searchParams.entries()]
+      .map(([key, candidate]) => [key, key === activeKey ? '<ACTIVE_VALUE>' : candidate] as const)
+      .sort((left, right) => left[0].localeCompare(right[0]));
+    const groupKey = JSON.stringify([
+      request.actionIdx,
+      request.method,
+      parsed.origin,
+      parsed.pathname,
+      shape,
+    ]);
+    const group = groups.get(groupKey) ?? [];
+    group.push({ request, value });
+    groups.set(groupKey, group);
+  }
+
+  const discarded = new Set<RecordedRequest>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const ordered = [...group].sort((left, right) => left.request.requestTs - right.request.requestTs);
+    const progressive = ordered.every((item, index) =>
+      index === 0 || (item.value.length >= ordered[index - 1]!.value.length
+        && item.value.includes(ordered[index - 1]!.value)),
+    );
+    if (!progressive) continue;
+    ordered.slice(0, -1).forEach((item) => discarded.add(item.request));
+  }
+  return requests.filter((request) => !discarded.has(request));
+}
+
 /** 将一次录制转为可校验、待人工复核的技能草稿。 */
 export function generateDraft(session: RecordSession, secondSession?: RecordSession): DraftResult {
-  const correlated = correlate(session);
+  const analysisSession = { ...session, network: collapseIntermediateRequests(session.network) };
+  const correlated = correlate(analysisSession);
   const params = detectParams(session, secondSession).map((candidate) => candidate.definition);
   const items: DraftItem[] = [];
   const interruptionIndexes = new Set(session.interruptions?.map((item) => item.atActionIdx) ?? []);
@@ -90,7 +141,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     ...(session.initialFormState ?? []).map((state) => ({ ...state })),
   ];
   const extracts = dependencyExtracts(items, params, recordedInputs);
-  const preflight = detectPreflight(session);
+  const preflight = detectPreflight(analysisSession);
   const steps: Skill['steps'] = items.map(
     (item) =>
       draftStep(
@@ -106,6 +157,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   const provenanceNotes = guardMutatingBodyLiterals(
     steps,
     new Set(preflight.map((item) => item.name)),
+    items,
   );
   const postcondition = inferPostcondition(items, params, session.meta.baseUrl);
   // 【C16】技能不含 auth 段：认证载体在 entries/<id>.yaml，录制时由 record 记录 entryId。
@@ -302,10 +354,9 @@ function networkAction(
     ? 'form'
     : 'json';
   const body = requestBody(request, contentType);
-  parameterizeBody(body, params);
+  parameterizeBody(body, params, recordedInputs);
   for (const dependency of request.dependsOn) {
-    const targetParam = params.find((param) => dependency.to.split('.').at(-1) === param.name);
-    if (targetParam) continue;
+    if (isTracedTemplate(readBodyPath(body, dependency.to))) continue;
     const dependencyPath = resolvedDependencyPath(dependency, params, recordedInputs);
     if (!dependencyPath) {
       setBodyPath(body, dependency.to, 'TODO_UNRESOLVED');
@@ -318,7 +369,7 @@ function networkAction(
   const headers = dynamicHeaders(request.headers);
   return {
     method: request.method,
-    url: parameterizeUrl(relativeUrl(request.url, baseUrl), params, recordedInputs),
+    url: parameterizeUrl(request, relativeUrl(request.url, baseUrl), params, recordedInputs),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
     contentType,
     ...(Object.keys(body).length > 0 ? { body } : {}),
@@ -385,24 +436,45 @@ function dependencyTargetName(dependency: CorrelatedRequest['dependsOn'][number]
 }
 
 function parameterizeUrl(
+  request: CorrelatedRequest,
   url: string,
   params: Skill['params'],
   recordedInputs: RecordedAction[],
 ): string {
-  return url.replace(/([?&][^=&#]+=)([^&#]*)/g, (match, prefix: string, encoded: string) => {
-    let value: string;
+  if (request.correlation?.method !== 'action-causality'
+    && request.correlation?.method !== 'request-value-match') return url;
+  const action = recordedInputs[request.correlation.ownerActionIndex];
+  const param = action ? parameterForAction(action, params) : undefined;
+  if (!action || !param) return url;
+  const candidates = new Set(parameterValues(action, param));
+  const matches: Array<{ prefix: string; encoded: string }> = [];
+  url.replace(/([?&][^=&#]+=)([^&#]*)/g, (_match, prefix: string, encoded: string) => {
     try {
-      value = decodeURIComponent(encoded.replace(/\+/g, ' '));
+      const value = decodeURIComponent(encoded.replace(/\+/g, ' '));
+      if (candidates.has(value)) matches.push({ prefix, encoded });
     } catch {
-      return match;
+      // An undecodable query leaf cannot be proven to come from the action.
     }
-    const candidates = recordedInputs
-      .filter((action) => action.value === value)
-      .map((action) => parameterForAction(action, params))
-      .filter((param): param is Skill['params'][number] => param !== undefined);
-    const unique = [...new Map(candidates.map((param) => [param.name, param])).values()];
-    return unique.length === 1 ? `${prefix}{{${unique[0]!.name}}}` : match;
+    return _match;
   });
+  if (matches.length !== 1) return url;
+  const matched = matches[0]!;
+  return url.replace(/([?&][^=&#]+=)([^&#]*)/g, (match, prefix: string, encoded: string) => {
+    return prefix === matched.prefix && encoded === matched.encoded
+      ? `${prefix}{{${param.name}${param.type === 'enum' ? '|enumValue' : ''}}}`
+      : match;
+  });
+}
+
+function parameterValues(
+  action: RecordedAction,
+  param: Skill['params'][number],
+): string[] {
+  const direct = action.value === undefined ? [] : [action.value];
+  const aliases = param.values?.flatMap((item) =>
+    item.label === action.value || item.value === action.value ? [item.label, item.value] : [],
+  ) ?? [];
+  return [...new Set([...direct, ...aliases])];
 }
 
 function parameterForAction(
@@ -426,26 +498,47 @@ function requestBody(
     : Object.fromEntries(new URLSearchParams(request.postData));
 }
 
-function parameterizeBody(body: Record<string, unknown>, params: Skill['params']): void {
-  for (const [key, value] of Object.entries(body)) {
-    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      parameterizeBody(value as Record<string, unknown>, params);
-      continue;
+function parameterizeBody(
+  body: Record<string, unknown>,
+  params: Skill['params'],
+  recordedInputs: RecordedAction[],
+): void {
+  visitBodyLeaves(body, [], (path, value, replace) => {
+    const leafName = path.at(-1);
+    const named = leafName ? params.find((candidate) => candidate.name === leafName) : undefined;
+    const namedAction = named && recordedInputs.find((action) =>
+      parameterForAction(action, params)?.name === named.name
+      && parameterValues(action, named).includes(String(value)),
+    );
+    if (named && namedAction) {
+      replace(`{{${named.name}${named.type === 'enum' ? '|enumValue' : ''}}}`);
+      return;
     }
-    const param = params.find((candidate) => candidate.name === key);
-    if (param) body[key] = `{{${param.name}${param.type === 'enum' ? '|enumValue' : ''}}}`;
-  }
+    if (typeof value !== 'string' && typeof value !== 'number') return;
+    const candidates = recordedInputs.flatMap((action) => {
+      const param = parameterForAction(action, params);
+      if (!param || !parameterValues(action, param).includes(String(value))) return [];
+      return [param];
+    });
+    const unique = [...new Map(candidates.map((param) => [param.name, param])).values()];
+    if (unique.length !== 1) return;
+    const param = unique[0]!;
+    replace(`{{${param.name}${param.type === 'enum' ? '|enumValue' : ''}}}`);
+  });
 }
 
 function guardMutatingBodyLiterals(
   steps: Skill['steps'],
   preflightNames: ReadonlySet<string>,
+  items: DraftItem[],
 ): string[] {
   const notes: string[] = [];
-  for (const step of steps) {
+  for (const [stepIndex, step] of steps.entries()) {
     if (!step.hasSideEffect || !step.network?.body) continue;
+    const paginationDefaultEvidence = items[stepIndex]?.request?.actionIdx === null;
     visitBodyLeaves(step.network.body, [], (path, value, replace) => {
-      if (isTracedTemplate(value) || isLiteralExempt(value, step.network!.url)) return;
+      if (isTracedTemplate(value)
+        || isLiteralExempt(path, value, step.network!.url, paginationDefaultEvidence)) return;
       const leafName = path.at(-1);
       if (leafName && preflightNames.has(leafName)) {
         replace(`{{${leafName}}}`);
@@ -489,8 +582,17 @@ function isTracedTemplate(value: unknown): boolean {
   return typeof value === 'string' && /^\{\{[^{}]+\}\}$/.test(value);
 }
 
-function isLiteralExempt(value: unknown, requestUrl: string): boolean {
+function isLiteralExempt(
+  path: string[],
+  value: unknown,
+  requestUrl: string,
+  paginationDefaultEvidence: boolean,
+): boolean {
   if (value === null || value === '' || typeof value === 'boolean') return true;
+  const leafName = path.at(-1);
+  if (paginationDefaultEvidence
+    && leafName
+    && ['page', 'pageSize', 'offset', 'limit'].includes(leafName)) return true;
   if (typeof value !== 'string' && typeof value !== 'number') return false;
   let pathname: string;
   try {
@@ -516,6 +618,17 @@ function setBodyPath(body: Record<string, unknown>, path: string, value: string)
   if (typeof child === 'object' && child !== null && !Array.isArray(child)) {
     setBodyPath(child as Record<string, unknown>, rest, value);
   }
+}
+
+function readBodyPath(body: Record<string, unknown>, path: string): unknown {
+  const fullPath = path.replace(/^body\.?/, '');
+  const segment = longestKeyPrefix(body, fullPath);
+  if (segment === undefined) return undefined;
+  const rest = fullPath.slice(segment.length).replace(/^\./, '');
+  const child = body[segment];
+  if (rest.length === 0) return child;
+  if (typeof child !== 'object' || child === null || Array.isArray(child)) return undefined;
+  return readBodyPath(child as Record<string, unknown>, rest);
 }
 
 function longestKeyPrefix(node: Record<string, unknown>, path: string): string | undefined {
@@ -668,10 +781,11 @@ function commentLowCorrelations(document: Document, skill: Skill): void {
   if (!isSeq(sequence)) return;
   sequence.items.forEach((item, index) => {
     const correlation = skill.steps[index]?._correlation;
-    if (!isMap(item) || correlation?.confidence !== 'low') return;
+    if (!isMap(item) || correlation?.method !== 'time-window') return;
     item.commentBefore = [
       item.commentBefore,
       ' TODO: 此请求的归属由时间窗推断（置信度低）。',
+      ' 该请求未携带 actionIdx，可能由页面自动触发而非用户操作。',
       ` ${correlation.evidence}。请确认它是否应归属于 ${correlation.ownerAction}。`,
     ].filter(Boolean).join('\n');
   });

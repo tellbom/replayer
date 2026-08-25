@@ -1,3 +1,4 @@
+import { CAUSALITY } from '@dsh/core';
 import type { ParamDefinition } from '@dsh/core';
 import type { RecordedAction, RecordSession } from '@dsh/core';
 
@@ -137,8 +138,8 @@ function mergeEnumValues(
 }
 
 function paramName(action: RecordedAction, session: RecordSession): string {
-  return networkFieldForAction(session, action)
-    || action.name
+  return action.name
+    || networkFieldForAction(session, action)
     || normalizeIdentifier(action.label)
     || action.type;
 }
@@ -161,7 +162,12 @@ function requestLeavesAfterAction(
   session: RecordSession,
   action: RecordedAction,
 ): Array<{ key: string; value: unknown }> {
-  return requestLeaves(session.network.filter((request) => request.requestTs >= action.ts));
+  const actionIdx = session.actions.indexOf(action);
+  return requestLeaves(session.network.filter((request) =>
+    request.actionIdx === actionIdx
+    || (request.actionIdx === undefined
+      && Math.abs(request.requestTs - action.ts) <= CAUSALITY.activeWindowMs),
+  ));
 }
 
 function networkValueForAction(
@@ -183,7 +189,9 @@ function requestLeavesNearAction(
     action.ts + 2_000,
   );
   return requestLeaves(session.network.filter(
-    (request) => request.requestTs >= action.ts && request.requestTs < windowEnd,
+    (request) => request.actionIdx === actionIndex
+      || (request.actionIdx === undefined
+        && request.requestTs >= action.ts && request.requestTs < windowEnd),
   ));
 }
 

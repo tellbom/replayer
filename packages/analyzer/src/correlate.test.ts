@@ -170,7 +170,7 @@ describe('correlate', () => {
     });
   });
 
-  it('keeps request value causality when later actions are more than 1.5 seconds apart', () => {
+  it('does not globally match request values outside the causality window', () => {
     const session = baseSession();
     session.actions = [
       { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
@@ -187,7 +187,10 @@ describe('correlate', () => {
 
     const owner = correlate(session).find((step) => step.requests.some((item) => item.requestId === 'approver'));
     expect(owner?.action?.type).toBe('select');
-    expect(owner?.requests[0]?.correlation?.method).toBe('request-value-match');
+    expect(owner?.requests[0]?.correlation).toMatchObject({
+      method: 'response-value-match', confidence: 'high', ownerActionIndex: 0,
+    });
+    expect(owner?.requests[0]?.correlation?.method).not.toBe('request-value-match');
   });
 
   it('marks the time-window fallback as low confidence', () => {
@@ -213,8 +216,43 @@ describe('correlate', () => {
     const owner = correlate(session).find((step) => step.requests.length > 0);
     expect(owner?.action?.value).toBe('Alexandra');
     expect(owner?.requests[0]?.correlation).toMatchObject({
-      method: 'request-value-match', confidence: 'high',
+      method: 'request-value-match', confidence: 'low',
     });
+  });
+
+  it('prefers the browser-observed action marker over weak value and time heuristics', () => {
+    const session = baseSession();
+    session.actions = [
+      { ts: 1_000, type: 'fill', label: 'Lookup', value: '1' },
+      { ts: 1_100, type: 'click', text: 'Refresh' },
+    ];
+    session.network = [{
+      ...request('lookup', 1_150, 1_200), method: 'GET', mutating: false, postData: null,
+      url: 'http://example.test/lookup?q=1',
+      actionIdx: 0,
+      causality: 'active-action',
+      causalityDebug: {
+        targetKey: 'input|query|text|0', kind: 'input', valueAtRequest: '1', msSinceTouched: 20,
+      },
+    }];
+
+    const owner = correlate(session).find((step) => step.requests.length > 0);
+    expect(owner?.action?.type).toBe('fill');
+    expect(owner?.requests[0]?.correlation).toMatchObject({
+      method: 'action-causality', confidence: 'high', ownerActionIndex: 0,
+    });
+  });
+
+  it('does not use a weak short value to bind an unmarked request', () => {
+    const session = baseSession();
+    session.actions = [{ ts: 1_000, type: 'fill', label: 'Lookup', value: '1' }];
+    session.network = [{
+      ...request('listing', 1_100, 1_200), method: 'GET', mutating: false, postData: null,
+      url: 'http://example.test/listing?page=1',
+    }];
+
+    const correlation = correlate(session)[0]?.requests[0]?.correlation;
+    expect(correlation).toMatchObject({ method: 'time-window', confidence: 'low' });
   });
 
   it('does not treat weak response scalars as DOM causality evidence', () => {
@@ -262,5 +300,8 @@ function request(id: string, requestTs: number, responseTs: number): RecordedReq
     responseBody: '{}',
     mutating: true,
     sanitizeMode: 'structured',
+    actionIdx: null,
+    causality: 'none',
+    causalityDebug: null,
   };
 }

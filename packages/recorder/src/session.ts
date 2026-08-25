@@ -1,5 +1,5 @@
 import { acquireDSHContext, ensureEntry, probeSession, settleNavigation } from '@dsh/browser';
-import type { Entry } from '@dsh/core';
+import type { ActiveAction, Entry } from '@dsh/core';
 import type { RecordSession, RecordedAction, RecordedFormState, SessionInterrupt } from '@dsh/core';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
@@ -83,6 +83,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const interruptions: SessionInterrupt[] = [...(opts.resumeSession?.interruptions ?? [])];
   let recordingEnabled = true;
   const actionByIdx = new Map<number, RecordedAction>();
+  let activeAction: ActiveAction | null = null;
   const mutationTasks = new Map<number, Promise<void>>();
   const postProcessTasks: Promise<void>[] = [];
   await page.exposeBinding(
@@ -193,6 +194,12 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       if (actions.length % 5 === 0) void persistPartial('periodic-action-checkpoint');
     },
   );
+  await page.exposeBinding(
+    '__DSH_ACTIVE_ACTION_UPDATE__',
+    (_source, snapshot: ActiveAction | null) => {
+      activeAction = snapshot;
+    },
+  );
   await page.exposeBinding('__DSH_RECORD_INITIAL_STATE__', (_source, state: RecordedFormState) => {
     initialFormState.push(state);
   });
@@ -240,6 +247,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     page,
     [...excludeMatchers, ...probeMatchers],
     () => { void persistPartial('mutating-request-started'); },
+    () => activeAction,
   );
   const partialTimer = setInterval(() => {
     void persistPartial('periodic-time-checkpoint');

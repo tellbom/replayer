@@ -3,27 +3,113 @@ let nextActionIdx = 0;
 const clickedElements: Record<number, Element> = {};
 Reflect.set(window, '__dsh_clicked__', clickedElements);
 
-function emit(action: Record<string, unknown>, clickedElement?: Element): void {
-  if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
-  if (!initialNavigationEmitted && action.type !== 'navigate') {
-    const navigationRecord = Reflect.get(window, '__DSH_RECORD__');
-    if (typeof navigationRecord === 'function') {
-      initialNavigationEmitted = true;
-      navigationRecord({
-        ts: Date.now(), actionIdx: nextActionIdx, type: 'navigate', url: location.href,
-      });
-      nextActionIdx += 1;
-    }
+interface BrowserActiveAction {
+  actionIdx: number;
+  targetKey: string;
+  target: unknown;
+  kind: 'input' | 'click' | 'select' | 'check';
+  value: string | null;
+  startedAt: number;
+  touchedAt: number;
+  blurAt: number | null;
+}
+
+let activeAction: BrowserActiveAction | null = null;
+Reflect.set(window, '__DSH_ACTIVE_ACTION__', activeAction);
+
+function pushActiveAction(): void {
+  Reflect.set(window, '__DSH_ACTIVE_ACTION__', activeAction);
+  const update = Reflect.get(window, '__DSH_ACTIVE_ACTION_UPDATE__');
+  if (typeof update === 'function') {
+    void Promise.resolve(update(activeAction)).catch(() => undefined);
   }
-  const actionIdx = nextActionIdx;
+}
+
+function targetKey(element: Element): string {
+  const container = element.closest('form, fieldset, [role="group"], [role="radiogroup"]')
+    ?? document.body
+    ?? document.documentElement;
+  const tagName = element.tagName.toLowerCase();
+  const name = element.getAttribute('name') ?? '';
+  const type = element.getAttribute('type') ?? '';
+  const peers = [...container.querySelectorAll(tagName)].filter(
+    (candidate) =>
+      (candidate.getAttribute('name') ?? '') === name
+      && (candidate.getAttribute('type') ?? '') === type,
+  );
+  return `${tagName}|${name}|${type}|${Math.max(0, peers.indexOf(element))}`;
+}
+
+function ensureInitialNavigation(): void {
+  if (initialNavigationEmitted) return;
+  const record = Reflect.get(window, '__DSH_RECORD__');
+  if (typeof record !== 'function') return;
+  initialNavigationEmitted = true;
+  record({ ts: Date.now(), actionIdx: nextActionIdx, type: 'navigate', url: location.href });
   nextActionIdx += 1;
-  if (clickedElement) {
-    clickedElements[actionIdx] = clickedElement;
-    const mutation = Reflect.get(window, '__DSH_MUTATION__') as { begin: (idx: number) => void };
-    mutation.begin(actionIdx);
+}
+
+function beginActiveAction(
+  element: Element,
+  kind: BrowserActiveAction['kind'],
+  value: string | null,
+  target: unknown,
+  reuseInput = false,
+): BrowserActiveAction {
+  ensureInitialNavigation();
+  const key = targetKey(element);
+  const now = Date.now();
+  if (reuseInput && activeAction?.kind === 'input' && activeAction.targetKey === key) {
+    activeAction = { ...activeAction, target, value, touchedAt: now, blurAt: null };
+    pushActiveAction();
+    return activeAction;
   }
+  activeAction = {
+    actionIdx: nextActionIdx,
+    targetKey: key,
+    target,
+    kind,
+    value,
+    startedAt: now,
+    touchedAt: now,
+    blurAt: null,
+  };
+  nextActionIdx += 1;
+  clickedElements[activeAction.actionIdx] = element;
+  const mutation = Reflect.get(window, '__DSH_MUTATION__') as { begin?: (idx: number) => void };
+  mutation.begin?.(activeAction.actionIdx);
+  pushActiveAction();
+  return activeAction;
+}
+
+function recordWithActionIdx(actionIdx: number, action: Record<string, unknown>): void {
   const record = Reflect.get(window, '__DSH_RECORD__');
   if (typeof record === 'function') record({ ts: Date.now(), actionIdx, ...action });
+}
+
+function emit(
+  action: Record<string, unknown>,
+  clickedElement?: Element,
+  kind?: BrowserActiveAction['kind'],
+): void {
+  if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
+  if (action.type === 'navigate') {
+    if (!initialNavigationEmitted) {
+      ensureInitialNavigation();
+    } else {
+      activeAction = null;
+      pushActiveAction();
+      recordWithActionIdx(nextActionIdx++, action);
+    }
+    return;
+  }
+  ensureInitialNavigation();
+  const value = typeof action.value === 'string' ? action.value : null;
+  const active = clickedElement && kind
+    ? beginActiveAction(clickedElement, kind, value, action.target)
+    : null;
+  const actionIdx = active?.actionIdx ?? nextActionIdx++;
+  recordWithActionIdx(actionIdx, action);
 }
 
 function generator(element: Element): unknown {
@@ -107,7 +193,7 @@ document.addEventListener(
         value: text,
         text,
         ...targetWithHint('select', option),
-      }, option);
+      }, option, 'select');
       openSelectLabel = null;
       return;
     }
@@ -121,7 +207,7 @@ document.addEventListener(
         label: openSelectLabel ?? undefined,
         text: openSelectLabel ?? undefined,
         ...targetWithHint('click', combobox),
-      }, combobox);
+      }, combobox, 'click');
       return;
     }
 
@@ -131,8 +217,45 @@ document.addEventListener(
       emit(
         { type: 'click', text: interactive.textContent?.trim(), ...targetWithHint('click', interactive) },
         interactive,
+        'click',
       );
     }
+  },
+  true,
+);
+
+function isTextInput(element: EventTarget | null): element is HTMLInputElement | HTMLTextAreaElement {
+  if (element instanceof HTMLTextAreaElement) return true;
+  if (!(element instanceof HTMLInputElement)) return false;
+  return !['button', 'checkbox', 'file', 'hidden', 'radio', 'reset', 'submit'].includes(element.type);
+}
+
+document.addEventListener(
+  'input',
+  (event) => {
+    if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
+    const target = event.target;
+    if (!isTextInput(target)) return;
+    const dateEditor = target.closest('.el-date-editor');
+    const actionType = dateEditor ? 'datetime' : 'fill';
+    const details = {
+      type: actionType,
+      label: labelFor(target),
+      value: target.value,
+      ...targetWithHint(dateEditor ? 'datetime' : 'fill', target),
+    };
+    beginActiveAction(target, 'input', target.value, details.target, true);
+  },
+  true,
+);
+
+document.addEventListener(
+  'blur',
+  (event) => {
+    const target = event.target;
+    if (!isTextInput(target) || activeAction?.targetKey !== targetKey(target)) return;
+    activeAction = { ...activeAction, blurAt: Date.now() };
+    pushActiveAction();
   },
   true,
 );
@@ -150,7 +273,7 @@ document.addEventListener(
         value: target.value,
         text: target.selectedOptions[0]?.textContent?.trim(),
         ...targetWithHint('select', target),
-      }, target);
+      }, target, 'select');
       return;
     }
     if (target instanceof HTMLInputElement && target.type === 'radio' && target.checked) {
@@ -162,7 +285,7 @@ document.addEventListener(
         text: adjacentOptionText(target),
         checked: true,
         ...targetWithHint('check', target),
-      }, target);
+      }, target, 'check');
       return;
     }
     if (target instanceof HTMLInputElement && target.type === 'checkbox') {
@@ -174,17 +297,30 @@ document.addEventListener(
         text: adjacentOptionText(target),
         checked: target.checked,
         ...targetWithHint('check', target),
-      }, target);
+      }, target, 'check');
       return;
     }
     if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) return;
     const dateEditor = target.closest('.el-date-editor');
-    emit({
+    const action = {
       type: dateEditor ? 'datetime' : 'fill',
       label: labelFor(target),
       value: target.value,
       ...targetWithHint(dateEditor ? 'datetime' : 'fill', target),
-    }, target);
+    };
+    const key = targetKey(target);
+    if (activeAction?.kind === 'input' && activeAction.targetKey === key) {
+      activeAction = {
+        ...activeAction,
+        value: target.value,
+        touchedAt: Date.now(),
+        blurAt: activeAction.blurAt,
+      };
+      pushActiveAction();
+      recordWithActionIdx(activeAction.actionIdx, action);
+    } else {
+      emit(action, target, 'input');
+    }
   },
   true,
 );

@@ -34,6 +34,9 @@ function session(type: string, reason: string, csrf: string): RecordSession {
     actions: [{ ts: 1, type: 'select', name: 'type', value: type }],
     network: [
       {
+        actionIdx: null,
+        causality: 'none',
+        causalityDebug: null,
         requestId: 'request-1',
         requestTs: 1,
         responseTs: 2,

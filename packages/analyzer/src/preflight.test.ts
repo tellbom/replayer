@@ -106,6 +106,9 @@ function request(overrides: Partial<RecordedRequest>): RecordedRequest {
     responseBody: '{}',
     mutating: true,
     sanitizeMode: 'structured',
+    actionIdx: null,
+    causality: 'none',
+    causalityDebug: null,
     ...overrides,
   };
 }

@@ -1,4 +1,4 @@
-import { DEPENDENCY } from '@dsh/core';
+import { CAUSALITY, DEPENDENCY } from '@dsh/core';
 import type { RecordedAction, RecordedRequest, RecordSession } from '@dsh/core';
 
 const ACTION_REQUEST_WINDOW_MS = 2_000;
@@ -26,7 +26,7 @@ export interface CorrelatedRequest extends RecordedRequest {
 }
 
 export interface RequestCorrelation {
-  method: 'dom-causality' | 'response-value-match' | 'request-value-match' | 'time-window';
+  method: 'action-causality' | 'dom-causality' | 'response-value-match' | 'request-value-match' | 'time-window';
   confidence: 'high' | 'low';
   ownerActionIndex: number;
   evidence: string;
@@ -81,32 +81,21 @@ function correlateRequest(
   request: CorrelatedRequest,
   correlatedRequests: CorrelatedRequest[],
 ): RequestCorrelation | undefined {
+  if (request.actionIdx !== null && request.actionIdx !== undefined) {
+    const owner = session.actions[request.actionIdx];
+    if (owner) {
+      return {
+        method: 'action-causality',
+        confidence: 'high',
+        ownerActionIndex: request.actionIdx,
+        evidence: `request carried browser-observed actionIdx=${request.actionIdx}`,
+      };
+    }
+  }
+
   const eligible = session.actions
     .map((action, index) => ({ action, index }))
     .filter(({ action }) => action.ts <= request.requestTs);
-
-  const responseValues = responseBodyLeaves(request)
-    .map((leaf) => leaf.value)
-    .filter((value) =>
-      (typeof value === 'string' && value.length >= DEPENDENCY.minStringLength) ||
-      (typeof value === 'number' && Math.abs(value) >= DEPENDENCY.minNumberAbs),
-    )
-    .map(String);
-  const domOwner = [...eligible].reverse().find(({ action }) => {
-    if (!action.produces) return false;
-    const mutation = JSON.stringify(action.produces);
-    return responseValues.some((value) => value.length > 0 && mutation.includes(value));
-  });
-  if (domOwner) {
-    const mutation = JSON.stringify(domOwner.action.produces);
-    const value = responseValues.find((candidate) => mutation.includes(candidate));
-    return {
-      method: 'dom-causality',
-      confidence: 'high',
-      ownerActionIndex: domOwner.index,
-      evidence: `响应值 ${value ?? ''} 出现在该动作的 DOM 变更中`,
-    };
-  }
 
   const responseDependencies = request.mutating
     ? request.dependsOn.flatMap((dependency) => {
@@ -145,19 +134,44 @@ function correlateRequest(
     }
   }
 
+  const responseValues = responseBodyLeaves(request)
+    .map((leaf) => leaf.value)
+    .filter((value) =>
+      (typeof value === 'string' && value.length >= DEPENDENCY.minStringLength) ||
+      (typeof value === 'number' && Math.abs(value) >= DEPENDENCY.minNumberAbs),
+    )
+    .map(String);
+  const domOwner = [...eligible].reverse().find(({ action }) => {
+    if (!action.produces) return false;
+    const mutation = JSON.stringify(action.produces);
+    return responseValues.some((value) => value.length > 0 && mutation.includes(value));
+  });
+  if (domOwner) {
+    const mutation = JSON.stringify(domOwner.action.produces);
+    const value = responseValues.find((candidate) => mutation.includes(candidate));
+    return {
+      method: 'dom-causality',
+      confidence: 'high',
+      ownerActionIndex: domOwner.index,
+      evidence: `响应值 ${value ?? ''} 出现在该动作的 DOM 变更中`,
+    };
+  }
+
   const requestValues = new Set(requestInputLeaves(request).map((leaf) => String(leaf.value)));
   const aliases = enumAliases(session.network);
-  // input 可先触发 HTTP，change/blur 动作后到；值因果不依赖固定毫秒窗口。
+  // Legacy recordings may emit change after HTTP; keep this fallback bounded.
   const valueOwners = session.actions.map((action, index) => ({ action, index })).filter(({ action }) =>
-    action.value !== undefined &&
-    actionValues(action.value, aliases).some((value) => requestValues.has(value)),
+    action.value !== undefined
+    && Math.abs(request.requestTs - action.ts) <= CAUSALITY.activeWindowMs
+    && isDiscriminativeActionValue(action.value)
+    && actionValues(action.value, aliases).some((value) => requestValues.has(value)),
   );
   const valueOwner = valueOwners.length === 1 ? valueOwners[0] : undefined;
   if (valueOwner) {
     const matched = actionValues(valueOwner.action.value!, aliases).find((value) => requestValues.has(value));
     return {
       method: 'request-value-match',
-      confidence: 'high',
+      confidence: 'low',
       ownerActionIndex: valueOwner.index,
       evidence: `请求体值 ${matched ?? ''} 匹配动作输入 ${valueOwner.action.value}`,
     };
@@ -221,6 +235,15 @@ function enumAliases(requests: RecordedRequest[]): Map<string, string> {
 function actionValues(value: string, aliases: Map<string, string>): string[] {
   const alias = aliases.get(value);
   return alias === undefined ? [value] : [value, alias];
+}
+
+function isDiscriminativeActionValue(value: string): boolean {
+  if (isFingerprint(value)) return true;
+  const numeric = Number(value);
+  if (value.trim() !== '' && Number.isFinite(numeric)) {
+    return Math.abs(numeric) >= DEPENDENCY.minNumberAbs;
+  }
+  return value.length >= DEPENDENCY.minStringLength;
 }
 
 function analyzeDependencies(
@@ -296,7 +319,6 @@ function indexedSelection(
   }
   const array = readCollectedPath(parsed, indexed[1]!);
   if (!Array.isArray(array)) return { ambiguous: true };
-  if (array.length === 1) return {};
   const selected = array[Number(indexed[2])];
   if (typeof selected !== 'object' || selected === null || Array.isArray(selected)) {
     return { ambiguous: true };

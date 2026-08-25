@@ -1,4 +1,10 @@
-import { parseSkill, type Entry, type RecordSession } from '@dsh/core';
+import { parseSkill, type Entry, type RecordedRequest, type RecordSession } from '@dsh/core';
+
+const NO_CAUSALITY = {
+  actionIdx: null,
+  causality: 'none',
+  causalityDebug: null,
+} as const satisfies Pick<RecordedRequest, 'actionIdx' | 'causality' | 'causalityDebug'>;
 
 const testEntry: Entry = {
   entry: {
@@ -25,7 +31,7 @@ const testEntry: Entry = {
 const resolver = (): ((id: string) => Entry) => () => testEntry;
 import { describe, expect, it } from 'vitest';
 
-import { assertParametersUsed, generateDraft } from './draft.js';
+import { assertParametersUsed, collapseIntermediateRequests, generateDraft } from './draft.js';
 
 describe('generateDraft', () => {
   it('creates a schema-valid YAML draft with dependency templates and TODO comments', () => {
@@ -179,6 +185,7 @@ describe('generateDraft', () => {
   it('binds enum request fields to the caller parameter and rejects indexed response templates', () => {
     const session = recording(false);
     session.network.unshift({
+      ...NO_CAUSALITY,
       requestId: 'types', requestTs: 900, responseTs: 950, method: 'GET',
       url: 'http://oa/api/overtime/types', resourceType: 'fetch', headers: {}, postData: null,
       status: 200,
@@ -223,20 +230,30 @@ describe('generateDraft', () => {
     expect(() => assertParametersUsed(invalid)).toThrow(/参数 'reason' 已声明但未被任何步骤引用/);
   });
 
-  it('persists high-confidence value correlation and comments low-confidence fallback', () => {
+  it('persists high-confidence browser action causality', () => {
     const session = recording(false);
     session.network.unshift({
+      ...NO_CAUSALITY,
       requestId: 'types', requestTs: 900, responseTs: 950, method: 'GET',
       url: 'http://oa/api/overtime/types', resourceType: 'fetch', headers: {}, postData: null,
       status: 200, responseBody: JSON.stringify([{ label: '工作日加班', value: 'workday' }]),
       mutating: false, sanitizeMode: 'structured',
     });
-    session.network.find((item) => item.requestId === 'approver')!.requestTs = 4_500;
+    const request = session.network.find((item) => item.requestId === 'approver')!;
+    request.requestTs = 4_500;
+    request.actionIdx = 0;
+    request.causality = 'active-action';
+    request.causalityDebug = {
+      targetKey: 'select|type|select-one|0',
+      kind: 'select',
+      valueAtRequest: 'workday',
+      msSinceTouched: 25,
+    };
 
     const result = generateDraft(session);
     const approver = result.skill.steps.find((step) => step.network?.url.includes('/approver'));
     expect(approver?._correlation).toMatchObject({
-      method: 'request-value-match', confidence: 'high', ownerAction: approver?.id,
+      method: 'action-causality', confidence: 'high', ownerAction: approver?.id,
     });
     expect(result.yaml).not.toContain('TODO: 此请求的归属由时间窗推断（置信度低）');
   });
@@ -263,17 +280,18 @@ describe('generateDraft', () => {
 
   it('rejects untraced write literals while exempting booleans, empty values and URL segments', () => {
     const session = genericWriteSession({
-      deliveryMode: 'ground', enabled: true, note: '', items: [], clearedAt: null, route: 'jobs',
+      deliveryMode: 'ground', enabled: true, note: '', items: [], clearedAt: null, route: 'jobs', page: 1,
     });
     const result = generateDraft(session);
     const body = result.skill.steps[0]?.network?.body;
 
     expect(body).toEqual({
-      deliveryMode: 'TODO_UNRESOLVED', enabled: true, note: '', items: [], clearedAt: null, route: 'jobs',
+      deliveryMode: 'TODO_UNRESOLVED', enabled: true, note: '', items: [], clearedAt: null, route: 'jobs', page: 1,
     });
     expect(result.skill._notes).toEqual(expect.arrayContaining([
       expect.stringContaining('deliveryMode'),
     ]));
+    expect(result.yaml).toContain('该请求未携带 actionIdx，可能由页面自动触发而非用户操作。');
     expect(() => parseSkill(result.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
   });
 
@@ -285,12 +303,63 @@ describe('generateDraft', () => {
     const write = result.skill.steps.find((step) => step.network?.method === 'POST');
 
     expect(lookup?.network?.url).toBe('/lookup?q={{Assignee}}');
-    expect(lookup?.network?.extract).toEqual({ ownerId: '$[0].identifier' });
+    expect(lookup?.network?.extract)
+      .toEqual({ ownerId: '$[?(@.display=="{{Assignee}}")].identifier' });
     expect(write?.network?.body?.ownerId).toBe(`{{${lookup?.id}.ownerId}}`);
     expect(write?._correlation).toMatchObject({
       method: 'response-value-match', confidence: 'high',
     });
     expect(() => parseSkill(result.yaml, resolver())).not.toThrow();
+  });
+
+  it('folds progressive input requests and leaves an unrelated equal short value literal', () => {
+    const active = (requestId: string, requestTs: number, value: string): RecordedRequest => ({
+      ...NO_CAUSALITY,
+      requestId,
+      requestTs,
+      responseTs: requestTs + 10,
+      method: 'GET',
+      url: `http://example.test/lookup?q=${value}`,
+      resourceType: 'fetch',
+      headers: {},
+      postData: null,
+      status: 200,
+      responseBody: '{}',
+      mutating: false,
+      sanitizeMode: 'structured',
+      actionIdx: 0,
+      causality: 'active-action',
+      causalityDebug: {
+        targetKey: 'input|query|text|0', kind: 'input', valueAtRequest: value, msSinceTouched: 10,
+      },
+    });
+    const session: RecordSession = {
+      meta: {
+        startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:02.000Z',
+        baseUrl: 'http://example.test', userAgent: 'test', entryId: 'generic',
+      },
+      actions: [{ ts: 1_000, type: 'fill', label: 'Query', name: 'query', value: '12' }],
+      network: [
+        {
+          ...NO_CAUSALITY,
+          requestId: 'listing', requestTs: 1_010, responseTs: 1_020, method: 'GET',
+          url: 'http://example.test/listing?page=1', resourceType: 'fetch', headers: {},
+          postData: null, status: 200, responseBody: '{}', mutating: false,
+          sanitizeMode: 'structured',
+        },
+        active('lookup-1', 1_100, '1'),
+        active('lookup-12', 1_200, '12'),
+      ],
+      pages: [],
+    };
+
+    expect(collapseIntermediateRequests(session.network).map((request) => request.requestId))
+      .toEqual(['listing', 'lookup-12']);
+    const result = generateDraft(session);
+    const urls = result.skill.steps.flatMap((step) => step.network?.url ?? []);
+    expect(urls).toContain('/listing?page=1');
+    expect(urls).toContain('/lookup?q={{query}}');
+    expect(urls).not.toContain('/lookup?q=1');
   });
 
   it('uses a unique user-value discriminator and rejects duplicate display values', () => {
@@ -342,11 +411,18 @@ function responseChainSession(items: Array<{ identifier: string; display: string
     ],
     network: [
       {
+        ...NO_CAUSALITY,
+        actionIdx: 0,
+        causality: 'active-action',
+        causalityDebug: {
+          targetKey: 'input|assignee|text|0', kind: 'input', valueAtRequest: 'Alex', msSinceTouched: 10,
+        },
         requestId: 'lookup', requestTs: 1_100, responseTs: 1_200, method: 'GET',
         url: 'http://example.test/lookup?q=Alex', resourceType: 'fetch', headers: {}, postData: null,
         status: 200, responseBody: JSON.stringify(items), mutating: false, sanitizeMode: 'structured',
       },
       {
+        ...NO_CAUSALITY,
         requestId: 'write', requestTs: 2_100, responseTs: 2_200, method: 'POST',
         url: 'http://example.test/jobs', resourceType: 'fetch',
         headers: { 'content-type': 'application/json' },
@@ -366,6 +442,7 @@ function genericWriteSession(body: Record<string, unknown>): RecordSession {
     },
     actions: [{ ts: 1_000, type: 'click', text: 'Send' }],
     network: [{
+      ...NO_CAUSALITY,
       requestId: 'write', requestTs: 1_100, responseTs: 1_200, method: 'POST',
       url: 'http://example.test/jobs', resourceType: 'fetch',
       headers: { 'content-type': 'application/json' }, postData: JSON.stringify(body),
@@ -379,6 +456,13 @@ function recording(withHistory: boolean): RecordSession {
   const token = '<REDACTED:sha256:123456789abc>';
   const network: RecordSession['network'] = [
     {
+      ...NO_CAUSALITY,
+      actionIdx: 0,
+      causality: 'active-action',
+      causalityDebug: {
+        targetKey: 'select|type|select-one|0', kind: 'select', valueAtRequest: 'workday',
+        msSinceTouched: 10,
+      },
       requestId: 'approver',
       requestTs: 1_100,
       responseTs: 1_200,
@@ -393,6 +477,12 @@ function recording(withHistory: boolean): RecordSession {
       sanitizeMode: 'structured',
     },
     {
+      ...NO_CAUSALITY,
+      actionIdx: 4,
+      causality: 'active-action',
+      causalityDebug: {
+        targetKey: 'button|||0', kind: 'click', valueAtRequest: null, msSinceTouched: 10,
+      },
       requestId: 'submit',
       requestTs: 5_100,
       responseTs: 5_200,
@@ -421,6 +511,7 @@ function recording(withHistory: boolean): RecordSession {
   ];
   if (withHistory) {
     network.push({
+      ...NO_CAUSALITY,
       requestId: 'history',
       requestTs: 6_100,
       responseTs: 6_200,

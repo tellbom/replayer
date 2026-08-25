@@ -1,5 +1,5 @@
-import { NOISE_PATTERNS, createSanitizer } from '@dsh/core';
-import type { RecordedRequest, SanitizeMode } from '@dsh/core';
+import { CAUSALITY, NOISE_PATTERNS, createSanitizer } from '@dsh/core';
+import type { ActiveAction, RecordedRequest, SanitizeMode } from '@dsh/core';
 import type { Page, Request, Response } from 'playwright';
 
 export interface NetworkRecording {
@@ -16,6 +16,7 @@ export function startNetworkRecording(
   page: Page,
   excludeMatchers: RegExp[] = [],
   onMutatingRequest?: (record: RecordedRequest) => void,
+  getActiveAction?: () => ActiveAction | null,
 ): NetworkRecording {
   const sanitizer = createSanitizer();
   const records: RecordedRequest[] = [];
@@ -40,9 +41,20 @@ export function startNetworkRecording(
     const initialHeaders = request.headers();
     const postData = request.postData();
     const body = sanitizeBody(postData, initialHeaders['content-type'], sanitizer);
+    const requestTs = Date.now();
+    const active = getActiveAction?.() ?? null;
+    const msSinceTouched = active ? requestTs - active.touchedAt : Number.POSITIVE_INFINITY;
+    const withinActiveWindow = active !== null
+      && msSinceTouched >= 0
+      && msSinceTouched <= CAUSALITY.activeWindowMs;
+    const withinBlurGrace = active?.blurAt === null
+      || (active !== null
+        && requestTs - active.blurAt >= 0
+        && requestTs - active.blurAt <= CAUSALITY.blurGraceMs);
+    const attributed = withinActiveWindow && withinBlurGrace ? active : null;
     const record: RecordedRequest = {
       requestId: `request-${++sequence}`,
-      requestTs: Date.now(),
+      requestTs,
       responseTs: null,
       method,
       url: sanitizer.sanitizeUrl(rawUrl),
@@ -53,6 +65,18 @@ export function startNetworkRecording(
       responseBody: null,
       mutating: method !== 'GET',
       sanitizeMode: body.mode,
+      actionIdx: attributed?.actionIdx ?? null,
+      causality: attributed ? 'active-action' : 'none',
+      causalityDebug: attributed
+        ? {
+            targetKey: sanitizer.sanitizeText(attributed.targetKey),
+            kind: attributed.kind,
+            valueAtRequest: attributed.value === null
+              ? null
+              : sanitizer.sanitizeText(attributed.value),
+            msSinceTouched,
+          }
+        : null,
     };
     records.push(record);
     byRequest.set(request, record);
