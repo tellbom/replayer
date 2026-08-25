@@ -79,7 +79,7 @@ describe('generateDraft', () => {
     expect(result.yaml).toContain('响应丢失将中止');
   });
 
-  it('keeps attribute keys containing dots intact when parameterizing bodies', () => {
+  it('keeps dotted keys intact while rejecting untraced write literals', () => {
     const session = recording(false);
     const submit = session.network.find((item) => item.url.includes('/submit'))!;
     submit.postData = JSON.stringify({
@@ -87,7 +87,7 @@ describe('generateDraft', () => {
       attributes: { 'oauth2.device.authorization.grant.enabled': 'dsh-test' },
     });
     const result = generateDraft(session);
-    expect(() => parseSkill(result.yaml, resolver())).not.toThrow();
+    expect(() => parseSkill(result.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
     expect(result.yaml).toContain('oauth2.device.authorization.grant.enabled');
   });
 
@@ -236,7 +236,60 @@ describe('generateDraft', () => {
     });
     expect(result.yaml).toContain('TODO: 此请求的归属由时间窗推断（置信度低）');
   });
+
+  it('parameterizes a standard control initial value even when the user does not change it', () => {
+    const session = genericWriteSession({ deliveryMode: 'ground' });
+    session.initialFormState = [{
+      ts: 900,
+      type: 'select',
+      name: 'deliveryMode',
+      label: 'Delivery mode',
+      value: 'ground',
+      text: 'Ground',
+      target: { strategy: 'playwright', selector: '#delivery', confidence: 'HIGH' },
+    }];
+
+    const result = generateDraft(session);
+    expect(result.skill.params).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'deliveryMode', type: 'enum' }),
+    ]));
+    expect(result.skill.steps[0]?.network?.body?.deliveryMode).toBe('{{deliveryMode|enumValue}}');
+    expect(() => parseSkill(result.yaml, resolver())).not.toThrow();
+  });
+
+  it('rejects untraced write literals while exempting booleans, empty values and URL segments', () => {
+    const session = genericWriteSession({
+      deliveryMode: 'ground', enabled: true, note: '', items: [], clearedAt: null, route: 'jobs',
+    });
+    const result = generateDraft(session);
+    const body = result.skill.steps[0]?.network?.body;
+
+    expect(body).toEqual({
+      deliveryMode: 'TODO_UNRESOLVED', enabled: true, note: '', items: [], clearedAt: null, route: 'jobs',
+    });
+    expect(result.skill._notes).toEqual(expect.arrayContaining([
+      expect.stringContaining('deliveryMode'),
+    ]));
+    expect(() => parseSkill(result.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
+  });
 });
+
+function genericWriteSession(body: Record<string, unknown>): RecordSession {
+  return {
+    meta: {
+      startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:01.000Z',
+      baseUrl: 'http://example.test', userAgent: 'test', entryId: 'oa',
+    },
+    actions: [{ ts: 1_000, type: 'click', text: 'Send' }],
+    network: [{
+      requestId: 'write', requestTs: 1_100, responseTs: 1_200, method: 'POST',
+      url: 'http://example.test/jobs', resourceType: 'fetch',
+      headers: { 'content-type': 'application/json' }, postData: JSON.stringify(body),
+      status: 200, responseBody: '{}', mutating: true, sanitizeMode: 'structured',
+    }],
+    pages: [],
+  };
+}
 
 function recording(withHistory: boolean): RecordSession {
   const token = '<REDACTED:sha256:123456789abc>';
@@ -307,10 +360,10 @@ function recording(withHistory: boolean): RecordSession {
       entryId: 'oa',
     },
     actions: [
-      { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
-      { ts: 2_000, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },
-      { ts: 3_000, type: 'datetime', label: '结束时间', value: '2026-08-18 21:00:00' },
-      { ts: 4_000, type: 'fill', label: '事由', value: '版本上线' },
+      { ts: 1_000, type: 'select', label: '加班类型', name: 'type', value: '工作日加班' },
+      { ts: 2_000, type: 'datetime', label: '开始时间', name: 'startTime', value: '2026-08-18 18:00:00' },
+      { ts: 3_000, type: 'datetime', label: '结束时间', name: 'endTime', value: '2026-08-18 21:00:00' },
+      { ts: 4_000, type: 'fill', label: '事由', name: 'reason', value: '版本上线' },
       {
         ts: 5_000,
         type: 'click',

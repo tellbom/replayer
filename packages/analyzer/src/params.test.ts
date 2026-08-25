@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { detectParams } from './params.js';
 
 describe('detectParams', () => {
-  it('normalizes business type selectors to the type parameter', () => {
+  it('uses the standard DOM name instead of a business-label dictionary', () => {
     const session = recording('工作日加班', 'unused');
-    session.actions = [{ ts: 1, type: 'select', label: '请假类型', value: '年假' }];
+    session.actions = [{ ts: 1, type: 'select', label: '请假类型', name: 'type', value: '年假' }];
     session.network = [{
       requestId: 'types', requestTs: 0.5, responseTs: 0.8, method: 'GET',
       url: 'http://oa/api/leave/types', resourceType: 'fetch', headers: {}, postData: null,
@@ -79,10 +79,10 @@ function recording(type: string, reason: string): RecordSession {
   return {
     meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
     actions: [
-      { ts: 1, type: 'select', label: '加班类型', value: type },
-      { ts: 2, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },
-      { ts: 3, type: 'datetime', label: '结束时间', value: '2026-08-18 21:00:00' },
-      { ts: 4, type: 'fill', label: '事由', value: reason },
+      { ts: 1, type: 'select', label: '加班类型', name: 'type', value: type },
+      { ts: 2, type: 'datetime', label: '开始时间', name: 'startTime', value: '2026-08-18 18:00:00' },
+      { ts: 3, type: 'datetime', label: '结束时间', name: 'endTime', value: '2026-08-18 21:00:00' },
+      { ts: 4, type: 'fill', label: '事由', name: 'reason', value: reason },
       { ts: 5, type: 'fill', label: 'csrfToken', value: 'secret' },
     ],
     network: [

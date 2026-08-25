@@ -1,6 +1,6 @@
 import { acquireDSHContext, ensureEntry, probeSession } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
-import type { RecordSession, RecordedAction, SessionInterrupt } from '@dsh/core';
+import type { RecordSession, RecordedAction, RecordedFormState, SessionInterrupt } from '@dsh/core';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -77,6 +77,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const baseUrl = new URL(page.url()).origin;
 
   const actions: RecordedAction[] = [];
+  const initialFormState: RecordedFormState[] = [];
   const interruptions: SessionInterrupt[] = [];
   let recordingEnabled = true;
   const actionByIdx = new Map<number, RecordedAction>();
@@ -187,6 +188,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       postProcessTasks.push(task);
     },
   );
+  await page.exposeBinding('__DSH_RECORD_INITIAL_STATE__', (_source, state: RecordedFormState) => {
+    initialFormState.push(state);
+  });
   const reinjectRecorderProbe = await installRecorderProbe(page);
   const startedAt = new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
@@ -268,6 +272,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       ...(identityChanged ? { identityChanged: true } : {}),
     },
     actions,
+    ...(initialFormState.length > 0 ? { initialFormState } : {}),
     network,
     pages,
     ...(interruptions.length > 0 ? { interruptions } : {}),

@@ -64,6 +64,18 @@ export interface RecordSession {
   network: RecordedRequest[];
   pages: { ts: number; url: string; title: string }[];
   interruptions?: SessionInterrupt[];
+  initialFormState?: RecordedFormState[];
+}
+
+export interface RecordedFormState {
+  ts: number;
+  type: 'select' | 'radio' | 'checkbox';
+  target: LocatorStrategy;
+  label?: string;
+  name?: string;
+  value: string;
+  text?: string;
+  checked?: boolean;
 }
 
 export interface SessionInterrupt {
@@ -76,11 +88,13 @@ export interface SessionInterrupt {
 
 export interface RecordedAction {
   ts: number;
-  type: 'click' | 'fill' | 'select' | 'datetime' | 'navigate';
+  type: 'click' | 'fill' | 'select' | 'radio' | 'checkbox' | 'datetime' | 'navigate';
   target?: LocatorStrategy;
   recordedHint?: RecordedHint;
   label?: string;
+  name?: string;
   value?: string;
+  checked?: boolean;
   text?: string;
   url?: string;
   scope?: string;
@@ -210,6 +224,8 @@ declare global {
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     __DSH_RECORD__?: (action: any) => void;
+    __DSH_RECORD_INITIAL_STATE__?: (state: RecordedFormState) => void;
+    __DSH_INITIAL_FORM_STATE__?: () => void;
     __DSH_RECORDING__?: boolean;
     __dsh_clicked__?: Record<number, Element>;
     __DSH_MUTATION__: {

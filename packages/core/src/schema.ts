@@ -197,7 +197,7 @@ export const SkillVerificationSchema = z.object({
 });
 
 type UiActionName =
-  'navigate' | 'click' | 'fill' | 'selectOption' | 'setDateTime' | 'waitFor' | 'readValue';
+  'navigate' | 'click' | 'fill' | 'check' | 'selectOption' | 'setDateTime' | 'waitFor' | 'readValue';
 
 export interface UiAction {
   action: UiActionName;
@@ -206,6 +206,7 @@ export interface UiAction {
   label?: string | undefined;
   kind?: ControlKind | undefined;
   value?: string | undefined;
+  checked?: boolean | undefined;
   waitFor?:
     | {
         selector?: string | undefined;
@@ -225,6 +226,7 @@ export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
       'navigate',
       'click',
       'fill',
+      'check',
       'selectOption',
       'setDateTime',
       'waitFor',
@@ -235,6 +237,7 @@ export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
     label: z.string().optional(),
     kind: ControlKindSchema.optional(),
     value: z.string().optional(),
+    checked: z.boolean().optional(),
     waitFor: z
       .object({
         selector: z.string().optional(),

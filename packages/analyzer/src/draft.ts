@@ -82,6 +82,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       .map((item) => [item.sourceActionIndex, item.id]),
   );
   const extracts = dependencyExtracts(items);
+  const preflight = detectPreflight(session);
   const steps: Skill['steps'] = items.map(
     (item) =>
       draftStep(
@@ -92,6 +93,10 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
         session.meta.baseUrl,
         stepByActionIndex,
       ) as Skill['steps'][number],
+  );
+  const provenanceNotes = guardMutatingBodyLiterals(
+    steps,
+    new Set(preflight.map((item) => item.name)),
   );
   const postcondition = inferPostcondition(items, params, session.meta.baseUrl);
   // 【C16】技能不含 auth 段：认证载体在 entries/<id>.yaml，录制时由 record 记录 entryId。
@@ -107,7 +112,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       recordedAt: session.meta.endedAt,
     },
     params,
-    preflight: detectPreflight(session),
+    preflight,
     steps,
     assertions: [{ type: 'httpStatus', expect: 200 }],
     verification: {
@@ -126,6 +131,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       '认证载体见 entries/ 目录（C16：技能不含登录环节）。',
       '若未生成 reentry：首步即写时无幂等 anchor 可用，请人工前移幂等步骤（C22）。',
       ...businessHeaderNotes(steps),
+      ...provenanceNotes,
       ...sessionInterruptNotes(items, session),
     ],
   };
@@ -302,6 +308,9 @@ function uiAction(action: RecordedAction, params: Skill['params'], discardScope 
     ...(action.recordedHint ? { recordedHint: action.recordedHint } : {}),
   };
   if (action.type === 'select') return { action: 'selectOption', ...common };
+  if (action.type === 'radio' || action.type === 'checkbox') {
+    return { action: 'check', ...common, checked: action.checked ?? true };
+  }
   if (action.type === 'datetime') return { action: 'setDateTime', ...common };
   if (action.type === 'navigate') return { action: 'navigate', url: action.url };
   return { action: action.type, ...common };
@@ -341,6 +350,70 @@ function parameterizeBody(body: Record<string, unknown>, params: Skill['params']
     const param = params.find((candidate) => candidate.name === key);
     if (param) body[key] = `{{${param.name}${param.type === 'enum' ? '|enumValue' : ''}}}`;
   }
+}
+
+function guardMutatingBodyLiterals(
+  steps: Skill['steps'],
+  preflightNames: ReadonlySet<string>,
+): string[] {
+  const notes: string[] = [];
+  for (const step of steps) {
+    if (!step.hasSideEffect || !step.network?.body) continue;
+    visitBodyLeaves(step.network.body, [], (path, value, replace) => {
+      if (isTracedTemplate(value) || isLiteralExempt(value, step.network!.url)) return;
+      const leafName = path.at(-1);
+      if (leafName && preflightNames.has(leafName)) {
+        replace(`{{${leafName}}}`);
+        return;
+      }
+      replace('TODO_UNRESOLVED');
+      notes.push(
+        `步骤 ${step.id} 写请求字段 ${path.join('.')} 的字面量 ${JSON.stringify(value)} 无法溯源；` +
+        '请确认其来源并显式修正。',
+      );
+    });
+  }
+  return notes;
+}
+
+function visitBodyLeaves(
+  value: Record<string, unknown>,
+  path: string[],
+  visit: (path: string[], value: unknown, replace: (value: unknown) => void) => void,
+): void {
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = [...path, key];
+    if (Array.isArray(child)) {
+      if (child.length === 0) continue;
+      child.forEach((item, index) => {
+        if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+          visitBodyLeaves(item as Record<string, unknown>, [...childPath, String(index)], visit);
+        } else {
+          visit([...childPath, String(index)], item, (replacement) => { child[index] = replacement; });
+        }
+      });
+    } else if (typeof child === 'object' && child !== null) {
+      visitBodyLeaves(child as Record<string, unknown>, childPath, visit);
+    } else {
+      visit(childPath, child, (replacement) => { value[key] = replacement; });
+    }
+  }
+}
+
+function isTracedTemplate(value: unknown): boolean {
+  return typeof value === 'string' && /^\{\{[^{}]+\}\}$/.test(value);
+}
+
+function isLiteralExempt(value: unknown, requestUrl: string): boolean {
+  if (value === null || value === '' || typeof value === 'boolean') return true;
+  if (typeof value !== 'string' && typeof value !== 'number') return false;
+  let pathname: string;
+  try {
+    pathname = new URL(requestUrl, 'http://dsh.invalid').pathname;
+  } catch {
+    pathname = requestUrl.split('?')[0] ?? requestUrl;
+  }
+  return String(value).length > 0 && pathname.split('/').includes(String(value));
 }
 
 function setBodyPath(body: Record<string, unknown>, path: string, value: string): void {

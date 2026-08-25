@@ -145,11 +145,13 @@ function enumAliases(requests: RecordedRequest[]): Map<string, string> {
     }
     if (!Array.isArray(body)) continue;
     for (const item of body) {
-      if (typeof item !== 'object' || item === null) continue;
-      const { label, value } = item as { label?: unknown; value?: unknown };
-      if (typeof label === 'string' && (typeof value === 'string' || typeof value === 'number')) {
-        aliases.set(label, String(value));
-      }
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) continue;
+      const scalars = Object.values(item).filter(
+        (value): value is string | number => typeof value === 'string' || typeof value === 'number',
+      );
+      if (scalars.length !== 2) continue;
+      aliases.set(String(scalars[0]), String(scalars[1]));
+      aliases.set(String(scalars[1]), String(scalars[0]));
     }
   }
   return aliases;

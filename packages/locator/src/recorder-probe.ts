@@ -59,6 +59,28 @@ function labelFor(element: Element): string | undefined {
     .trim();
 }
 
+function semanticFieldLabel(element: Element): string | undefined {
+  if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement) {
+    const labels = [...(element.labels ?? [])].map((label) => label.textContent?.trim()).filter(Boolean);
+    if (labels.length > 0) return labels.join(' ');
+  }
+  const group = element.closest('fieldset, [role="group"], [role="radiogroup"]');
+  return group?.querySelector('legend')?.textContent?.trim()
+    ?? group?.getAttribute('aria-label')?.trim()
+    ?? element.getAttribute('name')?.trim()
+    ?? undefined;
+}
+
+function adjacentOptionText(element: Element): string | undefined {
+  const label = element.closest('label')?.textContent?.trim();
+  if (label) return label;
+  for (const sibling of [element.previousElementSibling, element.nextElementSibling]) {
+    const text = sibling?.textContent?.trim();
+    if (text) return text;
+  }
+  return undefined;
+}
+
 document.addEventListener(
   'click',
   (event) => {
@@ -110,6 +132,41 @@ document.addEventListener(
   (event) => {
     if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
     const target = event.target;
+    if (target instanceof HTMLSelectElement) {
+      emit({
+        type: 'select',
+        label: semanticFieldLabel(target),
+        name: target.name || undefined,
+        value: target.value,
+        text: target.selectedOptions[0]?.textContent?.trim(),
+        ...targetWithHint('select', target),
+      }, target);
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.type === 'radio' && target.checked) {
+      emit({
+        type: 'radio',
+        label: semanticFieldLabel(target),
+        name: target.name || undefined,
+        value: target.value,
+        text: adjacentOptionText(target),
+        checked: true,
+        ...targetWithHint('check', target),
+      }, target);
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+      emit({
+        type: 'checkbox',
+        label: semanticFieldLabel(target),
+        name: target.name || undefined,
+        value: target.value,
+        text: adjacentOptionText(target),
+        checked: target.checked,
+        ...targetWithHint('check', target),
+      }, target);
+      return;
+    }
     if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) return;
     const dateEditor = target.closest('.el-date-editor');
     emit({
@@ -121,6 +178,35 @@ document.addEventListener(
   },
   true,
 );
+
+const initialStateSeen = new WeakSet<Element>();
+function scanInitialFormState(): void {
+  const recordInitial = Reflect.get(window, '__DSH_RECORD_INITIAL_STATE__');
+  if (typeof recordInitial !== 'function') return;
+  for (const element of document.querySelectorAll('select, input[type="radio"]:checked, input[type="checkbox"]:checked')) {
+    if (!(element instanceof HTMLSelectElement) && !(element instanceof HTMLInputElement)) continue;
+    if (initialStateSeen.has(element)) continue;
+    initialStateSeen.add(element);
+    const type = element instanceof HTMLSelectElement ? 'select' : element.type as 'radio' | 'checkbox';
+    const target = generator(element) as ({ matchCount?: number } & Record<string, unknown>);
+    delete target.matchCount;
+    recordInitial({
+      ts: Date.now(),
+      type,
+      target,
+      label: semanticFieldLabel(element),
+      name: element.getAttribute('name') || undefined,
+      value: element.value,
+      text: element instanceof HTMLSelectElement
+        ? element.selectedOptions[0]?.textContent?.trim()
+        : adjacentOptionText(element),
+      checked: element instanceof HTMLInputElement ? element.checked : undefined,
+    });
+  }
+}
+Reflect.set(window, '__DSH_INITIAL_FORM_STATE__', scanInitialFormState);
+new MutationObserver(scanInitialFormState).observe(document.documentElement, { childList: true, subtree: true });
+queueMicrotask(scanInitialFormState);
 
 window.addEventListener('DOMContentLoaded', () => {
   emit({ type: 'navigate', url: location.href });

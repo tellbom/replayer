@@ -123,7 +123,7 @@ export function createSanitizer(): Sanitizer {
       if (mediaType === 'text/html') {
         return { value: sanitizeHiddenInputs(body, fingerprint), sanitizeMode: 'structured' };
       }
-      if ((mediaType === '' || mediaType === undefined) && /^[\s]*[\[{]/.test(body)) {
+      if ((mediaType === '' || mediaType === undefined) && /^\s*(?:\[|\{)/.test(body)) {
         return { value: JSON.stringify(sanitizeUnknown(JSON.parse(body))), sanitizeMode: 'structured' };
       }
     } catch {

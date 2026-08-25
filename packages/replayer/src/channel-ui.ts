@@ -109,12 +109,16 @@ async function runAction(
   } else if (action.action === 'fill' && action.target?.strategy === 'frame-playwright') {
     if (action.value === undefined) throw new Error('fill requires value');
     await (await resolvePlaywrightTarget(page, action, context)).fill(action.value);
-  } else if (
-    action.action === 'selectOption' &&
-    action.target?.strategy === 'playwright' &&
-    action.scope
-  ) {
-    await (await resolvePlaywrightTarget(page, action, context)).click();
+  } else if (action.action === 'selectOption' && action.target?.strategy === 'playwright') {
+    if (action.value === undefined) throw new Error('selectOption requires value');
+    const locator = await resolvePlaywrightTarget(page, action, context);
+    const nativeSelect = await locator.evaluate((element) => element instanceof HTMLSelectElement);
+    if (nativeSelect) await locator.selectOption(action.value);
+    else await locator.click();
+  } else if (action.action === 'check' && action.target?.strategy === 'playwright') {
+    const locator = await resolvePlaywrightTarget(page, action, context);
+    if (action.checked === false) await locator.uncheck();
+    else await locator.check();
   } else if (action.action === 'click' && action.target?.strategy === 'role') {
     // 【P0】role 语义走 Playwright getByRole：implicit ARIA role（<button>/<a>/<input type=submit>
     // 无显式 role 属性也是 button role）——IIFE resolver 只查显式 [role=...] 属性，
