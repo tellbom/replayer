@@ -12,7 +12,7 @@ export function testEntry(overrides: Partial<Entry['entry']> = {}): Entry {
       excludeUrlPatterns: ['\\?token=', '\\?ticket=', '/sso/callback', '/sso/redirect'],
       sessionType: 'cookie',
       sessionProbe: { url: '/api/session', jsonPath: '$.loggedIn', okStatus: [200] },
-      identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+      identityProbe: { url: '/api/userinfo', jsonPath: '$.sub', requiresAuth: true },
       loginUrlPatterns: ['/login'],
       loginTimeoutMs: 300_000,
       sessionHolding: { strategy: 'daemon', probeIntervalMs: 30_000, stateTtlMs: 1_800_000, cookieKind: 'unknown' },

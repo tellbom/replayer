@@ -14,6 +14,7 @@ entry:
   identityProbe:
     url: /realms/master/protocol/openid-connect/userinfo
     jsonPath: "$.sub"
+    requiresAuth: true
   loginUrlPatterns:
     - /realms/master/protocol/openid-connect/auth
   sessionType: bearer

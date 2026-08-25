@@ -250,7 +250,7 @@ function entry(): Entry {
       excludeUrlPatterns: ['\\?token=', '/sso/redirect'],
       sessionType: 'cookie',
       sessionProbe: { url: '/api/session?_nodelay=1', jsonPath: '$.loggedIn', okStatus: [200] },
-      identityProbe: { url: '/api/userinfo?_nodelay=1', jsonPath: '$.sub' },
+      identityProbe: { url: '/api/userinfo?_nodelay=1', jsonPath: '$.sub', requiresAuth: true },
       loginUrlPatterns: ['/login'],
       loginDomMarkers: ['input[type="password"]'],
       loginTimeoutMs: 20_000,

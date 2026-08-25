@@ -4,4 +4,5 @@ export * from './cdp.js';
 export * from './context.js';
 export * from './entry.js';
 export * from './probe-session.js';
+export * from './probe-request.js';
 export * from './session-state.js';

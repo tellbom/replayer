@@ -22,6 +22,7 @@ entry:
   identityProbe:
     url: /api/userinfo?_nodelay=1
     jsonPath: $.sub
+    requiresAuth: true
   loginUrlPatterns: [/login]
   loginDomMarkers: ['input[type="password"]']
   loginTimeoutMs: 300000

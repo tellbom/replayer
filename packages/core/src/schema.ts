@@ -124,6 +124,8 @@ export const EntrySchema = z.object({
     identityProbe: z.object({
       url: z.string(),
       jsonPath: z.string(),
+      /** 由 doctor 对无凭证请求实测确认，不依据端点名称推断。 */
+      requiresAuth: z.literal(true),
     }),
 
     loginUrlPatterns: z.array(z.string()).default([]),
@@ -461,6 +463,11 @@ function containsUnresolvedValue(value: unknown): boolean {
 
 export function parseEntry(yamlText: string): Entry {
   const entry = EntrySchema.parse(parse(yamlText));
+  if (entry.entry.sessionType === 'unknown') {
+    throw new SchemaViolationError(
+      `entry "${entry.entry.id}" 的 sessionType 未探测。请先运行 dsh doctor --probe-entry。`,
+    );
+  }
   if (entry.entry.credentialProvider.type !== 'none') {
     throw new SchemaViolationError(
       `entry "${entry.entry.id}" 的 credentialProvider.type=${entry.entry.credentialProvider.type} 属于二期能力，一期恒为 none。`,

@@ -24,7 +24,7 @@ function testEntry(overrides: Partial<Entry['entry']> = {}): Entry {
       excludeUrlPatterns: ['\\?token=', '\\?ticket=', '/sso/callback', '/sso/redirect'],
       sessionType: 'cookie',
       sessionProbe: { url: '/api/session', jsonPath: '$.loggedIn', okStatus: [200] },
-      identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+      identityProbe: { url: '/api/userinfo', jsonPath: '$.sub', requiresAuth: true },
       loginUrlPatterns: ['/login'],
       loginTimeoutMs: 300_000,
       sessionHolding: { strategy: 'daemon', probeIntervalMs: 30_000, stateTtlMs: 1_800_000, cookieKind: 'unknown' },
@@ -333,11 +333,43 @@ entry:
   via: direct
   directUrl: http://localhost:5173/login
   landingUrlPattern: /home
+  sessionType: cookie
   sessionProbe: { url: /api/session }
-  identityProbe: { url: /api/userinfo, jsonPath: $.sub }
+  identityProbe: { url: /api/userinfo, jsonPath: $.sub, requiresAuth: true }
   credentialProvider: { type: ${type} }
 `;
     expect(() => parseEntry(yaml('none'))).not.toThrow();
     expect(() => parseEntry(yaml('vault'))).toThrow(SchemaViolationError);
+  });
+
+  it('T-92：两个逻辑探针允许复用同一 HTTP 端点', () => {
+    expect(() => parseEntry(`
+entry:
+  id: shared-probe
+  name: Shared probe
+  via: direct
+  directUrl: http://localhost/home
+  landingUrlPattern: /home
+  sessionType: bearer
+  bearerSource: { strategy: storage, key: token }
+  sessionProbe: { url: /account, okStatus: [200] }
+  identityProbe: { url: /account, jsonPath: $.principal, requiresAuth: true }
+`)).not.toThrow();
+  });
+
+  it('T-92：拒绝未经认证能力验证的身份探针与 unknown 会话类型', () => {
+    const yaml = (sessionType: string, requiresAuth: string): string => `
+entry:
+  id: unsafe-probe
+  name: Unsafe probe
+  via: direct
+  directUrl: http://localhost/home
+  landingUrlPattern: /home
+  sessionType: ${sessionType}
+  sessionProbe: { url: /session, okStatus: [200] }
+  identityProbe: { url: /identity, jsonPath: $.principal, requiresAuth: ${requiresAuth} }
+`;
+    expect(() => parseEntry(yaml('cookie', 'false'))).toThrow();
+    expect(() => parseEntry(yaml('unknown', 'true'))).toThrow(/sessionType/);
   });
 });

@@ -13,7 +13,7 @@ const testEntry: Entry = {
     id: 'oa', name: 'OA', via: 'direct', directUrl: 'http://oa/login',
     landingUrlPattern: '/home', excludeUrlPatterns: [], sessionType: 'cookie',
     sessionProbe: { url: '/api/session', okStatus: [200] },
-    identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+    identityProbe: { url: '/api/userinfo', jsonPath: '$.sub', requiresAuth: true },
     loginUrlPatterns: [], loginTimeoutMs: 300_000,
     sessionHolding: { strategy: 'daemon', probeIntervalMs: 30_000, stateTtlMs: 1_800_000, cookieKind: 'unknown' },
     credentialProvider: { type: 'none', ref: '', ttlMs: 30_000 },

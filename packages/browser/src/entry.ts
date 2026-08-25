@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 import type { Page } from 'playwright';
 
 import { ensureLoggedIn, entryToAuthConfig } from './auth.js';
+import { getLiveAuthHeader } from './bearer.js';
 import { settleNavigation } from './context.js';
+import { requestProbe } from './probe-request.js';
 
 export interface EntrySession {
   authState: AuthState;
@@ -92,58 +94,63 @@ function urlMatches(url: string, pattern: string): boolean {
 }
 
 export async function probeSession(page: Page, entry: Entry): Promise<boolean> {
+  return (await probeEntryAuthState(page, entry)) === 'authenticated';
+}
+
+/** 基于 HTTP 状态、结构化值与登录页证据判定；不依赖端点名或认证产品。 */
+export async function probeEntryAuthState(page: Page, entry: Entry): Promise<AuthState> {
   const probe = entry.entry.sessionProbe;
-  const result = await page.evaluate(
-    async ({ url, jsonPath }) => {
-      try {
-        const response = await fetch(url, { credentials: 'include', cache: 'no-store' });
-        if (!response.ok) return { status: response.status, value: null };
-        const body: unknown = await response.json();
-        if (!jsonPath) return { status: response.status, value: null as null };
-        const segments = jsonPath.replace(/^\$\.?/, '').split('.').filter(Boolean);
-        let current = body;
-        for (const segment of segments) {
-          if (typeof current !== 'object' || current === null) return { status: response.status, value: null };
-          current = (current as Record<string, unknown>)[segment];
-        }
-        return { status: response.status, value: current === undefined ? null : current };
-      } catch {
-        return { status: 0, value: null };
-      }
-    },
-    { url: new URL(probe.url, page.url()).href, jsonPath: probe.jsonPath },
-  );
-  if (!probe.okStatus.includes(result.status)) return false;
+  const result = await requestProbe(page, {
+    url: new URL(probe.url, page.url()).href,
+    jsonPath: probe.jsonPath,
+    authorization: await liveAuthorization(page, entry),
+  });
+  if (result.status === 401) return 'unauthenticated';
+  if (result.status === 403) return 'forbidden';
+  if (!probe.okStatus.includes(result.status)) return 'unknown';
+  if (result.format !== 'json') {
+    return result.format === 'text' && matchesLoginEvidence(result.text, entry.entry.loginDomMarkers)
+      ? 'unauthenticated'
+      : 'unknown';
+  }
   // 配置了 jsonPath 时按布尔值判定（$.loggedIn=false → 会话无效），
   // 未配置则仅按状态码（与 v1 AuthConfig 语义一致）
-  if (probe.jsonPath) return result.value === true;
-  return true;
+  if (probe.jsonPath) {
+    return typeof result.value === 'boolean'
+      ? (result.value ? 'authenticated' : 'unauthenticated')
+      : 'unknown';
+  }
+  return 'authenticated';
 }
 
 /** 【C21】身份摘要：只取 identityProbe 指定的标识字段，立即摘要，不保留原值。 */
 export async function readIdentityDigest(page: Page, entry: Entry): Promise<string> {
   const probe = entry.entry.identityProbe;
-  const raw = await page.evaluate(
-    async ({ url, jsonPath }) => {
-      try {
-        const response = await fetch(url, { credentials: 'include' });
-        if (!response.ok) return null;
-        const body: unknown = await response.json();
-        const segments = jsonPath.replace(/^\$\.?/, '').split('.').filter(Boolean);
-        let current = body;
-        for (const segment of segments) {
-          if (typeof current !== 'object' || current === null) return null;
-          current = (current as Record<string, unknown>)[segment];
-        }
-        return current === undefined ? null : String(current);
-      } catch {
-        return null;
-      }
-    },
-    { url: new URL(probe.url, page.url()).href, jsonPath: probe.jsonPath },
-  );
-  if (raw === null) {
+  const result = await requestProbe(page, {
+    url: new URL(probe.url, page.url()).href,
+    jsonPath: probe.jsonPath,
+    authorization: await liveAuthorization(page, entry),
+  });
+  if (result.status < 200 || result.status >= 300 || result.value === undefined) {
     throw new Error(`identityProbe 无法取得身份标识: ${probe.url} ${probe.jsonPath}`);
   }
-  return createHash('sha256').update(raw).digest('hex');
+  return createHash('sha256').update(String(result.value)).digest('hex');
+}
+
+async function liveAuthorization(page: Page, entry: Entry): Promise<string | null> {
+  if (!['bearer', 'mixed'].includes(entry.entry.sessionType)) return null;
+  return entry.entry.bearerSource
+    ? getLiveAuthHeader(page, entry.entry.bearerSource)
+    : null;
+}
+
+function matchesLoginEvidence(text: string, markers: string[] | undefined): boolean {
+  if (!markers?.length) return false;
+  return markers.some((marker) => {
+    if (marker === 'form') return /<form\b/i.test(text);
+    if (/^input\[type=["']?password["']?\]$/i.test(marker)) {
+      return /<input\b[^>]*type=["']password["']/i.test(text);
+    }
+    return text.includes(marker);
+  });
 }

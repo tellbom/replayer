@@ -37,8 +37,9 @@ describe('T-76 sessionHolding 契约', () => {
   via: direct
   directUrl: http://oa/home
   landingUrlPattern: /home
+  sessionType: cookie
   sessionProbe: { url: /api/session, okStatus: [200] }
-  identityProbe: { url: /api/userinfo, jsonPath: $.sub }
+  identityProbe: { url: /api/userinfo, jsonPath: $.sub, requiresAuth: true }
 `);
     expect(entry.entry.sessionHolding).toEqual({
       strategy: 'daemon',

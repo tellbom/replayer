@@ -152,7 +152,7 @@ export function draftEntryYaml(
     `    cookieKind: ${partial.cookieKind ?? 'unknown'}`,
     `  # TODO: 请人工复核 sessionProbe / identityProbe / loginUrlPatterns`,
     `  sessionProbe: { url: '', okStatus: [200] }`,
-    `  identityProbe: { url: '', jsonPath: $.sub }`,
+    `  identityProbe: { url: '', jsonPath: '', requiresAuth: false }`,
   );
   return `${lines.join('\n')}\n`;
 }

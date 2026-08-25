@@ -60,7 +60,7 @@ function entry(strategy: Entry['entry']['sessionHolding']['strategy']): Entry {
       excludeUrlPatterns: [],
       sessionType: 'cookie',
       sessionProbe: { url: '/api/session', okStatus: [200] },
-      identityProbe: { url: '/api/userinfo', jsonPath: '$.sub' },
+      identityProbe: { url: '/api/userinfo', jsonPath: '$.sub', requiresAuth: true },
       loginUrlPatterns: ['/login'],
       loginTimeoutMs: 300_000,
       sessionHolding: { strategy, probeIntervalMs: 30_000, stateTtlMs: 1_800_000, cookieKind: 'unknown' },
