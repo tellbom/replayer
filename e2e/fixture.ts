@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
 
 export const oaEntry: Entry = parseEntry(await readFile('entries/oa.yaml', 'utf8'));
-export const entryResolver = (): ((id: string) => Entry) => () => oaEntry;
+export const entryResolver = (entry: Entry = oaEntry): ((id: string) => Entry) => () => entry;
 
 export async function loadOvertimeSkill(): Promise<Skill> {
   return parseSkill(await readFile('skills/oa_overtime_submit.yaml', 'utf8'), entryResolver());
@@ -46,12 +46,15 @@ export async function recordBusiness(
 }
 
 /** 为全新 profile 种子门户会话（等价于用户此前登录过）。 */
-export async function seedProfile(profileDir: string): Promise<void> {
+export async function seedProfile(
+  profileDir: string,
+  baseUrl = 'http://127.0.0.1:15173',
+): Promise<void> {
   const { chromium } = await import('playwright');
   const ctx = await chromium.launchPersistentContext(profileDir, { channel: 'chrome', headless: true });
   try {
     const page = ctx.pages()[0] ?? (await ctx.newPage());
-    await page.goto('http://127.0.0.1:15173/login');
+    await page.goto(`${baseUrl}/login`);
     await page.evaluate(() =>
       fetch('/api/login?cookieMode=persistent&_nodelay=1', {
         method: 'POST',

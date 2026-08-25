@@ -4,6 +4,7 @@ import { replay } from '@dsh/replayer';
 import { readFile } from 'node:fs/promises';
 
 import { login } from '../helpers';
+import { entryResolver, oaEntry, seedProfile } from '../fixture';
 
 test.skip(!process.env.A3_EXPECTED_CLASS, 'A3 仅由 scripts/a3-loop.mjs 注入 rebuild class 后运行');
 
@@ -15,7 +16,18 @@ test('A3 rebuild 后 CSS hash 变化但语义技能仍可回放', async ({ page,
   const currentClass = await page.getByRole('button', { name: '提交', exact: true }).getAttribute('class');
   expect(currentClass).toContain(expectedClass);
 
-  const skill = parseSkill(await readFile('skills/oa_overtime_submit.yaml', 'utf8'));
+  const origin = `http://127.0.0.1:${Number(process.env.A3_PORT ?? 5199)}`;
+  const a3Entry = {
+    ...oaEntry,
+    entry: { ...oaEntry.entry, portalUrl: `${origin}/portal` },
+  };
+  const skill = parseSkill(
+    await readFile('skills/oa_overtime_submit.yaml', 'utf8'),
+    entryResolver(a3Entry),
+  );
+  skill.skill.baseUrl = origin;
+  const profileDir = testInfo.outputPath(`profile-${browserName}`);
+  await seedProfile(profileDir, origin);
   const result = await replay(skill, {
     params: {
       type: '工作日加班',
@@ -23,7 +35,8 @@ test('A3 rebuild 后 CSS hash 变化但语义技能仍可回放', async ({ page,
       endTime: '2026-08-19 21:00:00',
       reason: `A3-rebuild-${process.env.A3_ROUND ?? '0'}`,
     },
-    profileDir: testInfo.outputPath(`profile-${browserName}`),
+    profileDir,
+    entry: a3Entry,
     noLLM: true,
     onConfirm: async () => true,
   });

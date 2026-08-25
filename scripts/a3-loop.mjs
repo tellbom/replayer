@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import process from 'node:process';
 
 const frontend = 'apps/mock-oa/frontend';
+const previewPort = Number(process.env.A3_PORT ?? 5199);
 
 if (!(await readSubmitClass())) run('npm', ['run', 'build', '--workspace', 'mock-oa-frontend']);
 
@@ -14,7 +15,7 @@ for (let round = 1; round <= 5; round += 1) {
   process.stdout.write(`A3 第 ${round} 轮 class: ${before} -> ${after}\n`);
 
   const preview = spawn(command('npm'), [
-    'run', 'preview', '--workspace', 'mock-oa-frontend', '--', '--host', '127.0.0.1', '--port', '5173',
+    'run', 'preview', '--workspace', 'mock-oa-frontend', '--', '--host', '127.0.0.1', '--port', String(previewPort),
   ], {
     stdio: 'inherit',
     detached: process.platform !== 'win32',
@@ -22,9 +23,13 @@ for (let round = 1; round <= 5; round += 1) {
   });
   try {
     await waitForPreview();
-    run('npx', [
-      'playwright', 'test', 'e2e/acceptance/a3-rebuild.spec.ts', '--workers=1',
-    ], { A3_EXPECTED_CLASS: after, A3_ROUND: String(round) });
+    run('node', [
+      'scripts/check-critical-skips.mjs', '--config', 'playwright.a3.config.ts', '--workers=1',
+    ], {
+      A3_EXPECTED_CLASS: after,
+      A3_ROUND: String(round),
+      A3_PORT: String(previewPort),
+    });
   } finally {
     stopProcessTree(preview.pid);
   }
@@ -44,7 +49,9 @@ function run(binary, args, extraEnv = {}) {
 }
 
 function command(binary) {
-  return process.platform === 'win32' ? `${binary}.cmd` : binary;
+  return process.platform === 'win32' && (binary === 'npm' || binary === 'npx')
+    ? `${binary}.cmd`
+    : binary;
 }
 
 async function readSubmitClass() {
@@ -66,7 +73,7 @@ async function readSubmitClass() {
 async function waitForPreview() {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
-      const response = await fetch('http://127.0.0.1:5173/login');
+      const response = await fetch(`http://127.0.0.1:${previewPort}/login`);
       if (response.ok) return;
     } catch {
       // Preview is still starting.
