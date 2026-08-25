@@ -59,7 +59,7 @@ export function startNetworkRecording(
     track(
       request.allHeaders().then((headers) => {
         record.headers = sanitizer.sanitizeHeaders(headers);
-      }),
+      }).catch(() => undefined),
     );
   };
 
@@ -76,7 +76,7 @@ export function startNetworkRecording(
           record.responseBody = body.value;
           record.sanitizeMode = mergeSanitizeMode(record.sanitizeMode, body.mode);
         },
-      ),
+      ).catch(() => undefined),
     );
   };
 

@@ -1,7 +1,7 @@
-import { acquireDSHContext, ensureEntry, probeSession } from '@dsh/browser';
+import { acquireDSHContext, ensureEntry, probeSession, settleNavigation } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
 import type { RecordSession, RecordedAction, RecordedFormState, SessionInterrupt } from '@dsh/core';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -19,6 +19,8 @@ export interface RecordOptions {
   cdpEndpoint?: string;
   stopSignal?: Promise<void>;
   onReady?: (page: Page) => Promise<void>;
+  /** 从 CLI 已确认的 partial 快照继续；登录与身份仍重新校验。 */
+  resumeSession?: RecordSession;
   /**
    * 【T-67b】录制期消歧回调。playwright 引擎产物为 LOW（位置依赖）时触发，
    * 传入页面、原元素句柄与局部上下文；回调返回经 Playwright 再验证的
@@ -76,9 +78,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const entrySession = await ensureEntry(page, opts.entry);
   const baseUrl = new URL(page.url()).origin;
 
-  const actions: RecordedAction[] = [];
-  const initialFormState: RecordedFormState[] = [];
-  const interruptions: SessionInterrupt[] = [];
+  const actions: RecordedAction[] = [...(opts.resumeSession?.actions ?? [])];
+  const initialFormState: RecordedFormState[] = [...(opts.resumeSession?.initialFormState ?? [])];
+  const interruptions: SessionInterrupt[] = [...(opts.resumeSession?.interruptions ?? [])];
   let recordingEnabled = true;
   const actionByIdx = new Map<number, RecordedAction>();
   const mutationTasks = new Map<number, Promise<void>>();
@@ -95,9 +97,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       actionByIdx.set(actionIdx, action);
       const target = action.target as { strategy?: string; confidence?: string } | undefined;
       if (target) {
-        const mutationTask = page.evaluate(async (idx) => {
+        const mutationTask = tolerateNavigation(page, () => page.evaluate(async (idx) => {
           await window.__DSH_MUTATION__.end(idx);
-        }, actionIdx);
+        }, actionIdx)).then(() => undefined);
         mutationTasks.set(actionIdx, mutationTask);
       }
 
@@ -107,13 +109,13 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
           const producerMutation = mutationTasks.get(producerActionIdx);
           if (producerMutation) {
             await producerMutation;
-            const scoped = await page.evaluate(
+            const scoped = await tolerateNavigation(page, () => page.evaluate(
               ({ producerIdx, currentIdx }) => {
                 const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
                 return window.__DSH_MUTATION__.deriveScope(producerIdx, clicked[currentIdx]!);
               },
               { producerIdx: producerActionIdx, currentIdx: actionIdx },
-            );
+            ));
             if (scoped) {
               const scopeId = `sc${producerActionIdx + 1}`;
               const producer = actionByIdx.get(producerActionIdx)!;
@@ -151,13 +153,13 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
           target.confidence === 'LOW'
         ) {
           try {
-            const disambig = await page.evaluate((idx) => {
+            const disambig = await tolerateNavigation(page, () => page.evaluate((idx) => {
               const collect = Reflect.get(window, '__DSH_DISAMBIG__');
               const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
               const el = clicked[idx];
               if (typeof collect !== 'function' || !el) return null;
               return { context: collect(el) };
-            }, actionIdx);
+            }, actionIdx));
             const pwResult = {
               selector: (target as { selector: string }).selector,
               matchCount: -1,
@@ -186,17 +188,19 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
         }
       })();
       postProcessTasks.push(task);
+      if (actions.length % 5 === 0) void persistPartial('periodic-action-checkpoint');
     },
   );
   await page.exposeBinding('__DSH_RECORD_INITIAL_STATE__', (_source, state: RecordedFormState) => {
     initialFormState.push(state);
   });
   const reinjectRecorderProbe = await installRecorderProbe(page);
-  const startedAt = new Date().toISOString();
+  const startedAt = opts.resumeSession?.meta.startedAt ?? new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
   actions.push({ ts: Date.now(), type: 'navigate', url: page.url() });
 
   const pages: RecordSession['pages'] = [
+    ...(opts.resumeSession?.pages ?? []),
     { ts: Date.now(), url: page.url(), title: await page.title() },
   ];
   const pageTasks = new Set<Promise<void>>();
@@ -205,7 +209,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       if (recordingEnabled && !excludeMatchers.some((re) => re.test(page.url()))) {
         pages.push({ ts: Date.now(), url: page.url(), title });
       }
-    });
+    }).catch(() => undefined);
     pageTasks.add(task);
     void task.finally(() => pageTasks.delete(task));
   };
@@ -214,6 +218,28 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     (url) => new RegExp(escapeRegExp(new URL(url, baseUrl).href)),
   );
   const networkRecording = startNetworkRecording(page, [...excludeMatchers, ...probeMatchers]);
+  const previousNetwork = [...(opts.resumeSession?.network ?? [])];
+  let partialWrite = Promise.resolve();
+  const persistPartial = (reason: string, identityChanged = false): Promise<void> => {
+    partialWrite = partialWrite.then(() => writePartialSnapshot({
+      outputPath: `${opts.outDir}/record.partial.json`,
+      startedAt,
+      baseUrl,
+      userAgent,
+      entryId: opts.entry.entry.id,
+      actions,
+      initialFormState,
+      network: [...previousNetwork, ...networkRecording.records],
+      pages,
+      interruptions,
+      reason,
+      identityChanged,
+    }));
+    return partialWrite;
+  };
+  const partialTimer = setInterval(() => {
+    void persistPartial('periodic-time-checkpoint');
+  }, 10_000);
   const monitorAbort = new AbortController();
   let identityChanged = false;
 
@@ -227,11 +253,8 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       actions,
       interruptions,
       networkRecording,
-      outputPath: `${opts.outDir}/record.partial.json`,
-      startedAt,
-      baseUrl,
-      userAgent,
       pages,
+      persistPartial,
       mutationTasks,
       postProcessTasks,
       onRecordingState(enabled) {
@@ -251,16 +274,22 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     await monitor;
   } catch (error) {
     monitorAbort.abort();
+    clearInterval(partialTimer);
+    await persistPartial(error instanceof Error ? error.message : String(error));
     page.off('domcontentloaded', onDomContentLoaded);
+    await Promise.allSettled([...mutationTasks.values()]);
+    await Promise.allSettled(postProcessTasks);
     await networkRecording.stop();
     await lease.release();
     throw error;
   }
+  clearInterval(partialTimer);
+  await partialWrite;
   page.off('domcontentloaded', onDomContentLoaded);
   await Promise.all([...pageTasks]);
   await Promise.all([...mutationTasks.values()]);
   await Promise.all(postProcessTasks);
-  const network = await networkRecording.stop();
+  const network = [...previousNetwork, ...await networkRecording.stop()];
   await inferAsyncWaits(page, actions, network);
   const session: RecordSession = {
     meta: {
@@ -277,7 +306,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     pages,
     ...(interruptions.length > 0 ? { interruptions } : {}),
   };
-  await writeFile(`${opts.outDir}/record.json`, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+  await writeAtomic(`${opts.outDir}/record.json`, session);
   if (!identityChanged) await rm(`${opts.outDir}/record.partial.json`, { force: true });
   await lease.release();
   void entrySession;
@@ -348,7 +377,7 @@ async function findPopulatedFormControl(
   page: Page,
   responseValues: string[],
 ): Promise<RecordedAction['target'] | null> {
-  return page.evaluate((values) => {
+  return (await tolerateNavigation(page, () => page.evaluate((values) => {
     const expected = new Set(values);
     for (const item of document.querySelectorAll<HTMLElement>('.el-form-item')) {
       const label = item.querySelector<HTMLElement>('.el-form-item__label')?.textContent?.trim();
@@ -366,7 +395,7 @@ async function findPopulatedFormControl(
       return { strategy: 'el-form-item' as const, label, kind };
     }
     return null;
-  }, responseValues);
+  }, responseValues))) ?? null;
 }
 
 /** excludeUrlPatterns 是「字面子串的正则写法」（默认 \\?token= 等），转成 RegExp。 */
@@ -385,11 +414,8 @@ interface SessionMonitorOptions {
   actions: RecordedAction[];
   interruptions: SessionInterrupt[];
   networkRecording: ReturnType<typeof startNetworkRecording>;
-  outputPath: string;
-  startedAt: string;
-  baseUrl: string;
-  userAgent: string;
   pages: RecordSession['pages'];
+  persistPartial(reason: string, identityChanged?: boolean): Promise<void>;
   mutationTasks: Map<number, Promise<void>>;
   postProcessTasks: Promise<void>[];
   onRecordingState(enabled: boolean): void;
@@ -401,11 +427,20 @@ interface SessionMonitorOptions {
 async function monitorRecordingSession(
   options: SessionMonitorOptions,
 ): Promise<'identityChanged' | 'stopped'> {
+  let wake = deferredNavigationWake();
+  const onFrameNavigated = (frame: import('playwright').Frame): void => {
+    if (frame === options.page.mainFrame()) wake.resolve();
+  };
+  options.page.on('framenavigated', onFrameNavigated);
   try {
     while (!options.signal.aborted) {
-      await delay(options.entry.entry.sessionHolding.probeIntervalMs, undefined, {
-        signal: options.signal,
-      });
+      await Promise.race([
+        delay(options.entry.entry.sessionHolding.probeIntervalMs, undefined, {
+          signal: options.signal,
+        }),
+        wake.promise,
+      ]);
+      wake = deferredNavigationWake();
       if (await probeSession(options.page, options.entry)) continue;
 
       options.onRecordingState(false);
@@ -421,13 +456,13 @@ async function monitorRecordingSession(
         detectedAt: new Date().toISOString(),
       };
       options.interruptions.push(interruption);
-      await writePartialRecording(options);
+      await options.persistPartial('session-interrupt');
       await showSessionNotice(options.page, '会话已过期，请重新登录；登录后可继续录制');
 
       const resumed = await ensureEntry(options.page, options.entry);
       if (resumed.identityDigest !== options.initialIdentityDigest) {
         interruption.identityChanged = true;
-        await writePartialRecording(options, true);
+        await options.persistPartial('identity-changed', true);
         return 'identityChanged';
       }
 
@@ -440,35 +475,64 @@ async function monitorRecordingSession(
     }
   } catch (error) {
     if (!options.signal.aborted) throw error;
+  } finally {
+    options.page.off('framenavigated', onFrameNavigated);
   }
   return 'stopped';
 }
 
-async function writePartialRecording(
-  options: SessionMonitorOptions,
-  identityChanged = false,
-): Promise<void> {
-  const partial: RecordSession = {
+function deferredNavigationWake(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+interface PartialSnapshotInput {
+  outputPath: string;
+  startedAt: string;
+  baseUrl: string;
+  userAgent: string;
+  entryId: string;
+  actions: RecordedAction[];
+  initialFormState: RecordedFormState[];
+  network: RecordSession['network'];
+  pages: RecordSession['pages'];
+  interruptions: SessionInterrupt[];
+  reason: string;
+  identityChanged: boolean;
+}
+
+async function writePartialSnapshot(input: PartialSnapshotInput): Promise<void> {
+  const partial = {
     meta: {
-      startedAt: options.startedAt,
+      startedAt: input.startedAt,
       endedAt: new Date().toISOString(),
-      baseUrl: options.baseUrl,
-      userAgent: options.userAgent,
-      entryId: options.entry.entry.id,
-      ...(identityChanged ? { identityChanged: true } : {}),
+      baseUrl: input.baseUrl,
+      userAgent: input.userAgent,
+      entryId: input.entryId,
+      ...(input.identityChanged ? { identityChanged: true } : {}),
     },
-    actions: options.actions,
-    network: options.networkRecording.records,
-    pages: options.pages,
-    interruptions: options.interruptions,
+    actions: input.actions,
+    ...(input.initialFormState.length > 0 ? { initialFormState: input.initialFormState } : {}),
+    network: input.network,
+    pages: input.pages,
+    interruptions: input.interruptions,
+    incomplete: true,
+    reason: input.reason,
   };
-  await writeFile(options.outputPath, `${JSON.stringify(partial, null, 2)}\n`, 'utf8');
+  await writeAtomic(input.outputPath, partial);
+}
+
+async function writeAtomic(path: string, value: unknown): Promise<void> {
+  const temporary = `${path}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await rename(temporary, path);
 }
 
 const RECORDING_PAUSED_MARKER = '__DSH_RECORDING_PAUSED__';
 
 async function setRecordingState(page: Page, enabled: boolean): Promise<void> {
-  await page.evaluate(
+  await tolerateNavigation(page, () => page.evaluate(
     ({ active, marker }) => {
       Reflect.set(window, '__DSH_RECORDING__', active);
       const tokens = window.name.split(' ').filter((token) => token && token !== marker);
@@ -476,11 +540,11 @@ async function setRecordingState(page: Page, enabled: boolean): Promise<void> {
       window.name = tokens.join(' ');
     },
     { active: enabled, marker: RECORDING_PAUSED_MARKER },
-  );
+  ));
 }
 
 async function showSessionNotice(page: Page, text: string): Promise<void> {
-  await page.evaluate((message) => {
+  await tolerateNavigation(page, () => page.evaluate((message) => {
     let bar = document.querySelector<HTMLDivElement>('#__dsh_recording_bar__');
     if (!bar) {
       bar = document.createElement('div');
@@ -497,7 +561,7 @@ async function showSessionNotice(page: Page, text: string): Promise<void> {
       background: '#d93025',
       textAlign: 'center',
     });
-  }, text);
+  }, text));
 }
 
 async function installRecorderProbe(
@@ -552,13 +616,14 @@ async function installRecorderProbe(
     await page.addScriptTag({ content: guardedProbe });
   };
   await injectCurrentProbe();
-  const injected = await page.evaluate(() => ({
+  const injected = await tolerateNavigation(page, () => page.evaluate(() => ({
     locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
     snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
     generator: typeof Reflect.get(window, '__DSH_PWGEN__'),
     mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
     ancestorScope: typeof Reflect.get(window, '__DSH_ANCESTOR_SCOPE__'),
-  }));
+  })));
+  if (!injected) return injectCurrentProbe;
   const missing = Object.entries(injected).filter(
     ([, value]) => value === 'undefined' || value === undefined,
   );
@@ -574,7 +639,7 @@ async function promoteByAncestor(
   page: Page,
   actionIdx: number,
 ): Promise<{ scopeSelector: string; targetSelector: string } | null> {
-  const candidate = await page.evaluate((idx) => {
+  const candidate = await tolerateNavigation(page, () => page.evaluate((idx) => {
     const derive = Reflect.get(window, '__DSH_ANCESTOR_SCOPE__') as (element: Element) => {
       scopeSelector: string;
       targetSelector: string;
@@ -582,7 +647,7 @@ async function promoteByAncestor(
     } | null;
     const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
     return derive(clicked[idx]!);
-  }, actionIdx);
+  }, actionIdx));
   if (!candidate || candidate.targetConfidence !== 'HIGH') return null;
 
   const scope = page.locator(candidate.scopeSelector);
@@ -590,18 +655,18 @@ async function promoteByAncestor(
   const target = scope.locator(candidate.targetSelector);
   if ((await target.count()) !== 1) return null;
   const handle = await target.elementHandle();
-  const matchesOracle = await page.evaluate(
+  const matchesOracle = await tolerateNavigation(page, () => page.evaluate(
     ({ element, idx }) => {
       const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
       return element === clicked[idx];
     },
     { element: handle, idx: actionIdx },
-  );
+  ));
   return matchesOracle ? candidate : null;
 }
 
 async function showRecordingBar(page: Page): Promise<void> {
-  await page.evaluate(() => {
+  await tolerateNavigation(page, () => page.evaluate(() => {
     const bar = document.createElement('div');
     bar.id = '__dsh_recording_bar__';
     bar.textContent = 'DSH 正在录制';
@@ -615,7 +680,23 @@ async function showRecordingBar(page: Page): Promise<void> {
       textAlign: 'center',
     });
     document.body.append(bar);
-  });
+  }));
+}
+
+async function tolerateNavigation<T>(page: Page, operation: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isNavigationRace(error)) throw error;
+    if (page.isClosed()) throw error;
+    await settleNavigation(page);
+    return undefined;
+  }
+}
+
+function isNavigationRace(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /execution context was destroyed|cannot find context with specified id|navigation.*interrupted/i.test(message);
 }
 
 function waitForManualStop(context: BrowserContext, page: Page): Promise<void> {

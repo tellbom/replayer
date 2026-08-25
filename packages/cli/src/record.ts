@@ -17,6 +17,7 @@ import { disambiguateWithLLM, DeepSeekProvider } from '@dsh/llm';
 import { record } from '@dsh/recorder';
 import type { Command } from 'commander';
 import { readFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 
 import { resolveSessionEndpoint } from './session.js';
@@ -49,6 +50,7 @@ export function configureRecordCommand(program: Command): void {
 export async function runRecord(options: RecordCliOptions): Promise<void> {
   const entryPath = resolve(options.entries, `${options.entry}.yaml`);
   const entry: Entry = parseEntry(await readFile(entryPath, 'utf8'));
+  const resumeSession = await loadConfirmedPartial(resolve(options.out, 'record.partial.json'));
   const cdpEndpoint = await resolveSessionEndpoint(entry, options.stateDir);
   // 【T-67b】消歧回调：LLM 提案 → Playwright 再验证（count==1 且命中原元素）→
   // 通过返回 scoped selector（playwright 引擎语法），否则 null 保持 LOW 产物
@@ -78,6 +80,33 @@ export async function runRecord(options: RecordCliOptions): Promise<void> {
     channel: options.channel,
     cdpEndpoint,
     onDisambiguation,
+    resumeSession,
   });
   process.stdout.write(`录制已写入 ${options.out}/record.json\n`);
+}
+
+async function loadConfirmedPartial(path: string): Promise<import('@dsh/core').RecordSession | undefined> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  process.stdout.write(`检测到未完成录制：${path}\n`);
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error('存在 record.partial.json；非交互环境无法确认恢复，请人工处理后重试');
+  }
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await prompt.question('是否从该 partial 继续录制？[y/N] ');
+    if (!/^y(?:es)?$/i.test(answer.trim())) return undefined;
+  } finally {
+    prompt.close();
+  }
+  const parsed = JSON.parse(text) as Partial<import('@dsh/core').RecordSession>;
+  if (!parsed.meta || !Array.isArray(parsed.actions) || !Array.isArray(parsed.network) || !Array.isArray(parsed.pages)) {
+    throw new Error('record.partial.json 结构无效，无法恢复');
+  }
+  return parsed as import('@dsh/core').RecordSession;
 }
