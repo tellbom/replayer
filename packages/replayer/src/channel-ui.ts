@@ -67,6 +67,9 @@ export async function executeUiStep(
     if (requestWait) await requestWait;
     await waitAfterAction(page, step.waitAfter);
     if (step.produces) await registerScope(page, step, context);
+    if (action.action !== 'readValue' && action.extract) {
+      Object.assign(context.vars, await extractPageVariables(page, action.extract));
+    }
     context.stepResults[step.id] = value;
     return {
       stepId: step.id,
@@ -80,6 +83,27 @@ export async function executeUiStep(
     if (error instanceof ScopeNotReadyError || error instanceof SemanticDriftError) throw error;
     throw locatorFailure(step, action.target ?? shortcutTarget(action), error);
   }
+}
+
+async function extractPageVariables(
+  page: Page,
+  extracts: Record<string, string>,
+): Promise<Record<string, string>> {
+  return page.evaluate((spec) => Object.fromEntries(Object.entries(spec).map(([name, selector]) => {
+    const matches = document.querySelectorAll(selector);
+    if (matches.length !== 1) {
+      throw new Error(`page extract must match exactly one element: ${selector} (${matches.length})`);
+    }
+    const element = matches[0]!;
+    const value = element instanceof HTMLInputElement
+      || element instanceof HTMLTextAreaElement
+      || element instanceof HTMLSelectElement
+      ? element.value
+      : element instanceof HTMLMetaElement
+        ? element.content
+        : element.textContent ?? '';
+    return [name, value];
+  })), extracts);
 }
 
 async function waitAfterAction(page: Page, waitAfter: Step['waitAfter']): Promise<void> {

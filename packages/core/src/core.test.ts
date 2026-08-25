@@ -147,7 +147,7 @@ describe('统一脱敏器', () => {
   });
 
   it('结构化处理 multipart 与 HTML hidden 字段', () => {
-    const sanitizer = createSanitizer();
+    const sanitizer = createSanitizer(['^__VIEWSTATE$']);
     const multipart = [
       '--dsh-boundary',
       'Content-Disposition: form-data; name="approvalToken"',
@@ -164,12 +164,35 @@ describe('统一脱敏器', () => {
       '<input type="hidden" name="__VIEWSTATE" value="secret-state"><input name="reason" value="版本上线">',
       'text/html',
     );
+    const configuredFieldResult = sanitizer.sanitizeObject({ __VIEWSTATE: 'secret-state' });
 
     expect(multipartResult.sanitizeMode).toBe('structured');
     expect(multipartResult.value).not.toContain('secret-token');
     expect(htmlResult.sanitizeMode).toBe('structured');
+    expect(configuredFieldResult.__VIEWSTATE).not.toContain('secret-state');
     expect(htmlResult.value).not.toContain('secret-state');
     expect(htmlResult.value).toContain('版本上线');
+  });
+
+  it('录制 header 可携带同盐摘要用于字段级溯源', () => {
+    const sanitizer = createSanitizer();
+    const secret = 'runtime-header-secret';
+    const headers = sanitizer.sanitizeHeaders({ 'X-CSRF-Token': secret }, true);
+    const digest = sanitizer.fingerprint(secret).match(/sha256:([a-f0-9]+)/)?.[1];
+
+    expect(headers['X-CSRF-Token']).toBe(`<FROM_PREFLIGHT:csrfToken|sha256:${digest}>`);
+    expect(JSON.stringify(headers)).not.toContain(secret);
+  });
+
+  it('entry 追加模式同时清洗枚举 label/value 等普通字符串叶子', () => {
+    const sanitizer = createSanitizer(['account-[0-9]+']);
+    const result = sanitizer.sanitizeObject({
+      enumOptions: [{ label: 'Account account-123', value: 'account-123' }],
+    });
+
+    expect(JSON.stringify(result)).not.toContain('account-123');
+    expect(result.enumOptions[0]?.label).toContain('<REDACTED:sha256:');
+    expect(result.enumOptions[0]?.value).toContain('<REDACTED:sha256:');
   });
 
   it('无法按声明的结构解析时标记 fallback', () => {

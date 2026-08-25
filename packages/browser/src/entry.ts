@@ -37,8 +37,10 @@ export async function ensureEntry(page: Page, entry: Entry): Promise<EntrySessio
 
   // 2. 经 direct/portal 进入
   if (entry.entry.via === 'direct') {
-    await page.goto(entry.entry.directUrl ?? entry.entry.landingUrlPattern);
-    await settleNavigation(page);
+    await settleNavigation(
+      page,
+      () => page.goto(entry.entry.directUrl ?? entry.entry.landingUrlPattern),
+    );
   } else {
     await enterViaPortal(page, entry);
   }
@@ -52,8 +54,10 @@ export async function ensureEntry(page: Page, entry: Entry): Promise<EntrySessio
   }
 
   if (entry.entry.via === 'direct' && !urlMatches(page.url(), entry.entry.landingUrlPattern)) {
-    await page.goto(entry.entry.directUrl ?? entry.entry.landingUrlPattern);
-    await settleNavigation(page);
+    await settleNavigation(
+      page,
+      () => page.goto(entry.entry.directUrl ?? entry.entry.landingUrlPattern),
+    );
   }
 
   // 【C19】等待通过一次性认证跳转（只等待，不记录、不重放）
@@ -69,20 +73,17 @@ async function enterViaPortal(page: Page, entry: Entry): Promise<void> {
   if (!linkText) throw new Error('via=portal 需要 entry.linkText');
   const link = page.locator('a', { hasText: linkText }).first();
 
-  await page.goto(portalUrl);
-  await settleNavigation(page);
+  await settleNavigation(page, () => page.goto(portalUrl));
   try {
     await link.waitFor({ state: 'visible', timeout: TIMEOUTS.entryProbe });
   } catch {
     // 门户未登录：部分门户会把 401 重定向到自身登录页（当前页面可能已不在门户）。
     // 等待用户完成认证后，重新回到门户页找入口链接。
     await ensureLoggedIn(page, entryToAuthConfig(entry, () => liveAuthorization(page, entry)));
-    await page.goto(portalUrl);
-    await settleNavigation(page);
+    await settleNavigation(page, () => page.goto(portalUrl));
     await link.waitFor({ state: 'visible', timeout: TIMEOUTS.entryProbe });
   }
-  await link.click();
-  await settleNavigation(page);
+  await settleNavigation(page, () => link.click());
 }
 
 /** 【C19】落地页可能经过一次性 token 跳转；等待 URL 最终命中 landingUrlPattern。 */

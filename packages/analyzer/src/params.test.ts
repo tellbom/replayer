@@ -21,9 +21,7 @@ describe('detectParams', () => {
       mutating: false, sanitizeMode: 'structured',
     }];
 
-    expect(detectParams(session)[0]?.definition).toMatchObject({
-      name: 'type', enumMap: { 年假: 'annual' },
-    });
+    expect(detectParams(session)[0]?.definition.name).toBe('type');
   });
   it('extracts four overtime parameters and excludes csrf', () => {
     const session = recording('工作日加班', '版本上线');
@@ -61,7 +59,7 @@ describe('detectParams', () => {
     ]);
   });
 
-  it('collects the complete enum map from a recorded options response', () => {
+  it('does not freeze an uncorrelated options response', () => {
     const session = recording('工作日加班', '版本上线');
     session.network.unshift({
       ...NO_CAUSALITY,
@@ -77,9 +75,100 @@ describe('detectParams', () => {
     });
 
     const type = detectParams(session).find((item) => item.definition.name === 'type')?.definition;
-    expect(type?.enumMap).toEqual({
-      工作日加班: 'workday', 周末加班: 'weekend', 节假日加班: 'holiday',
+    expect(type?.enumMap).toEqual({ 工作日加班: 'workday' });
+  });
+
+  it('freezes a complete DOM option set only after cross-record stability evidence', () => {
+    const first = recording('工作日加班', 'first-reason');
+    const second = recording('周末加班', 'second-reason');
+    const items = [
+      { label: '工作日加班', value: 'workday' },
+      { label: '周末加班', value: 'weekend' },
+    ];
+    first.actions[0] = {
+      ...first.actions[0]!, target: { strategy: 'css', selector: '#kind' },
+      enumOptions: { items, complete: true },
+    };
+    second.actions[0] = {
+      ...second.actions[0]!, target: { strategy: 'css', selector: '#kind' },
+      enumOptions: { items, complete: true },
+    };
+
+    const candidate = detectParams(first, second).find((item) => item.definition.name === 'type');
+    expect(candidate?.enumStatus).toBe('static');
+    expect(candidate?.definition.enumMap).toEqual({ 工作日加班: 'workday', 周末加班: 'weekend' });
+  });
+
+  it('V-108-8: marks an upstream-linked changed option set contextual instead of freezing it', () => {
+    const first = recording('工作日加班', 'first-reason');
+    const second = recording('纽约', 'second-reason');
+    first.actions[0] = {
+      ...first.actions[0]!, target: { strategy: 'css', selector: '#kind' },
+      enumOptions: {
+        items: [{ label: '工作日加班', value: 'workday' }, { label: '周末加班', value: 'weekend' }],
+        complete: true,
+      },
+    };
+    second.actions[0] = {
+      ...second.actions[0]!, target: { strategy: 'css', selector: '#kind' },
+      enumOptions: {
+        items: [{ label: '纽约', value: 'nyc' }, { label: '旧金山', value: 'sfo' }],
+        complete: true,
+      },
+    };
+    first.actions.unshift({
+      ts: 0.5, type: 'select', value: 'scope-a',
+      target: { strategy: 'css', selector: '#upstream' },
     });
+    second.actions.unshift({
+      ts: 0.5, type: 'select', value: 'scope-b',
+      target: { strategy: 'css', selector: '#upstream' },
+    });
+    first.network[0]!.actionIdx = 1;
+    second.network[0]!.actionIdx = 1;
+
+    const candidate = detectParams(first, second).find((item) => item.definition.name === 'type');
+    expect(candidate?.enumStatus).toBe('contextual');
+    expect(candidate?.definition.enumMap).toBeUndefined();
+  });
+
+  it('accepts response options only with recorded response-to-control evidence and no variable context', () => {
+    const session = recording('工作日加班', 'reason');
+    session.actions.unshift({
+      ts: 0.4, type: 'click', target: { strategy: 'css', selector: '#load' },
+      waitAfter: { notEmpty: { strategy: 'css', selector: '#kind' } },
+    });
+    session.actions[1] = {
+      ...session.actions[1]!, target: { strategy: 'css', selector: '#kind' }, text: '工作日加班',
+    };
+    session.network = [{
+      ...NO_CAUSALITY,
+      actionIdx: 0, causality: 'active-action',
+      causalityDebug: { targetKey: 'button|load||0', kind: 'click', valueAtRequest: null, msSinceTouched: 10 },
+      requestId: 'options', requestTs: 0.5, responseTs: 0.8, method: 'GET',
+      url: 'http://oa/options', resourceType: 'fetch', headers: {}, postData: null, status: 200,
+      responseBody: JSON.stringify([
+        { label: '工作日加班', value: 'workday' }, { label: '周末加班', value: 'weekend' },
+      ]),
+      mutating: false, sanitizeMode: 'structured',
+    }];
+
+    expect(detectParams(session).find((item) => item.definition.name === 'type')?.definition.enumMap)
+      .toEqual({ 工作日加班: 'workday', 周末加班: 'weekend' });
+  });
+
+  it('keeps distinct DOM sources separate when names and recorded values collide', () => {
+    const session = recording('one', 'two');
+    session.actions = [
+      { ts: 1, type: 'fill', name: 'shared', value: 'same', target: { strategy: 'css', selector: '#first' } },
+      { ts: 2, type: 'fill', name: 'shared', value: 'same', target: { strategy: 'css', selector: '#second' } },
+    ];
+    session.network = [];
+
+    expect(detectParams(session).map((item) => item.definition.name)).toEqual([
+      'shared',
+      'shared_2',
+    ]);
   });
 });
 

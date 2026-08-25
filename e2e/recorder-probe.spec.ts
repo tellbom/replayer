@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { ENUM_CAPTURE } from '@dsh/core';
 import { readFile } from 'node:fs/promises';
 
 import { login } from './helpers';
@@ -9,10 +10,11 @@ const probeScript = await readFile('packages/locator/dist/recorder-probe.iife.js
 const visibleHintScript = await readFile('packages/locator/dist/visible-hint.iife.js', 'utf8');
 
 test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) => {
-  const actions: Array<{ type: string }> = [];
-  await page.addInitScript(() => {
+  const actions: Array<{ type: string; enumOptions?: { items: unknown[]; complete: boolean } }> = [];
+  await page.addInitScript((maxOptions) => {
     Reflect.set(window, '__DSH_RECORDING__', true);
-  });
+    Reflect.set(window, '__DSH_ENUM_MAX_OPTIONS__', maxOptions);
+  }, ENUM_CAPTURE.maxOptions);
   await page.addInitScript({ content: generatorScript });
   await page.addInitScript({ content: mutationScript });
   await page.addInitScript({ content: visibleHintScript });
@@ -59,5 +61,43 @@ test('recorder-probe: 加班流程产生精确动作序列', async ({ page }) =>
   await page.getByRole('button', { name: '确认提交' }).click();
 
   const types = actions.map((action) => action.type);
-  expect(types).toEqual(['navigate', 'click', 'select', 'datetime', 'datetime', 'fill', 'click', 'click']);
+  expect(types).toEqual([
+    'navigate', 'click', 'select',
+    'datetime', 'datetime', 'datetime', 'datetime',
+    'fill', 'fill', 'click', 'click',
+  ]);
+  expect(actions.find((action) => action.type === 'select')?.enumOptions).toMatchObject({
+    complete: true,
+    items: expect.arrayContaining([
+      { label: '工作日加班', value: '工作日加班' },
+      { label: '周末加班', value: '周末加班' },
+    ]),
+  });
+});
+
+test('recorder-probe: native select caps the interaction-time option snapshot', async ({ page }) => {
+  const actions: Array<{
+    type: string;
+    enumOptions?: { items: unknown[]; complete: boolean; incompleteReason?: string };
+  }> = [];
+  await page.addInitScript((maxOptions) => {
+    Reflect.set(window, '__DSH_RECORDING__', true);
+    Reflect.set(window, '__DSH_ENUM_MAX_OPTIONS__', maxOptions);
+  }, ENUM_CAPTURE.maxOptions);
+  await page.addInitScript({ content: generatorScript });
+  await page.addInitScript({ content: mutationScript });
+  await page.addInitScript({ content: visibleHintScript });
+  await page.addInitScript({ content: probeScript });
+  await page.exposeBinding('__DSH_RECORD__', (_source, action: typeof actions[number]) => actions.push(action));
+  await page.goto('data:text/html,<html><body></body></html>');
+  const markup = `<label>Kind<select name="kind">${Array.from(
+    { length: ENUM_CAPTURE.maxOptions + 5 },
+    (_, index) => `<option value="v${index}">L${index}</option>`,
+  ).join('')}</select></label>`;
+  await page.evaluate((html) => { document.body.innerHTML = html; }, markup);
+  await page.locator('select').selectOption('v1');
+
+  const captured = actions.find((action) => action.type === 'select')?.enumOptions;
+  expect(captured).toMatchObject({ complete: false, incompleteReason: 'truncated' });
+  expect(captured?.items).toHaveLength(ENUM_CAPTURE.maxOptions);
 });

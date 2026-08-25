@@ -10,7 +10,7 @@ const PREFLIGHT_HEADER = /^(x-csrf-token|x-xsrf-token|__requestverificationtoken
 // 敏感词词形匹配：camel/snake 变体均命中（approvalToken、client_secret、api_key），
 // 仅排除同词内的小写延续（secretary、tokenize）这类业务字段误伤。
 const SENSITIVE_FIELD =
-  /(?:[Pp]assword|[Pp]asswd|[Aa]ccess_?[Tt]oken|[Rr]efresh_?[Tt]oken|[Tt]oken|[Ss]ession|[Ss]ecret|[Aa]pi_?[Kk]ey)(?![a-z])|__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken/;
+  /(?:password|passwd|access_?token|refresh_?token|token|session|secret|api_?key)(?![a-z])/i;
 
 export interface SanitizedBody {
   value: string;
@@ -19,7 +19,7 @@ export interface SanitizedBody {
 
 export interface Sanitizer {
   fingerprint(value: string): string;
-  sanitizeHeaders(headers: Record<string, string>): Record<string, string>;
+  sanitizeHeaders(headers: Record<string, string>, preserveLineage?: boolean): Record<string, string>;
   sanitizeObject<T>(value: T): T;
   sanitizeBody(body: string, contentType: string): string;
   sanitizeBodyWithMode(body: string, contentType: string): SanitizedBody;
@@ -27,16 +27,21 @@ export interface Sanitizer {
   sanitizeText(text: string): string;
 }
 
-export function createSanitizer(): Sanitizer {
+export function createSanitizer(additionalSensitivePatterns: readonly string[] = []): Sanitizer {
   const salt = randomBytes(32);
+  const additionalKeyPatterns = additionalSensitivePatterns.map((pattern) => new RegExp(pattern, 'i'));
+  const additionalValuePatterns = additionalSensitivePatterns.map((pattern) => new RegExp(pattern, 'gi'));
 
   const fingerprint = (value: string): string => {
     const digest = createHash('sha256').update(salt).update(value).digest('hex').slice(0, 12);
     return `<REDACTED:sha256:${digest}>`;
   };
 
+  const isSensitiveKey = (key: string): boolean => SENSITIVE_FIELD.test(key)
+    || additionalKeyPatterns.some((pattern) => pattern.test(key));
+
   const sanitizeUnknown = (value: unknown, key?: string): unknown => {
-    if (key !== undefined && SENSITIVE_FIELD.test(key)) {
+    if (key !== undefined && isSensitiveKey(key)) {
       return fingerprint(String(value));
     }
     // 【v2.0 规格第 5 条】字符串叶子可能是内嵌 JSON（如 StepResult.raw.text 持有的
@@ -49,6 +54,7 @@ export function createSanitizer(): Sanitizer {
         // 保持原值继续
       }
     }
+    if (typeof value === 'string') return sanitizeAdditionalText(value);
     if (Array.isArray(value)) {
       return value.map((item) => sanitizeUnknown(item));
     }
@@ -63,14 +69,20 @@ export function createSanitizer(): Sanitizer {
     return value;
   };
 
-  const sanitizeHeaders = (headers: Record<string, string>): Record<string, string> => {
+  const sanitizeHeaders = (
+    headers: Record<string, string>,
+    preserveLineage = false,
+  ): Record<string, string> => {
     const output: Record<string, string> = {};
     for (const [key, value] of Object.entries(headers)) {
       if (BROWSER_MANAGED_HEADER.test(key) || OMITTED_CREDENTIAL_HEADER.test(key)) continue;
       if (/^authorization$/i.test(key)) {
         output[key] = '<FROM_BROWSER>';
       } else if (PREFLIGHT_HEADER.test(key)) {
-        output[key] = '<FROM_PREFLIGHT:csrfToken>';
+        const digest = /^<REDACTED:sha256:([a-f0-9]+)>$/.exec(fingerprint(value))?.[1];
+        output[key] = preserveLineage && digest
+          ? `<FROM_PREFLIGHT:csrfToken|sha256:${digest}>`
+          : '<FROM_PREFLIGHT:csrfToken>';
       } else {
         output[key] = value;
       }
@@ -80,8 +92,14 @@ export function createSanitizer(): Sanitizer {
 
   const sanitizeObject = <T>(value: T): T => sanitizeUnknown(value) as T;
 
+  const sanitizeAdditionalText = (text: string): string =>
+    additionalValuePatterns.reduce(
+      (current, pattern) => current.replace(pattern, (value) => fingerprint(value)),
+      text
+    );
+
   const sanitizeText = (text: string): string =>
-    text
+    sanitizeAdditionalText(text)
       .replace(
         /(([\w.-]*(?:password|passwd|access_token|refresh_token|token|session|secret|api_key)[\w.-]*)\s*[=:]\s*["']?)([^\s,"'&}]+)/gi,
         (_match, prefix: string, _key: string, value: string) => `${prefix}${fingerprint(value)}`,
@@ -109,19 +127,19 @@ export function createSanitizer(): Sanitizer {
       if (mediaType === 'application/x-www-form-urlencoded') {
         const params = new URLSearchParams(body);
         for (const [key, value] of params) {
-          if (SENSITIVE_FIELD.test(key)) params.set(key, fingerprint(value));
+          if (isSensitiveKey(key)) params.set(key, fingerprint(value));
         }
         return { value: params.toString(), sanitizeMode: 'structured' };
       }
       if (mediaType === 'multipart/form-data') {
         const boundary = getBoundary(contentType);
         return {
-          value: sanitizeMultipart(body, boundary, fingerprint),
+          value: sanitizeMultipart(body, boundary, fingerprint, isSensitiveKey),
           sanitizeMode: 'structured',
         };
       }
       if (mediaType === 'text/html') {
-        return { value: sanitizeHiddenInputs(body, fingerprint), sanitizeMode: 'structured' };
+        return { value: sanitizeHiddenInputs(body, fingerprint, isSensitiveKey), sanitizeMode: 'structured' };
       }
       if ((mediaType === '' || mediaType === undefined) && /^\s*(?:\[|\{)/.test(body)) {
         return { value: JSON.stringify(sanitizeUnknown(JSON.parse(body))), sanitizeMode: 'structured' };
@@ -144,7 +162,7 @@ export function createSanitizer(): Sanitizer {
     const fragment = fragmentIndex === -1 ? '' : url.slice(fragmentIndex);
     const params = new URLSearchParams(query);
     for (const [key, value] of params) {
-      if (SENSITIVE_FIELD.test(key)) params.set(key, fingerprint(value));
+      if (isSensitiveKey(key)) params.set(key, fingerprint(value));
     }
     return `${base}?${params.toString()}${fragment}`;
   };
@@ -180,12 +198,13 @@ function sanitizeMultipart(
   body: string,
   boundary: string,
   fingerprint: (value: string) => string,
+  isSensitiveKey: (key: string) => boolean,
 ): string {
   return body
     .split(`--${boundary}`)
     .map((part) => {
       const name = /name="([^"]+)"/i.exec(part)?.[1];
-      if (!name || !SENSITIVE_FIELD.test(name)) return part;
+      if (!name || !isSensitiveKey(name)) return part;
       const separator = part.includes('\r\n\r\n') ? '\r\n\r\n' : '\n\n';
       const valueStart = part.indexOf(separator);
       if (valueStart === -1) throw new Error('multipart part 格式无效');
@@ -197,11 +216,14 @@ function sanitizeMultipart(
     .join(`--${boundary}`);
 }
 
-function sanitizeHiddenInputs(body: string, fingerprint: (value: string) => string): string {
+function sanitizeHiddenInputs(
+  body: string,
+  fingerprint: (value: string) => string,
+  isSensitiveKey: (key: string) => boolean,
+): string {
   return body.replace(/<input\b[^>]*>/gi, (input) => {
-    if (!/\btype\s*=\s*["']?hidden["']?/i.test(input)) return input;
     const name = /\bname\s*=\s*["']([^"']+)["']/i.exec(input)?.[1];
-    if (!name || !SENSITIVE_FIELD.test(name)) return input;
+    if (!name || !isSensitiveKey(name)) return input;
     return input.replace(
       /(\bvalue\s*=\s*["'])([^"']*)(["'])/i,
       (_match, prefix: string, value: string, suffix: string) =>

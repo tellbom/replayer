@@ -3,7 +3,7 @@ import type { RecordedAction, RecordedRequest, RecordSession, Skill } from '@dsh
 import { Document, isMap, isNode, isSeq } from 'yaml';
 
 import { correlate, type CorrelatedRequest } from './correlate.js';
-import { detectParams } from './params.js';
+import { analyzeIdentifierStability, detectParams } from './params.js';
 import { detectPreflight } from './preflight.js';
 
 interface DraftItem {
@@ -16,10 +16,17 @@ interface DraftItem {
   expectsRedirect: boolean;
 }
 
+interface PageScopedAnalysis {
+  bodyBindings: ReadonlyMap<string, string>;
+  extractsByAction: ReadonlyMap<number, Record<string, string>>;
+}
+
 export interface DraftResult {
   skill: Skill;
   yaml: string;
 }
+
+type ParamBindings = ReadonlyMap<number, Skill['params'][number]>;
 
 /** Collapse progressive input requests using browser-observed causality, never endpoint names. */
 export function collapseIntermediateRequests(
@@ -73,9 +80,25 @@ export function collapseIntermediateRequests(
 
 /** 将一次录制转为可校验、待人工复核的技能草稿。 */
 export function generateDraft(session: RecordSession, secondSession?: RecordSession): DraftResult {
+  assertRecordSession(session);
   const analysisSession = { ...session, network: collapseIntermediateRequests(session.network) };
   const correlated = correlate(analysisSession);
-  const params = detectParams(session, secondSession).map((candidate) => candidate.definition);
+  const identifierStability = analyzeIdentifierStability(session, secondSession);
+  const paramCandidates = detectParams(session, secondSession);
+  const params = paramCandidates.map((candidate) => candidate.definition);
+  const paramBindings = new Map<number, Skill['params'][number]>();
+  for (const candidate of paramCandidates) {
+    candidate.sourceIndexes.forEach((index) => paramBindings.set(index, candidate.definition));
+  }
+  const enumEvidenceNotes = paramCandidates.flatMap((candidate) => {
+    if (candidate.enumStatus === 'contextual') {
+      return [`参数 ${candidate.definition.name} 的选项集合随上下文变化，禁止静态固化 enumMap。`];
+    }
+    if (candidate.enumStatus === 'incomplete') {
+      return [`参数 ${candidate.definition.name} 仅保留录制值；完整静态选项集合尚未得到证明。`];
+    }
+    return [];
+  });
   const items: DraftItem[] = [];
   const interruptionIndexes = new Set(session.interruptions?.map((item) => item.atActionIdx) ?? []);
   const networkOwnedScopes = new Set(
@@ -94,9 +117,12 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     if (recordedAction?.produces && networkOwnedScopes.has(recordedAction.produces.scopeId)) {
       continue;
     }
-    const action = recordedAction?.scope && networkOwnedScopes.has(recordedAction.scope)
-      ? { ...recordedAction, scope: undefined }
-      : recordedAction;
+    const stableAction = recordedAction
+      ? withIdentifierConfidence(recordedAction, actionIndex, identifierStability)
+      : null;
+    const action = stableAction?.scope && networkOwnedScopes.has(stableAction.scope)
+      ? { ...stableAction, scope: undefined }
+      : stableAction;
     const afterSessionInterrupt = interruptionIndexes.has(actionIndex);
     if (step.requests.length === 0 && action) {
       items.push({
@@ -140,7 +166,8 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     ...session.actions,
     ...(session.initialFormState ?? []).map((state) => ({ ...state })),
   ];
-  const extracts = dependencyExtracts(items, params, recordedInputs);
+  const pageScoped = pageScopedAnalysis(session, params.map((param) => param.name));
+  const extracts = dependencyExtracts(items, params, recordedInputs, paramBindings);
   const preflight = detectPreflight(analysisSession);
   const steps: Skill['steps'] = items.map(
     (item) =>
@@ -152,14 +179,21 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
         session.meta.baseUrl,
         stepByActionIndex,
         recordedInputs,
+        paramBindings,
+        pageScoped,
       ) as Skill['steps'][number],
   );
+  const usedParams = params.filter((param) => steps.some((step) => [
+    step.network?.url, step.network?.headers, step.network?.body, step.ui?.value,
+  ].some((value) => containsParameterTemplate(value, param.name))));
+  const unusedParamNotes = params
+    .filter((param) => !usedParams.includes(param))
+    .map((param) => `参数 ${param.name} 无可靠引用，已从 draft 参数声明中移除。`);
   const provenanceNotes = guardMutatingBodyLiterals(
     steps,
     new Set(preflight.map((item) => item.name)),
-    items,
   );
-  const postcondition = inferPostcondition(items, params, session.meta.baseUrl);
+  const postcondition = inferPostcondition(items, usedParams, session.meta.baseUrl);
   // 【C16】技能不含 auth 段：认证载体在 entries/<id>.yaml，录制时由 record 记录 entryId。
   const raw = {
     skill: {
@@ -172,7 +206,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       version: 1,
       recordedAt: session.meta.endedAt,
     },
-    params,
+    params: usedParams,
     preflight,
     steps,
     assertions: steps.some((step) => step.expectsRedirect)
@@ -208,10 +242,13 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       ...businessHeaderNotes(steps),
       ...provenanceNotes,
       ...sessionInterruptNotes(items, session),
+      ...identifierStabilityNotes(identifierStability),
+      ...unrecognizedActionNotes(items),
+      ...unusedParamNotes,
+      ...enumEvidenceNotes,
     ],
   };
   const skill = SkillSchema.parse(raw);
-  assertParametersUsed(skill);
   assertNoIndexedResponseTemplates(skill);
   return { skill, yaml: renderDraftYaml(skill, Boolean(postcondition)) };
 }
@@ -232,6 +269,53 @@ export function assertParametersUsed(skill: Skill): void {
         `请检查步骤 ${candidates.length > 0 ? candidates.join('、') : '中与该参数对应的 body/ui.value'}。`,
     );
   }
+}
+
+function assertRecordSession(session: RecordSession): void {
+  if (!session || typeof session !== 'object' || !session.meta
+    || !Array.isArray(session.actions) || !Array.isArray(session.network)
+    || !Array.isArray(session.pages)) {
+    throw new TypeError('input is not a RecordSession');
+  }
+  new URL(session.meta.baseUrl);
+}
+
+function withIdentifierConfidence(
+  action: RecordedAction,
+  index: number,
+  stability: ReturnType<typeof analyzeIdentifierStability>,
+): RecordedAction {
+  if (!stability.confirmed.has(index) && !stability.suspected.has(index)) return action;
+  if (action.target?.strategy !== 'playwright' && action.target?.strategy !== 'frame-playwright') {
+    return action;
+  }
+  return { ...action, target: { ...action.target, confidence: 'LOW' } };
+}
+
+function identifierStabilityNotes(
+  stability: ReturnType<typeof analyzeIdentifierStability>,
+): string[] {
+  return [
+    ...[...stability.confirmed].map((index) =>
+      `动作 ${index} 的 DOM 标识在两份录制间发生变化，已确认不稳定并降低定位置信度。`,
+    ),
+    ...[...stability.suspected]
+      .filter((index) => !stability.confirmed.has(index))
+      .map((index) =>
+        `动作 ${index} 的 DOM 标识含高熵片段，仅标记为疑似不稳定并降低定位置信度。`,
+      ),
+  ];
+}
+
+function unrecognizedActionNotes(items: DraftItem[]): string[] {
+  return items.flatMap((item) => {
+    const action = item.action;
+    if (!action || action.type === 'navigate') return [];
+    const visible = action.label ?? action.text ?? action.recordedHint?.visibleText;
+    return visible?.trim()
+      ? []
+      : [`步骤 ${item.id} 无可识别文本，无法可靠标注语义；若涉及可变输入请人工补充。`];
+  });
 }
 
 function containsParameterTemplate(value: unknown, name: string): boolean {
@@ -280,12 +364,23 @@ function draftStep(
   baseUrl: string,
   stepByActionIndex: Map<number, string>,
   recordedInputs: RecordedAction[],
+  paramBindings: ParamBindings,
+  pageScoped: PageScopedAnalysis,
 ): unknown {
   const request = item.request;
-  const ui = item.action ? uiAction(item.action, params, item.afterSessionInterrupt) : undefined;
+  const ui = item.action
+    ? uiAction(
+        item.action,
+        paramBindings.get(item.sourceActionIndex),
+        pageScoped.extractsByAction.get(item.sourceActionIndex),
+        item.afterSessionInterrupt,
+      )
+    : undefined;
   const network = request
     ? networkAction(
         request, params, stepByRequest, extracts.get(request.requestId), baseUrl, recordedInputs,
+        paramBindings,
+        pageScoped.bodyBindings,
       )
     : item.action?.type === 'navigate'
       ? {
@@ -294,7 +389,6 @@ function draftStep(
           contentType: 'json',
         }
       : undefined;
-  const critical = request && /approve|delete|pay/i.test(request.url);
   return {
     id: item.id,
     desc: stepDescription(item),
@@ -306,7 +400,7 @@ function draftStep(
         : item.action?.type === 'fill' || item.action?.type === 'datetime'
           ? 'merged'
           : 'ui',
-    riskLevel: critical ? 'critical' : request?.mutating ? 'write' : 'read',
+    riskLevel: request?.mutating ? 'write' : 'read',
     hasSideEffect: item.hasSideEffect,
     ...(item.expectsRedirect ? { expectsRedirect: true } : {}),
     ...(network ? { network } : {}),
@@ -347,6 +441,8 @@ function networkAction(
   extract: Record<string, string> | undefined,
   baseUrl: string,
   recordedInputs: RecordedAction[],
+  paramBindings: ParamBindings,
+  pageBindings: PageScopedAnalysis['bodyBindings'],
 ): unknown {
   const contentType = (request.headers['content-type'] ?? '').includes(
     'application/x-www-form-urlencoded',
@@ -354,10 +450,11 @@ function networkAction(
     ? 'form'
     : 'json';
   const body = requestBody(request, contentType);
-  parameterizeBody(body, params, recordedInputs);
+  parameterizeBody(body, params, recordedInputs, paramBindings, pageBindings, request.requestId);
   for (const dependency of request.dependsOn) {
+    if (dependency.to.startsWith('header.')) continue;
     if (isTracedTemplate(readBodyPath(body, dependency.to))) continue;
-    const dependencyPath = resolvedDependencyPath(dependency, params, recordedInputs);
+    const dependencyPath = resolvedDependencyPath(dependency, params, recordedInputs, paramBindings);
     if (!dependencyPath) {
       setBodyPath(body, dependency.to, 'TODO_UNRESOLVED');
       continue;
@@ -366,10 +463,12 @@ function networkAction(
     if (!sourceStep) throw new Error(`依赖源请求未生成步骤: ${dependency.from}`);
     setBodyPath(body, dependency.to, `{{${sourceStep}.${dependencyTargetName(dependency)}}}`);
   }
-  const headers = dynamicHeaders(request.headers);
+  const headers = dynamicHeaders(request.headers, request.dependsOn, stepByRequest);
   return {
     method: request.method,
-    url: parameterizeUrl(request, relativeUrl(request.url, baseUrl), params, recordedInputs),
+    url: parameterizeUrl(
+      request, relativeUrl(request.url, baseUrl), params, recordedInputs, paramBindings,
+    ),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
     contentType,
     ...(Object.keys(body).length > 0 ? { body } : {}),
@@ -377,8 +476,13 @@ function networkAction(
   };
 }
 
-function uiAction(action: RecordedAction, params: Skill['params'], discardScope = false): unknown {
-  const name = params.find((param) => param.prompt === action.label)?.name;
+function uiAction(
+  action: RecordedAction,
+  param: Skill['params'][number] | undefined,
+  extracts: Record<string, string> | undefined,
+  discardScope = false,
+): unknown {
+  const name = param?.name;
   const value = name ? `{{${name}}}` : action.value;
   const common = {
     ...(action.target ? { target: action.target } : {}),
@@ -386,13 +490,14 @@ function uiAction(action: RecordedAction, params: Skill['params'], discardScope 
     ...(value !== undefined ? { value } : {}),
     ...(action.scope && !discardScope ? { scope: action.scope } : {}),
     ...(action.recordedHint ? { recordedHint: action.recordedHint } : {}),
+    ...(extracts && Object.keys(extracts).length > 0 ? { extract: extracts } : {}),
   };
   if (action.type === 'select') return { action: 'selectOption', ...common };
   if (action.type === 'radio' || action.type === 'checkbox') {
     return { action: 'check', ...common, checked: action.checked ?? true };
   }
   if (action.type === 'datetime') return { action: 'setDateTime', ...common };
-  if (action.type === 'navigate') return { action: 'navigate', url: action.url };
+  if (action.type === 'navigate') return { action: 'navigate', url: action.url, ...common };
   return { action: action.type, ...common };
 }
 
@@ -400,11 +505,12 @@ function dependencyExtracts(
   items: DraftItem[],
   params: Skill['params'],
   recordedInputs: RecordedAction[],
+  paramBindings: ParamBindings,
 ): Map<string, Record<string, string>> {
   const extracts = new Map<string, Record<string, string>>();
   for (const item of items) {
     for (const dependency of item.request?.dependsOn ?? []) {
-      const path = resolvedDependencyPath(dependency, params, recordedInputs);
+      const path = resolvedDependencyPath(dependency, params, recordedInputs, paramBindings);
       if (!path) continue;
       const name = dependencyTargetName(dependency);
       const current = extracts.get(dependency.from) ?? {};
@@ -419,11 +525,12 @@ function resolvedDependencyPath(
   dependency: CorrelatedRequest['dependsOn'][number],
   params: Skill['params'],
   recordedInputs: RecordedAction[],
+  paramBindings: ParamBindings,
 ): string | undefined {
   if (dependency.ambiguous) return undefined;
   if (!dependency.discriminator) return dependency.path;
   const action = recordedInputs[dependency.discriminator.actionIndex];
-  const param = action ? parameterForAction(action, params) : undefined;
+  const param = action ? parameterForAction(action, params, recordedInputs, paramBindings) : undefined;
   const indexed = /^(.*)\[\d+\](.*)$/.exec(dependency.path);
   if (!param || !indexed || !/^[A-Za-z_$][\w$]*$/.test(dependency.discriminator.field)) {
     return undefined;
@@ -432,6 +539,9 @@ function resolvedDependencyPath(
 }
 
 function dependencyTargetName(dependency: CorrelatedRequest['dependsOn'][number]): string {
+  if (dependency.to.startsWith('header.')) {
+    return `header_${dependency.to.slice('header.'.length).replace(/[^A-Za-z0-9_]/g, '_')}`;
+  }
   return dependency.to.split('.').at(-1) ?? 'value';
 }
 
@@ -440,12 +550,13 @@ function parameterizeUrl(
   url: string,
   params: Skill['params'],
   recordedInputs: RecordedAction[],
+  paramBindings: ParamBindings,
 ): string {
   if (request.correlation?.method !== 'action-causality'
     && request.correlation?.method !== 'request-value-match') return url;
   const action = recordedInputs[request.correlation.ownerActionIndex];
-  const param = action ? parameterForAction(action, params) : undefined;
-  if (!action || !param) return url;
+  const param = action ? parameterForAction(action, params, recordedInputs, paramBindings) : undefined;
+  if (!action || !param || !canRenderParam(param)) return url;
   const candidates = new Set(parameterValues(action, param));
   const matches: Array<{ prefix: string; encoded: string }> = [];
   url.replace(/([?&][^=&#]+=)([^&#]*)/g, (_match, prefix: string, encoded: string) => {
@@ -477,15 +588,18 @@ function parameterValues(
   return [...new Set([...direct, ...aliases])];
 }
 
+function canRenderParam(param: Skill['params'][number]): boolean {
+  return param.type !== 'enum' || Boolean(param.enumMap && Object.keys(param.enumMap).length > 0);
+}
+
 function parameterForAction(
   action: RecordedAction,
   params: Skill['params'],
+  recordedInputs: RecordedAction[],
+  paramBindings: ParamBindings,
 ): Skill['params'][number] | undefined {
-  return params.find((param) =>
-    (action.name && param.name === action.name)
-    || (action.label && param.prompt === action.label)
-    || param.values?.some((value) => value.label === action.value || value.value === action.value),
-  );
+  const index = recordedInputs.indexOf(action);
+  return index >= 0 ? paramBindings.get(index) : undefined;
 }
 
 function requestBody(
@@ -493,52 +607,116 @@ function requestBody(
   contentType: 'json' | 'form',
 ): Record<string, unknown> {
   if (!request.postData) return {};
-  return contentType === 'json'
-    ? JSON.parse(request.postData)
-    : Object.fromEntries(new URLSearchParams(request.postData));
+  try {
+    if (contentType === 'form') return Object.fromEntries(new URLSearchParams(request.postData));
+    const parsed: unknown = JSON.parse(request.postData);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : { unresolvedBody: 'TODO_UNRESOLVED' };
+  } catch {
+    return { unresolvedBody: 'TODO_UNRESOLVED' };
+  }
 }
 
 function parameterizeBody(
   body: Record<string, unknown>,
   params: Skill['params'],
   recordedInputs: RecordedAction[],
+  paramBindings: ParamBindings,
+  pageBindings: PageScopedAnalysis['bodyBindings'],
+  requestId: string,
 ): void {
   visitBodyLeaves(body, [], (path, value, replace) => {
     const leafName = path.at(-1);
     const named = leafName ? params.find((candidate) => candidate.name === leafName) : undefined;
     const namedAction = named && recordedInputs.find((action) =>
-      parameterForAction(action, params)?.name === named.name
+      parameterForAction(action, params, recordedInputs, paramBindings)?.name === named.name
       && parameterValues(action, named).includes(String(value)),
     );
-    if (named && namedAction) {
+    if (named && namedAction && canRenderParam(named)) {
       replace(`{{${named.name}${named.type === 'enum' ? '|enumValue' : ''}}}`);
       return;
     }
     if (typeof value !== 'string' && typeof value !== 'number') return;
     const candidates = recordedInputs.flatMap((action) => {
-      const param = parameterForAction(action, params);
-      if (!param || !parameterValues(action, param).includes(String(value))) return [];
+      const param = parameterForAction(action, params, recordedInputs, paramBindings);
+      if (!param || !canRenderParam(param)
+        || !parameterValues(action, param).includes(String(value))) return [];
       return [param];
     });
     const unique = [...new Map(candidates.map((param) => [param.name, param])).values()];
-    if (unique.length !== 1) return;
-    const param = unique[0]!;
-    replace(`{{${param.name}${param.type === 'enum' ? '|enumValue' : ''}}}`);
+    if (unique.length === 1) {
+      const param = unique[0]!;
+      replace(`{{${param.name}${param.type === 'enum' ? '|enumValue' : ''}}}`);
+      return;
+    }
+    if (unique.length > 1) return;
+    const pageVariable = pageBindings.get(`${requestId}:${path.join('.')}`);
+    if (pageVariable) replace(`{{${pageVariable}}}`);
   });
+}
+
+function pageScopedAnalysis(session: RecordSession, reservedNames: string[]): PageScopedAnalysis {
+  const bodyBindings = new Map<string, string>();
+  const extractsByAction = new Map<number, Record<string, string>>();
+  const variablesBySource = new Map<string, string>();
+  const usedNames = [...reservedNames];
+  for (const request of session.network.filter((candidate) => candidate.mutating)) {
+    const snapshot = [...(session.pageSnapshots ?? [])]
+      .filter((candidate) => candidate.ts <= request.requestTs)
+      .sort((left, right) => right.ts - left.ts)[0];
+    if (!snapshot || snapshot.actionIdx === null) continue;
+    const actionIdx = snapshot.actionIdx;
+    const navigation = session.actions[actionIdx];
+    if (navigation?.type !== 'navigate') continue;
+    const body = safeObjectBody(request);
+    visitBodyLeaves(body, [], (path, value) => {
+      if (typeof value !== 'string' && typeof value !== 'number') return;
+      const matches = snapshot.immutableValues.filter((candidate) => candidate.value === String(value));
+      if (matches.length !== 1) return;
+      const match = matches[0]!;
+      if (match.locator.strategy !== 'css') return;
+      const source = JSON.stringify([snapshot.ts, match.locator]);
+      let variable = variablesBySource.get(source);
+      if (!variable) {
+        const base = normalizeVariableName(path.at(-1)) ?? 'pageValue';
+        variable = uniqueVariableName(base, usedNames);
+        usedNames.push(variable);
+        variablesBySource.set(source, variable);
+      }
+      bodyBindings.set(`${request.requestId}:${path.join('.')}`, variable);
+      const extracts = extractsByAction.get(actionIdx) ?? {};
+      extracts[variable] = match.locator.selector;
+      extractsByAction.set(actionIdx, extracts);
+    });
+  }
+  return { bodyBindings, extractsByAction };
+}
+
+function normalizeVariableName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.replace(/[^A-Za-z0-9_$]+/g, '_');
+  if (!normalized) return undefined;
+  return /^[A-Za-z_$]/.test(normalized) ? normalized : `page_${normalized}`;
+}
+
+function uniqueVariableName(base: string, used: string[]): string {
+  if (!used.includes(base)) return base;
+  let suffix = 2;
+  while (used.includes(`${base}_${suffix}`)) suffix += 1;
+  return `${base}_${suffix}`;
 }
 
 function guardMutatingBodyLiterals(
   steps: Skill['steps'],
   preflightNames: ReadonlySet<string>,
-  items: DraftItem[],
 ): string[] {
   const notes: string[] = [];
-  for (const [stepIndex, step] of steps.entries()) {
+  for (const step of steps) {
     if (!step.hasSideEffect || !step.network?.body) continue;
-    const paginationDefaultEvidence = items[stepIndex]?.request?.actionIdx === null;
     visitBodyLeaves(step.network.body, [], (path, value, replace) => {
       if (isTracedTemplate(value)
-        || isLiteralExempt(path, value, step.network!.url, paginationDefaultEvidence)) return;
+        || isLiteralExempt(value, step.network!.url)) return;
       const leafName = path.at(-1);
       if (leafName && preflightNames.has(leafName)) {
         replace(`{{${leafName}}}`);
@@ -582,17 +760,8 @@ function isTracedTemplate(value: unknown): boolean {
   return typeof value === 'string' && /^\{\{[^{}]+\}\}$/.test(value);
 }
 
-function isLiteralExempt(
-  path: string[],
-  value: unknown,
-  requestUrl: string,
-  paginationDefaultEvidence: boolean,
-): boolean {
+function isLiteralExempt(value: unknown, requestUrl: string): boolean {
   if (value === null || value === '' || typeof value === 'boolean') return true;
-  const leafName = path.at(-1);
-  if (paginationDefaultEvidence
-    && leafName
-    && ['page', 'pageSize', 'offset', 'limit'].includes(leafName)) return true;
   if (typeof value !== 'string' && typeof value !== 'number') return false;
   let pathname: string;
   try {
@@ -638,8 +807,19 @@ function longestKeyPrefix(node: Record<string, unknown>, path: string): string |
   return candidates[0];
 }
 
-function dynamicHeaders(headers: Record<string, string>): Record<string, string> {
-  return { ...headers };
+function dynamicHeaders(
+  headers: Record<string, string>,
+  dependencies: CorrelatedRequest['dependsOn'],
+  stepByRequest: Map<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(Object.entries(headers).map(([name, value]) => {
+    if (!/^<FROM_PREFLIGHT:[^|>]+\|sha256:[a-f0-9]+>$/.test(value)) return [name, value];
+    const dependency = dependencies.find((candidate) => candidate.to === `header.${name}`);
+    const sourceStep = dependency ? stepByRequest.get(dependency.from) : undefined;
+    return [name, dependency && sourceStep
+      ? `{{${sourceStep}.${dependencyTargetName(dependency)}}}`
+      : 'TODO_UNRESOLVED'];
+  }));
 }
 
 function businessHeaderNotes(steps: Skill['steps']): string[] {
@@ -717,9 +897,13 @@ function isRedirectingSubmission(session: RecordSession, request: RecordedReques
 }
 
 function withoutHash(url: string): string {
-  const parsed = new URL(url);
-  parsed.hash = '';
-  return parsed.href;
+  try {
+    const parsed = new URL(url);
+    parsed.hash = '';
+    return parsed.href;
+  } catch {
+    return url;
+  }
 }
 
 function safeObjectBody(request: RecordedRequest): Record<string, unknown> {
@@ -800,20 +984,27 @@ function commentSequence(document: Document, key: string, comment: string): void
 }
 
 function relativeUrl(url: string, baseUrl: string): string {
-  const parsed = new URL(url, baseUrl);
-  return parsed.origin === new URL(baseUrl).origin
-    ? `${parsed.pathname}${parsed.search}`
-    : parsed.href;
+  try {
+    const parsed = new URL(url, baseUrl);
+    return parsed.origin === new URL(baseUrl).origin
+      ? `${parsed.pathname}${parsed.search}`
+      : parsed.href;
+  } catch {
+    return 'TODO_UNRESOLVED';
+  }
 }
 
 function stepDescription(item: DraftItem): string {
-  return (
-    item.action?.label ?? item.action?.text ?? item.action?.type ?? item.request?.url ?? item.id
-  );
+  if (item.action && item.action.type !== 'navigate') {
+    const visible = item.action.label ?? item.action.text ?? item.action.recordedHint?.visibleText;
+    if (!visible?.trim()) return 'TODO_UNRESOLVED';
+  }
+  return item.action?.label ?? item.action?.text ?? item.action?.type ?? item.request?.url ?? item.id;
 }
 
 function skillId(items: DraftItem[]): string {
   const submit = items.find((item) => item.request?.isSubmit)?.request;
-  const path = submit ? new URL(submit.url).pathname : '/recorded/skill';
+  let path = '/recorded/skill';
+  try { if (submit) path = new URL(submit.url).pathname; } catch { /* keep generic id */ }
   return path.split('/').filter(Boolean).join('_').replace(/^api_/, '') || 'recorded_skill';
 }

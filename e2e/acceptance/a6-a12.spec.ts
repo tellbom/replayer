@@ -5,7 +5,7 @@ import type { ExecContext, ILLMProvider, LocatorStrategy, Skill, Step } from '@d
 import { executeHeal, proposeHeal } from '@dsh/llm';
 import { executePreflights } from '@dsh/replayer';
 import { runNaturalLanguage } from '../../packages/cli/src/run';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
@@ -108,9 +108,11 @@ test.skip('A8 Vue2 条件未启用：doctor 尚未确认目标为 Vue2 + Element
 
 test('A9 自然语言路由抽参后执行已有技能', async ({ browserName }, testInfo) => {
   await seedProfile(testInfo.outputPath(`profile-${browserName}`));
+  const skillDirectory = await mkdtemp(join(tmpdir(), 'dsh-a9-skills-'));
+  await copyFile('skills/oa_overtime_submit.yaml', join(skillDirectory, 'oa_overtime_submit.yaml'));
   const instruction = '提交工作日加班，开始 2026-08-19 18:00:00，结束 2026-08-19 21:00:00，事由 A9 验收';
   await runNaturalLanguage(instruction, {
-    skills: './skills', entries: './entries',
+    skills: skillDirectory, entries: './entries',
     profile: testInfo.outputPath(`profile-${browserName}`), llm: true, yes: true,
   }, {
     provider: mockLLM([{

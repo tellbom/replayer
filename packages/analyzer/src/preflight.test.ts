@@ -4,20 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { detectAuth, detectPreflight } from './preflight.js';
 
 describe('detectPreflight', () => {
-  it('detects Vue3 meta csrf', () => {
+  it('does not invent a global request or DOM read from header names', () => {
     const session = baseSession();
     session.network = [request({ headers: { 'x-csrf-token': 'fingerprint' } })];
-    expect(detectPreflight(session)).toContainEqual({
-      name: 'csrfToken',
-      extract: {
-        type: 'dom',
-        selector: 'meta[name="csrf-token"]',
-        attribute: 'content',
-      },
-    });
+    expect(detectPreflight(session)).toEqual([]);
   });
 
-  it('derives DOM-sourced form fields without fixed framework field names', () => {
+  it('does not invent a GET for an unexplained form literal', () => {
     const session = baseSession();
     session.pages = [{ ts: 1, url: 'http://oa/legacy/overtime', title: 'Legacy' }];
     session.network = [
@@ -28,18 +21,10 @@ describe('detectPreflight', () => {
       }),
     ];
     session.actions = [{ ts: 0, type: 'fill', name: 'userChoice', value: 'selected' }];
-    expect(detectPreflight(session)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: 'runtimeNonce',
-          request: { method: 'GET', url: 'http://oa/legacy/overtime' },
-        }),
-      ]),
-    );
-    expect(detectPreflight(session).some((item) => item.name === 'userChoice')).toBe(false);
+    expect(detectPreflight(session)).toEqual([]);
   });
 
-  it('detects a JSON token endpoint', () => {
+  it('does not move a recorded response request into global preflight', () => {
     const session = baseSession();
     session.network = [
       request({
@@ -49,11 +34,7 @@ describe('detectPreflight', () => {
         responseBody: JSON.stringify({ token: 'fingerprint' }),
       }),
     ];
-    expect(detectPreflight(session)).toContainEqual({
-      name: 'token',
-      request: { method: 'GET', url: 'http://oa/api/csrf' },
-      extract: { type: 'jsonPath', path: '$.token' },
-    });
+    expect(detectPreflight(session)).toEqual([]);
   });
 });
 

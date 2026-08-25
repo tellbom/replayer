@@ -184,6 +184,23 @@ describe('generateDraft', () => {
 
   it('binds enum request fields to the caller parameter and rejects indexed response templates', () => {
     const session = recording(false);
+    const second = recording(false);
+    const enumItems = [
+      { label: '工作日加班', value: 'workday' },
+      { label: '周末加班', value: 'weekend' },
+      { label: '节假日加班', value: 'holiday' },
+    ];
+    session.actions[0] = {
+      ...session.actions[0]!, target: { strategy: 'css', selector: '#type' },
+      enumOptions: { items: enumItems, complete: true },
+    };
+    second.actions[0] = {
+      ...second.actions[0]!, value: '周末加班', target: { strategy: 'css', selector: '#type' },
+      enumOptions: { items: enumItems, complete: true },
+    };
+    second.network.find((request) => request.url.includes('/approver'))!.postData = JSON.stringify({
+      type: 'weekend',
+    });
     session.network.unshift({
       ...NO_CAUSALITY,
       requestId: 'types', requestTs: 900, responseTs: 950, method: 'GET',
@@ -197,7 +214,7 @@ describe('generateDraft', () => {
       mutating: false, sanitizeMode: 'structured',
     });
 
-    const result = generateDraft(session);
+    const result = generateDraft(session, second);
     const type = result.skill.params.find((param) => param.name === 'type');
     const bodies = result.skill.steps
       .filter((step) => step.network?.url.includes('/approver') || step.network?.url.includes('/submit'))
@@ -286,7 +303,8 @@ describe('generateDraft', () => {
     const body = result.skill.steps[0]?.network?.body;
 
     expect(body).toEqual({
-      deliveryMode: 'TODO_UNRESOLVED', enabled: true, note: '', items: [], clearedAt: null, route: 'jobs', page: 1,
+      deliveryMode: 'TODO_UNRESOLVED', enabled: true, note: '', items: [], clearedAt: null, route: 'jobs',
+      page: 'TODO_UNRESOLVED',
     });
     expect(result.skill._notes).toEqual(expect.arrayContaining([
       expect.stringContaining('deliveryMode'),
@@ -397,7 +415,113 @@ describe('generateDraft', () => {
       match: expect.objectContaining({ jsonPath: '$.list[*]' }),
     }));
   });
+
+  it('binds same-named controls by source lineage and parameterizes distinct leaf values', () => {
+    const session = sameNamedControlsSession('recorded-first', 'recorded-second');
+    const result = generateDraft(session);
+
+    expect(result.skill.params.map((param) => param.name)).toEqual(['shared', 'shared_2']);
+    expect(result.skill.steps.filter((step) => step.ui?.action === 'fill').map((step) => step.ui?.value))
+      .toEqual(['{{shared}}', '{{shared_2}}']);
+    expect(result.skill.steps.find((step) => step.network?.method === 'POST')?.network?.body)
+      .toEqual({ first: '{{shared}}', second: '{{shared_2}}' });
+  });
+
+  it('blocks an ambiguous same-value write instead of silently choosing a source', () => {
+    const result = generateDraft(sameNamedControlsSession('same', 'same'));
+    const body = result.skill.steps.find((step) => step.network?.method === 'POST')?.network?.body;
+
+    expect(result.skill.params.map((param) => param.name)).toEqual(['shared', 'shared_2']);
+    expect(body).toEqual({ first: 'TODO_UNRESOLVED', second: 'TODO_UNRESOLVED' });
+    expect(() => parseSkill(result.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
+  });
+
+  it('marks high-entropy identifiers as suspected without deleting the parameter source', () => {
+    const session = sameNamedControlsSession('recorded-first', 'recorded-second');
+    session.actions = [session.actions[0]!];
+    session.actions[0] = {
+      ...session.actions[0]!, name: 'field-a849b883', label: 'Field',
+      target: { strategy: 'playwright', selector: '#field-a849b883', confidence: 'HIGH' },
+    };
+    session.network = [];
+
+    const result = generateDraft(session);
+    expect(result.skill.params[0]?.name).toBe('field-a849b883');
+    expect(result.skill.steps[0]?.ui?.target).toEqual(expect.objectContaining({ confidence: 'LOW' }));
+    expect(result.skill._notes?.some((note) => note.includes('疑似不稳定'))).toBe(true);
+  });
+
+  it('confirms cross-record identifier drift and excludes the unstable DOM name', () => {
+    const first = sameNamedControlsSession('recorded-first', 'recorded-second');
+    const second = sameNamedControlsSession('runtime-first', 'runtime-second');
+    first.actions = [{
+      ...first.actions[0]!, name: 'runtime-123abc', label: 'Field',
+      recordedHint: {
+        action: 'fill', visibleText: 'Field', visibleTextSource: 'label', controlSemantics: null,
+        tagName: 'input', role: 'textbox', matchCountAtRecord: 1,
+      },
+    }];
+    second.actions = [{ ...first.actions[0]!, name: 'runtime-987def' }];
+    first.network = [];
+    second.network = [];
+
+    const result = generateDraft(first, second);
+    expect(result.skill.params[0]?.name).toBe('Field');
+    expect(result.skill._notes?.some((note) => note.includes('已确认不稳定'))).toBe(true);
+  });
+
+  it('contains malformed recording items without aborting the whole draft', () => {
+    const malformedBodies = ['{broken', '[]', '"scalar"'];
+    for (const postData of malformedBodies) {
+      const session = sameNamedControlsSession('alpha-value', 'beta-value');
+      session.network[0]!.postData = postData;
+      expect(() => generateDraft(session)).not.toThrow();
+    }
+
+    const emptyText = sameNamedControlsSession('alpha-value', 'beta-value');
+    emptyText.actions = [{ ts: 1, type: 'click', target: { strategy: 'css', selector: '#icon' } }];
+    emptyText.network = [];
+    expect(generateDraft(emptyText).skill.steps[0]?.desc).toBe('TODO_UNRESOLVED');
+
+    const mixedAndLong = sameNamedControlsSession('混合-😀-value', 'x'.repeat(20_000));
+    mixedAndLong.network = [];
+    expect(() => generateDraft(mixedAndLong)).not.toThrow();
+  });
 });
+
+function sameNamedControlsSession(first: string, second: string): RecordSession {
+  return {
+    meta: {
+      startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:04.000Z',
+      baseUrl: 'http://example.test', userAgent: 'test', entryId: 'generic',
+    },
+    actions: [
+      {
+        ts: 1_000, type: 'fill', label: 'Field', name: 'shared', value: first,
+        target: { strategy: 'css', selector: '#first' },
+      },
+      {
+        ts: 2_000, type: 'fill', label: 'Field', name: 'shared', value: second,
+        target: { strategy: 'css', selector: '#second' },
+      },
+      { ts: 3_000, type: 'click', label: 'Submit', target: { strategy: 'css', selector: '#submit' } },
+    ],
+    network: [{
+      ...NO_CAUSALITY,
+      actionIdx: 2,
+      causality: 'active-action',
+      causalityDebug: {
+        targetKey: 'button|submit|button|0', kind: 'click', valueAtRequest: null, msSinceTouched: 10,
+      },
+      requestId: 'write', requestTs: 3_100, responseTs: 3_200, method: 'POST',
+      url: 'http://example.test/records', resourceType: 'fetch',
+      headers: { 'content-type': 'application/json' },
+      postData: JSON.stringify({ first, second }), status: 200, responseBody: '{}',
+      mutating: true, sanitizeMode: 'structured',
+    }],
+    pages: [],
+  };
+}
 
 function responseChainSession(items: Array<{ identifier: string; display: string }>): RecordSession {
   return {

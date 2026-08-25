@@ -1,4 +1,4 @@
-import type { RecordedRequest, RecordSession } from '@dsh/core';
+import type { RecordSession } from '@dsh/core';
 
 export interface PreflightDraft {
   name: string;
@@ -23,93 +23,21 @@ export interface AuthDetection {
   forbiddenUrls: string[];
 }
 
-/** 从已录制请求中提取运行时动态值的获取方式。 */
+/**
+ * A global preflight changes the recorded navigation order. The analyzer therefore never invents
+ * one from field names or literal shapes. Page-instance values are attached to their recorded
+ * navigation step; explicitly authored skills may still use the frozen preflight contract.
+ */
 export function detectPreflight(session: RecordSession): PreflightDraft[] {
-  const drafts: PreflightDraft[] = [];
-  if (session.network.some(hasCsrfHeader)) {
-    drafts.push({
-      name: 'csrfToken',
-      extract: {
-        type: 'dom',
-        selector: 'meta[name="csrf-token"]',
-        attribute: 'content',
-      },
-    });
-  }
-
-  for (const request of session.network) {
-    const form = formFields(request);
-    for (const [name, value] of form) {
-      if (!isDomSourcedFormValue(session, name, value)) continue;
-      drafts.push({
-        name,
-        request: { method: 'GET', url: currentFormUrl(session, request) },
-        extract: { type: 'dom', selector: `input[name="${cssAttributeValue(name)}"]`, attribute: 'value' },
-      });
-    }
-    const jsonToken = jsonTokenField(request);
-    if (jsonToken) {
-      drafts.push({
-        name: jsonToken,
-        request: { method: 'GET', url: request.url },
-        extract: { type: 'jsonPath', path: `$.${jsonToken}` },
-      });
-    }
-  }
-  return uniquePreflights(drafts);
+  void session;
+  return [];
 }
 
-function isDomSourcedFormValue(session: RecordSession, name: string, value: string): boolean {
-  if (!name || !value) return false;
-  const inputs = [...session.actions, ...(session.initialFormState ?? [])];
-  return !inputs.some((input) => input.name === name || input.value === value);
-}
-
-function cssAttributeValue(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-}
-
-/** 只根据明确登录页与会话接口证据生成认证建议。 */
+/** Authentication is configured explicitly by Entry probes and is never inferred from endpoints. */
 export function detectAuth(session: RecordSession): AuthDetection {
-  const forbiddenUrls = session.network
-    .filter((request) => request.status === 403)
-    .map((request) => request.url);
-  // Endpoint names and response field names are not authentication evidence. Authentication is
-  // configured explicitly by Entry.sessionProbe/identityProbe and never guessed from a recording.
-  return { forbiddenUrls };
-}
-
-function hasCsrfHeader(request: RecordedRequest): boolean {
-  return Object.keys(request.headers).some((name) =>
-    /^(x-csrf-token|x-xsrf-token|__requestverificationtoken)$/i.test(name),
-  );
-}
-
-function formFields(request: RecordedRequest): URLSearchParams {
-  const contentType = request.headers['content-type'] ?? '';
-  return contentType.includes('application/x-www-form-urlencoded') && request.postData
-    ? new URLSearchParams(request.postData)
-    : new URLSearchParams();
-}
-
-function currentFormUrl(session: RecordSession, request: RecordedRequest): string {
-  const referer = Object.entries(request.headers).find(([name]) => /^referer$/i.test(name))?.[1];
-  return referer ?? session.pages.at(-1)?.url ?? session.meta.baseUrl;
-}
-
-function jsonTokenField(request: RecordedRequest): string | undefined {
-  if (request.method !== 'GET' || !/(csrf|token)/i.test(request.url) || !request.responseBody) {
-    return undefined;
-  }
-  try {
-    const body: unknown = JSON.parse(request.responseBody);
-    if (typeof body !== 'object' || body === null || Array.isArray(body)) return undefined;
-    return Object.keys(body).find((key) => /token/i.test(key));
-  } catch {
-    return undefined;
-  }
-}
-
-function uniquePreflights(drafts: PreflightDraft[]): PreflightDraft[] {
-  return [...new Map(drafts.map((draft) => [draft.name, draft])).values()];
+  return {
+    forbiddenUrls: session.network
+      .filter((request) => request.status === 403)
+      .map((request) => request.url),
+  };
 }

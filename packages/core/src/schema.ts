@@ -134,6 +134,8 @@ export const EntrySchema = z.object({
     loginDomMarkers: z.array(z.string()).optional(),
     loginTimeoutMs: z.number().default(300_000),
 
+    additionalSensitivePatterns: z.array(z.string()).optional(),
+
     sessionHolding: z
       .object({
         strategy: z.enum(['daemon', 'storage-state', 'probe-only']).default('daemon'),

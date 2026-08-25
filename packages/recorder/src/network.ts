@@ -1,4 +1,5 @@
 import { CAUSALITY, NOISE_PATTERNS, createSanitizer } from '@dsh/core';
+import type { Sanitizer } from '@dsh/core';
 import type { ActiveAction, RecordedRequest, SanitizeMode } from '@dsh/core';
 import type { Page, Request, Response } from 'playwright';
 
@@ -17,8 +18,10 @@ export function startNetworkRecording(
   excludeMatchers: RegExp[] = [],
   onMutatingRequest?: (record: RecordedRequest) => void,
   getActiveAction?: () => ActiveAction | null,
+  onRequestRecorded?: (record: RecordedRequest) => void,
+  providedSanitizer?: Sanitizer,
 ): NetworkRecording {
-  const sanitizer = createSanitizer();
+  const sanitizer = providedSanitizer ?? createSanitizer();
   const records: RecordedRequest[] = [];
   const byRequest = new Map<Request, RecordedRequest>();
   const pending = new Set<Promise<void>>();
@@ -59,7 +62,7 @@ export function startNetworkRecording(
       method,
       url: sanitizer.sanitizeUrl(rawUrl),
       resourceType,
-      headers: sanitizer.sanitizeHeaders(initialHeaders),
+      headers: sanitizer.sanitizeHeaders(initialHeaders, true),
       postData: body.value,
       status: null,
       responseBody: null,
@@ -80,11 +83,12 @@ export function startNetworkRecording(
     };
     records.push(record);
     byRequest.set(request, record);
+    onRequestRecorded?.(record);
     if (record.mutating) onMutatingRequest?.(record);
 
     track(
       request.allHeaders().then((headers) => {
-        record.headers = sanitizer.sanitizeHeaders(headers);
+        record.headers = sanitizer.sanitizeHeaders(headers, true);
       }).catch(() => undefined),
     );
   };

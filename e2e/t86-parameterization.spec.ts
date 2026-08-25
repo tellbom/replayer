@@ -47,7 +47,33 @@ test('T-86: 工作日录制的直接 draft 以周末参数回放并真实提交 
     },
   });
 
-  const draft = generateDraft(session);
+  const comparisonProfile = testInfo.outputPath(`comparison-profile-${browserName}`);
+  await seedProfile(comparisonProfile);
+  let stopComparison!: () => void;
+  const comparisonStopSignal = new Promise<void>((resolve) => { stopComparison = resolve; });
+  const comparisonSession = await record({
+    entry: oaEntry,
+    profileDir: comparisonProfile,
+    outDir: testInfo.outputPath('comparison-recording'),
+    channel: 'chrome',
+    headless: true,
+    stopSignal: comparisonStopSignal,
+    onReady: async (page) => {
+      await page.goto('http://127.0.0.1:15173/overtime/apply');
+      await page.locator('.el-form-item').first().waitFor();
+      await page.evaluate(async () => {
+        const locator = window.__DSH_LOCATOR__;
+        await locator.selectOption('加班类型', '周末加班');
+        await locator.waitFor(() => {
+          const approver = locator.byFormItem('审批人', 'input') as HTMLInputElement;
+          return approver.value !== '—' ? approver.value : undefined;
+        });
+      });
+      stopComparison();
+    },
+  });
+
+  const draft = generateDraft(session, comparisonSession);
   const skill = parseSkill(draft.yaml, entryResolver());
   const type = skill.params.find((param) => param.name === 'type');
   const typeBodies = skill.steps
@@ -56,7 +82,6 @@ test('T-86: 工作日录制的直接 draft 以周末参数回放并真实提交 
   expect(type?.enumMap).toEqual({
     工作日加班: 'workday',
     周末加班: 'weekend',
-    节假日加班: 'holiday',
   });
   expect(typeBodies).not.toContain('{{s4[0].value}}');
   expect(typeBodies.every((value) => value === '{{type|enumValue}}')).toBe(true);
@@ -76,7 +101,7 @@ test('T-86: 工作日录制的直接 draft 以周末参数回放并真实提交 
     noLLM: true,
     onConfirm: async () => true,
   });
-  expect(result.ok).toBe(true);
+  expect(result.ok, JSON.stringify(result)).toBe(true);
 
   const { chromium } = await import('playwright');
   const context = await chromium.launchPersistentContext(replayProfile, { channel: 'chrome', headless: true });

@@ -47,7 +47,7 @@ test.afterAll(() => {
   for (const fixture of fixtures) fixture.kill();
 });
 
-test('T-102 records a native form redirect and produces a guarded review-required draft', async () => {
+test('T-102 records a native form redirect and produces a guarded page-scoped draft', async () => {
   test.setTimeout(60_000);
   const root = await mkdtemp(join(tmpdir(), 'dsh-t102-record-'));
   const profileDir = join(root, 'profile');
@@ -96,10 +96,12 @@ test('T-102 records a native form redirect and produces a guarded review-require
   const redirectStep = draft.skill.steps.find((step) => step.expectsRedirect);
   expect(redirectStep).toBeDefined();
   expect(draft.skill.postcondition?.request.url).toContain('/api/records');
-  expect(draft.skill.preflight.map((item) => item.name)).toEqual(
-    expect.arrayContaining(['__VIEWSTATE', '__TOKEN', 'seqCode']),
-  );
-  expect(() => parseSkill(draft.yaml, () => entry)).toThrow(/TODO_UNRESOLVED/);
+  expect(draft.skill.preflight).toEqual([]);
+  const pageExtracts = JSON.stringify(draft.skill.steps.map((step) => step.ui?.extract));
+  expect(pageExtracts).toContain('__VIEWSTATE');
+  expect(pageExtracts).toContain('__TOKEN');
+  expect(pageExtracts).toContain('seqCode');
+  expect(() => parseSkill(draft.yaml, () => entry)).not.toThrow();
 });
 
 async function waitForHttp(url: string): Promise<void> {

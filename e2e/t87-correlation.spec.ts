@@ -81,7 +81,7 @@ test('T-87: request value causality remains high confidence with a slow recordin
   console.log(`T87_SLOW_CORRELATION=${JSON.stringify(approver?._correlation)}`);
   expect(owner?.ui?.action).toBe('selectOption');
   expect(approver?._correlation).toMatchObject({
-    method: 'response-value-match',
+    method: 'action-causality',
     confidence: 'high',
   });
 });

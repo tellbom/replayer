@@ -73,6 +73,18 @@ export interface RecordSession {
   pages: { ts: number; url: string; title: string }[];
   interruptions?: SessionInterrupt[];
   initialFormState?: RecordedFormState[];
+  pageSnapshots?: PageSnapshot[];
+}
+
+export interface PageSnapshot {
+  ts: number;
+  url: string;
+  actionIdx: number | null;
+  immutableValues: Array<{
+    locator: LocatorStrategy;
+    value: string;
+    kind: 'hidden' | 'readonly' | 'disabled' | 'meta' | 'untouched';
+  }>;
 }
 
 export interface RecordedFormState {
@@ -104,6 +116,11 @@ export interface RecordedAction {
   value?: string;
   checked?: boolean;
   text?: string;
+  enumOptions?: {
+    items: Array<{ label: string; value: string }>;
+    complete: boolean;
+    incompleteReason?: 'truncated' | 'dynamic-loading' | 'partial-dom';
+  };
   url?: string;
   scope?: string;
   produces?: ScopeDefinition;

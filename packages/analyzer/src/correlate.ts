@@ -81,9 +81,30 @@ function correlateRequest(
   request: CorrelatedRequest,
   correlatedRequests: CorrelatedRequest[],
 ): RequestCorrelation | undefined {
+  const requestValues = new Set(requestInputLeaves(request).map((leaf) => String(leaf.value)));
+  const aliases = enumAliases(session.network);
+  const responseValueOwners = session.actions
+    .map((action, index) => ({ action, index }))
+    .filter(({ action }) => action.value !== undefined
+      && aliases.has(action.value)
+      && actionValues(action.value, aliases).some((value) => requestValues.has(value)));
+  const responseValueOwner = responseValueOwners.length === 1 ? responseValueOwners[0] : undefined;
+
   if (request.actionIdx !== null && request.actionIdx !== undefined) {
     const owner = session.actions[request.actionIdx];
     if (owner) {
+      const activeValue = request.causalityDebug?.valueAtRequest;
+      const activeValueMatches = activeValue !== null && activeValue !== undefined
+        && actionValues(activeValue, aliases).some((value) => requestValues.has(value));
+      if (responseValueOwner && responseValueOwner.index !== request.actionIdx
+        && request.causalityDebug?.kind !== 'click' && !activeValueMatches) {
+        return {
+          method: 'response-value-match',
+          confidence: 'high',
+          ownerActionIndex: responseValueOwner.index,
+          evidence: 'request leaf matched a unique action value through an observed response pair',
+        };
+      }
       return {
         method: 'action-causality',
         confidence: 'high',
@@ -91,6 +112,15 @@ function correlateRequest(
         evidence: `request carried browser-observed actionIdx=${request.actionIdx}`,
       };
     }
+  }
+
+  if (responseValueOwner) {
+    return {
+      method: 'response-value-match',
+      confidence: 'high',
+      ownerActionIndex: responseValueOwner.index,
+      evidence: 'request leaf matched a unique action value through an observed response pair',
+    };
   }
 
   const eligible = session.actions
@@ -157,8 +187,6 @@ function correlateRequest(
     };
   }
 
-  const requestValues = new Set(requestInputLeaves(request).map((leaf) => String(leaf.value)));
-  const aliases = enumAliases(session.network);
   // Legacy recordings may emit change after HTTP; keep this fallback bounded.
   const valueOwners = session.actions.map((action, index) => ({ action, index })).filter(({ action }) =>
     action.value !== undefined
@@ -263,7 +291,7 @@ function analyzeDependencies(
   }
   return requests.map((target, targetIndex) => {
     const dependsOn: RequestDependency[] = [];
-    const targetLeaves = requestBodyLeaves(target);
+    const targetLeaves = [...requestBodyLeaves(target), ...requestHeaderLeaves(target)];
     for (const source of requests.slice(0, targetIndex)) {
       const sourceLeaves = responseBodyLeaves(source);
       for (const targetLeaf of targetLeaves) {
@@ -274,9 +302,7 @@ function analyzeDependencies(
             && !isUniqueSameFieldValue(sourceLeaf, targetLeaf, globalValueCounts)
           ) continue;
           if (source.sanitizeMode !== 'structured' || target.sanitizeMode !== 'structured') {
-            throw new Error(
-              `依赖识别要求 structured 脱敏: ${source.requestId} -> ${target.requestId}`,
-            );
+            continue;
           }
           const selection = indexedSelection(source, sourceLeaf, actions);
           dependsOn.push({
@@ -289,6 +315,13 @@ function analyzeDependencies(
       }
     }
     return { ...target, dependsOn, isSubmit: target.requestId === lastMutating };
+  });
+}
+
+function requestHeaderLeaves(request: RecordedRequest): ValueLeaf[] {
+  return Object.entries(request.headers).flatMap(([name, value]) => {
+    const match = /^<FROM_PREFLIGHT:[^|>]+\|sha256:([a-f0-9]+)>$/.exec(value);
+    return match ? [{ path: `header.${name}`, value: `<REDACTED:sha256:${match[1]}>` }] : [];
   });
 }
 
@@ -385,7 +418,11 @@ function requestBodyLeaves(request: RecordedRequest): ValueLeaf[] {
   if (request.postData === null) return [];
   const contentType = request.headers['content-type'] ?? '';
   if (contentType.includes('application/json')) {
-    return collectLeaves(JSON.parse(request.postData), 'body');
+    try {
+      return collectLeaves(JSON.parse(request.postData), 'body');
+    } catch {
+      return [];
+    }
   }
   if (contentType.includes('application/x-www-form-urlencoded')) {
     return [...new URLSearchParams(request.postData)].map(([key, value]) => ({

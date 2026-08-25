@@ -39,6 +39,15 @@ export const CAUSALITY = {
   blurGraceMs: 300,
 } as const;
 
+export const IDENTIFIER_STABILITY = {
+  minEntropySegmentLength: 6,
+  minCharsetDiversity: 2,
+} as const;
+
+export const ENUM_CAPTURE = {
+  maxOptions: 200,
+} as const;
+
 export const NOISE_PATTERNS: RegExp[] = [
   /\.(js|css|png|jpe?g|gif|svg|woff2?|ttf|ico|map)(\?|$)/i,
   /\/(heartbeat|ping|track|collect|analytics|log|sockjs|__vite)/i,

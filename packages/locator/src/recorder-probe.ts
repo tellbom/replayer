@@ -25,6 +25,8 @@ function pushActiveAction(): void {
   }
 }
 
+pushActiveAction();
+
 function targetKey(element: Element): string {
   const container = element.closest('form, fieldset, [role="group"], [role="radiogroup"]')
     ?? document.body
@@ -82,9 +84,15 @@ function beginActiveAction(
   return activeAction;
 }
 
-function recordWithActionIdx(actionIdx: number, action: Record<string, unknown>): void {
+function recordWithActionIdx(
+  actionIdx: number,
+  action: Record<string, unknown>,
+  activeStartedAt?: number,
+): void {
   const record = Reflect.get(window, '__DSH_RECORD__');
-  if (typeof record === 'function') record({ ts: Date.now(), actionIdx, ...action });
+  if (typeof record === 'function') {
+    record({ ts: Date.now(), actionIdx, activeStartedAt, ...action });
+  }
 }
 
 function emit(
@@ -109,7 +117,7 @@ function emit(
     ? beginActiveAction(clickedElement, kind, value, action.target)
     : null;
   const actionIdx = active?.actionIdx ?? nextActionIdx++;
-  recordWithActionIdx(actionIdx, action);
+  recordWithActionIdx(actionIdx, action, active?.startedAt);
 }
 
 function generator(element: Element): unknown {
@@ -177,12 +185,70 @@ function adjacentOptionText(element: Element): string | undefined {
   return undefined;
 }
 
+function capturedEnumOptions(
+  items: Array<{ label: string; value: string }>,
+  incompleteReason?: 'dynamic-loading' | 'partial-dom',
+): {
+  items: Array<{ label: string; value: string }>;
+  complete: boolean;
+  incompleteReason?: 'truncated' | 'dynamic-loading' | 'partial-dom';
+} {
+  const maxOptions = Number(Reflect.get(window, '__DSH_ENUM_MAX_OPTIONS__'));
+  if (!Number.isInteger(maxOptions) || maxOptions <= 0) {
+    return { items: [], complete: false, incompleteReason: 'partial-dom' };
+  }
+  if (items.length > maxOptions) {
+    return {
+      items: items.slice(0, maxOptions),
+      complete: false,
+      incompleteReason: 'truncated',
+    };
+  }
+  return incompleteReason
+    ? { items, complete: false, incompleteReason }
+    : { items, complete: true };
+}
+
+function roleOptionSet(option: Element): ReturnType<typeof capturedEnumOptions> | undefined {
+  const owner = option.closest('[role="listbox"]');
+  if (!owner) return undefined;
+  const options = [...owner.querySelectorAll('[role="option"]')];
+  if (options.length === 0) return undefined;
+  const declaredSize = Math.max(...options.map((item) => Number(item.getAttribute('aria-setsize')) || 0));
+  const incompleteReason = owner.getAttribute('aria-busy') === 'true'
+    ? 'dynamic-loading'
+    : declaredSize > options.length
+      ? 'partial-dom'
+      : undefined;
+  return capturedEnumOptions(options.map((item) => {
+    const label = item.getAttribute('aria-label')?.trim() || item.textContent?.trim() || '';
+    return { label, value: item.getAttribute('value') ?? label };
+  }), incompleteReason);
+}
+
 document.addEventListener(
   'click',
   (event) => {
     if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
     const target = event.target;
     if (!(target instanceof Element)) return;
+
+    const standardOption = target.closest('[role="option"]');
+    if (standardOption) {
+      const text = standardOption.getAttribute('aria-label')?.trim()
+        || standardOption.textContent?.trim()
+        || '';
+      emit({
+        type: 'select',
+        label: openSelectLabel,
+        value: standardOption.getAttribute('value') ?? text,
+        text,
+        enumOptions: roleOptionSet(standardOption),
+        ...targetWithHint('select', standardOption),
+      }, standardOption, 'select');
+      openSelectLabel = null;
+      return;
+    }
 
     const option = target.closest('.el-select-dropdown__item');
     if (option) {
@@ -244,7 +310,8 @@ document.addEventListener(
       value: target.value,
       ...targetWithHint(dateEditor ? 'datetime' : 'fill', target),
     };
-    beginActiveAction(target, 'input', target.value, details.target, true);
+    const active = beginActiveAction(target, 'input', target.value, details.target, true);
+    recordWithActionIdx(active.actionIdx, details, active.startedAt);
   },
   true,
 );
@@ -272,6 +339,10 @@ document.addEventListener(
         name: target.name || undefined,
         value: target.value,
         text: target.selectedOptions[0]?.textContent?.trim(),
+        enumOptions: capturedEnumOptions([...target.options].map((option) => ({
+          label: option.textContent?.trim() ?? option.label,
+          value: option.value,
+        }))),
         ...targetWithHint('select', target),
       }, target, 'select');
       return;
@@ -317,7 +388,7 @@ document.addEventListener(
         blurAt: activeAction.blurAt,
       };
       pushActiveAction();
-      recordWithActionIdx(activeAction.actionIdx, action);
+      recordWithActionIdx(activeAction.actionIdx, action, activeAction.startedAt);
     } else {
       emit(action, target, 'input');
     }

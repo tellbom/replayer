@@ -130,7 +130,7 @@ describe('correlate', () => {
     expect(steps[0]?.requests[0]?.requestId).toBe('orphan-init');
   });
 
-  it('rejects a dependency discovered from fallback sanitization', () => {
+  it('drops an unsafe dependency from fallback sanitization without aborting analysis', () => {
     const session = baseSession();
     session.actions = [{ ts: 1_000, type: 'click' }];
     const shared = 'same-secret-value';
@@ -142,7 +142,9 @@ describe('correlate', () => {
         sanitizeMode: 'fallback',
       },
     ];
-    expect(() => correlate(session)).toThrow(/structured/);
+    const correlated = correlate(session);
+    const target = correlated.flatMap((step) => step.requests).find((item) => item.requestId === 'target');
+    expect(target?.dependsOn).toEqual([]);
   });
 
   it('uses an observed response value match instead of the nearest fast-paced action', () => {

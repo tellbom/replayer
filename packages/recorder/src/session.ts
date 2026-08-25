@@ -1,6 +1,9 @@
 import { acquireDSHContext, ensureEntry, probeSession, settleNavigation } from '@dsh/browser';
+import { ENUM_CAPTURE, createSanitizer } from '@dsh/core';
 import type { ActiveAction, Entry } from '@dsh/core';
-import type { RecordSession, RecordedAction, RecordedFormState, SessionInterrupt } from '@dsh/core';
+import type {
+  PageSnapshot, RecordSession, RecordedAction, RecordedFormState, RecordedRequest, SessionInterrupt,
+} from '@dsh/core';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -80,27 +83,72 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
 
   const actions: RecordedAction[] = [...(opts.resumeSession?.actions ?? [])];
   const initialFormState: RecordedFormState[] = [...(opts.resumeSession?.initialFormState ?? [])];
+  const pageSnapshots: PageSnapshot[] = [...(opts.resumeSession?.pageSnapshots ?? [])];
   const interruptions: SessionInterrupt[] = [...(opts.resumeSession?.interruptions ?? [])];
   let recordingEnabled = true;
   const actionByIdx = new Map<number, RecordedAction>();
+  const browserActionKeys = new Map<string, number>();
+  const latestBrowserActions = new Map<number, number>();
+  const canonicalToBrowserAction = new Map<number, number>();
+  let nextCanonicalActionIdx = actions.length;
   let activeAction: ActiveAction | null = null;
+  const resolveCanonicalActionIndex = (
+    browserActionIdx: number,
+    activeStartedAt?: number,
+  ): number => {
+    const key = activeStartedAt === undefined
+      ? undefined
+      : `${browserActionIdx}:${activeStartedAt}`;
+    const known = key === undefined
+      ? latestBrowserActions.get(browserActionIdx)
+      : browserActionKeys.get(key);
+    if (known !== undefined) return known;
+    const canonical = nextCanonicalActionIdx++;
+    if (key !== undefined) browserActionKeys.set(key, canonical);
+    latestBrowserActions.set(browserActionIdx, canonical);
+    canonicalToBrowserAction.set(canonical, browserActionIdx);
+    return canonical;
+  };
   const mutationTasks = new Map<number, Promise<void>>();
   const postProcessTasks: Promise<void>[] = [];
+  const sanitizer = createSanitizer(opts.entry.entry.additionalSensitivePatterns ?? []);
   await page.exposeBinding(
     '__DSH_RECORD__',
-    async (_source, emitted: RecordedAction & { actionIdx: number }) => {
+    async (
+      _source,
+      emitted: RecordedAction & { actionIdx: number; activeStartedAt?: number },
+    ) => {
       if (!recordingEnabled) return;
-      const { actionIdx, ...action } = emitted;
+      const { actionIdx: browserActionIdx, activeStartedAt, ...action } = emitted;
+      if (action.enumOptions) {
+        action.enumOptions = {
+          ...action.enumOptions,
+          items: action.enumOptions.items.map((item) => ({
+            label: sanitizer.sanitizeText(item.label),
+            value: sanitizer.sanitizeText(item.value),
+          })),
+        };
+      }
       // 【C19】一次性认证跳转不记录
       const actionUrl = action.url ?? '';
       if (actionUrl && excludeMatchers.some((re) => re.test(actionUrl))) return;
+      if (action.type === 'navigate') {
+        browserActionKeys.clear();
+        latestBrowserActions.clear();
+      }
+      const actionIdx = resolveCanonicalActionIndex(browserActionIdx, activeStartedAt);
+      const existingAction = actionByIdx.get(actionIdx);
+      if (existingAction) {
+        Object.assign(existingAction, action);
+        return;
+      }
       actions.push(action);
       actionByIdx.set(actionIdx, action);
       const target = action.target as { strategy?: string; confidence?: string } | undefined;
       if (target) {
         const mutationTask = tolerateNavigation(page, () => page.evaluate(async (idx) => {
           await window.__DSH_MUTATION__.end(idx);
-        }, actionIdx)).then(() => undefined);
+        }, browserActionIdx)).then(() => undefined);
         mutationTasks.set(actionIdx, mutationTask);
       }
 
@@ -108,8 +156,10 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
         if (target) {
           const producerActionIdx = actionIdx - 1;
           const producerMutation = mutationTasks.get(producerActionIdx);
+          const producerBrowserActionIdx = canonicalToBrowserAction.get(producerActionIdx);
           if (producerMutation) {
             await producerMutation;
+            if (producerBrowserActionIdx === undefined) return;
             const scoped = await tolerateNavigation(page, () => page.evaluate(
               ({ producerIdx, currentIdx }) => {
                 const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
@@ -117,7 +167,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
                 if (!current?.isConnected) return null;
                 return window.__DSH_MUTATION__.deriveScope(producerIdx, current);
               },
-              { producerIdx: producerActionIdx, currentIdx: actionIdx },
+              { producerIdx: producerBrowserActionIdx, currentIdx: browserActionIdx },
             ));
             if (scoped) {
               const scopeId = `sc${producerActionIdx + 1}`;
@@ -138,7 +188,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
         }
 
         if (target?.strategy === 'playwright' && target.confidence === 'LOW') {
-          const promoted = await promoteByAncestor(page, actionIdx);
+          const promoted = await promoteByAncestor(page, browserActionIdx);
           if (promoted) {
             action.target = {
               strategy: 'playwright',
@@ -162,7 +212,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
               const el = clicked[idx];
               if (typeof collect !== 'function' || !el) return null;
               return { context: collect(el) };
-            }, actionIdx));
+            }, browserActionIdx));
             const pwResult = {
               selector: (target as { selector: string }).selector,
               matchCount: -1,
@@ -174,7 +224,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
               targetElement: await page.evaluateHandle((idx) => {
                 const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
                 return clicked[idx];
-              }, actionIdx),
+              }, browserActionIdx),
               pwResult,
               context: disambig.context,
             });
@@ -197,7 +247,12 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   await page.exposeBinding(
     '__DSH_ACTIVE_ACTION_UPDATE__',
     (_source, snapshot: ActiveAction | null) => {
-      activeAction = snapshot;
+      activeAction = snapshot === null
+        ? null
+        : {
+            ...snapshot,
+            actionIdx: resolveCanonicalActionIndex(snapshot.actionIdx, snapshot.startedAt),
+          };
     },
   );
   await page.exposeBinding('__DSH_RECORD_INITIAL_STATE__', (_source, state: RecordedFormState) => {
@@ -206,15 +261,28 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const reinjectRecorderProbe = await installRecorderProbe(page);
   const startedAt = opts.resumeSession?.meta.startedAt ?? new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
+  const pageCandidatePools: PageSnapshot[] = [];
   const pages: RecordSession['pages'] = [
     ...(opts.resumeSession?.pages ?? []),
     { ts: Date.now(), url: page.url(), title: await page.title() },
   ];
   const pageTasks = new Set<Promise<void>>();
   const onDomContentLoaded = (): void => {
-    const task = page.title().then((title) => {
+    const task = Promise.all([page.title(), collectPageCandidates(page)]).then(([title, candidates]) => {
       if (recordingEnabled && !excludeMatchers.some((re) => re.test(page.url()))) {
-        pages.push({ ts: Date.now(), url: page.url(), title });
+        const ts = Date.now();
+        const url = page.url();
+        pages.push({ ts, url, title });
+        pageCandidatePools.push({
+          ts,
+          url,
+          actionIdx: latestNavigationActionIndex(actions, url, ts),
+          immutableValues: candidates.map((candidate) => ({
+            locator: candidate.locator,
+            value: sanitizePageValue(sanitizer, candidate.key, candidate.value),
+            kind: candidate.kind,
+          })),
+        });
       }
     }).catch(() => undefined);
     pageTasks.add(task);
@@ -237,6 +305,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       initialFormState,
       network: [...previousNetwork, ...networkRecording.records],
       pages,
+      pageSnapshots,
       interruptions,
       reason,
       identityChanged,
@@ -248,6 +317,8 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     [...excludeMatchers, ...probeMatchers],
     () => { void persistPartial('mutating-request-started'); },
     () => activeAction,
+    (request) => persistConsumedPageValues(request, pageCandidatePools, pageSnapshots, actions),
+    sanitizer,
   );
   const partialTimer = setInterval(() => {
     void persistPartial('periodic-time-checkpoint');
@@ -274,6 +345,10 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       },
       onSessionBoundary() {
         actionByIdx.clear();
+        browserActionKeys.clear();
+        latestBrowserActions.clear();
+        canonicalToBrowserAction.clear();
+        activeAction = null;
         mutationTasks.clear();
       },
       onResume: reinjectRecorderProbe,
@@ -316,6 +391,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     ...(initialFormState.length > 0 ? { initialFormState } : {}),
     network,
     pages,
+    ...(pageSnapshots.length > 0 ? { pageSnapshots } : {}),
     ...(interruptions.length > 0 ? { interruptions } : {}),
   };
   await writeAtomic(`${opts.outDir}/record.json`, session);
@@ -361,6 +437,146 @@ async function inferAsyncWaits(
   }
 }
 
+interface PageValueCandidate {
+  locator: PageSnapshot['immutableValues'][number]['locator'];
+  value: string;
+  key: string;
+  kind: PageSnapshot['immutableValues'][number]['kind'];
+}
+
+async function collectPageCandidates(page: Page): Promise<PageValueCandidate[]> {
+  return page.evaluate(() => {
+    const quote = (value: string): string => value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+    const controlSelector = (element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement): string | null => {
+      if (element.name) return `${element.tagName.toLowerCase()}[name="${quote(element.name)}"]`;
+      if (element.id) return `#${CSS.escape(element.id)}`;
+      return null;
+    };
+    const values: PageValueCandidate[] = [];
+    for (const element of document.querySelectorAll('input[type="hidden"], input[readonly], textarea[readonly], input:disabled, textarea:disabled, select:disabled')) {
+      if (!(element instanceof HTMLInputElement
+        || element instanceof HTMLTextAreaElement
+        || element instanceof HTMLSelectElement)) continue;
+      const selector = controlSelector(element);
+      if (!selector || element.value === '') continue;
+      values.push({
+        locator: { strategy: 'css', selector },
+        value: element.value,
+        key: element.name || element.id,
+        kind: element instanceof HTMLInputElement && element.type === 'hidden'
+          ? 'hidden'
+          : ((element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)
+              && element.readOnly)
+            ? 'readonly'
+            : 'disabled',
+      });
+    }
+    for (const element of document.querySelectorAll('meta[content]')) {
+      if (!(element instanceof HTMLMetaElement) || element.content === '') continue;
+      const attribute: [string, string] | null = element.name
+        ? ['name', element.name]
+        : element.getAttribute('property')
+          ? ['property', element.getAttribute('property')!]
+          : element.httpEquiv
+            ? ['http-equiv', element.httpEquiv]
+            : null;
+      if (!attribute) continue;
+      values.push({
+        locator: {
+          strategy: 'css',
+          selector: `meta[${attribute[0]}="${quote(attribute[1])}"]`,
+        },
+        value: element.content,
+        key: attribute[1],
+        kind: 'meta',
+      });
+    }
+    return values;
+  });
+}
+
+function sanitizePageValue(
+  sanitizer: ReturnType<typeof createSanitizer>,
+  key: string,
+  value: string,
+): string {
+  const sanitized = sanitizer.sanitizeObject({ [key]: value });
+  return String(sanitized[key]);
+}
+
+function persistConsumedPageValues(
+  request: RecordedRequest,
+  pools: PageSnapshot[],
+  output: PageSnapshot[],
+  actions: RecordedAction[],
+): void {
+  const pool = [...pools]
+    .filter((candidate) => candidate.ts <= request.requestTs)
+    .sort((left, right) => right.ts - left.ts)[0];
+  if (!pool) return;
+  const requestValues = requestLeafValues(request);
+  const matches = pool.immutableValues.filter((candidate) => requestValues.has(candidate.value));
+  for (const match of matches) {
+    if (pool.immutableValues.filter((candidate) => candidate.value === match.value).length !== 1) continue;
+    let snapshot = output.find((candidate) => candidate.ts === pool.ts && candidate.url === pool.url);
+    if (!snapshot) {
+      snapshot = {
+        ts: pool.ts,
+        url: pool.url,
+        actionIdx: latestNavigationActionIndex(actions, pool.url, request.requestTs) ?? pool.actionIdx,
+        immutableValues: [],
+      };
+      output.push(snapshot);
+    }
+    if (!snapshot.immutableValues.some((candidate) =>
+      JSON.stringify(candidate.locator) === JSON.stringify(match.locator) && candidate.value === match.value,
+    )) snapshot.immutableValues.push(match);
+  }
+}
+
+function requestLeafValues(request: RecordedRequest): Set<string> {
+  const values = new Set<string>();
+  try {
+    const url = new URL(request.url);
+    url.searchParams.forEach((value) => values.add(value));
+  } catch {
+    // Invalid recorded URLs simply provide no query candidates.
+  }
+  if (!request.postData) return values;
+  const contentType = request.headers['content-type'] ?? '';
+  try {
+    const body = contentType.includes('application/x-www-form-urlencoded')
+      ? Object.fromEntries(new URLSearchParams(request.postData))
+      : JSON.parse(request.postData) as unknown;
+    collectScalarValues(body, values);
+  } catch {
+    // Malformed bodies are untrusted recording input and cannot prove consumption.
+  }
+  return values;
+}
+
+function collectScalarValues(value: unknown, output: Set<string>): void {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectScalarValues(item, output));
+    return;
+  }
+  if (typeof value === 'object' && value !== null) {
+    Object.values(value).forEach((item) => collectScalarValues(item, output));
+    return;
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    output.add(String(value));
+  }
+}
+
+function latestNavigationActionIndex(actions: RecordedAction[], url: string, ts: number): number | null {
+  for (let index = actions.length - 1; index >= 0; index -= 1) {
+    const action = actions[index]!;
+    if (action.type === 'navigate' && action.ts <= ts && action.url === url) return index;
+  }
+  return null;
+}
+
 function responseScalarValues(body: string): string[] {
   let parsed: unknown;
   try {
@@ -391,20 +607,25 @@ async function findPopulatedFormControl(
 ): Promise<RecordedAction['target'] | null> {
   return (await tolerateNavigation(page, () => page.evaluate((values) => {
     const expected = new Set(values);
-    for (const item of document.querySelectorAll<HTMLElement>('.el-form-item')) {
-      const label = item.querySelector<HTMLElement>('.el-form-item__label')?.textContent?.trim();
-      if (!label) continue;
-      const control = item.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
-        'input, textarea, select',
-      );
-      if (!control || !expected.has(control.value.trim())) continue;
-      const kind =
-        control instanceof HTMLTextAreaElement
-          ? 'textarea'
-          : control instanceof HTMLSelectElement
-            ? 'select'
-            : 'input';
-      return { strategy: 'el-form-item' as const, label, kind };
+    for (const control of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+      'input, textarea, select',
+    )) {
+      const populated = expected.has(control.value.trim())
+        || (control instanceof HTMLSelectElement && [...control.options].some((option) =>
+          expected.has(option.value) || expected.has(option.textContent?.trim() ?? ''),
+        ));
+      if (!populated) continue;
+      const generate = Reflect.get(window, '__DSH_PWGEN__');
+      if (typeof generate !== 'function') return null;
+      const generated = generate(control) as {
+        selector: string;
+        confidence: 'HIGH' | 'LOW';
+      };
+      return {
+        strategy: 'playwright' as const,
+        selector: generated.selector,
+        confidence: generated.confidence,
+      };
     }
     return null;
   }, responseValues))) ?? null;
@@ -509,6 +730,7 @@ interface PartialSnapshotInput {
   initialFormState: RecordedFormState[];
   network: RecordSession['network'];
   pages: RecordSession['pages'];
+  pageSnapshots: PageSnapshot[];
   interruptions: SessionInterrupt[];
   reason: string;
   identityChanged: boolean;
@@ -528,6 +750,7 @@ async function writePartialSnapshot(input: PartialSnapshotInput): Promise<void> 
     ...(input.initialFormState.length > 0 ? { initialFormState: input.initialFormState } : {}),
     network: input.network,
     pages: input.pages,
+    ...(input.pageSnapshots.length > 0 ? { pageSnapshots: input.pageSnapshots } : {}),
     interruptions: input.interruptions,
     incomplete: true,
     reason: input.reason,
@@ -598,6 +821,14 @@ async function installRecorderProbe(
   await page.addInitScript(
     (marker) => Reflect.set(window, '__DSH_RECORDING__', !window.name.split(' ').includes(marker)),
     RECORDING_PAUSED_MARKER,
+  );
+  await page.addInitScript(
+    (maxOptions) => Reflect.set(window, '__DSH_ENUM_MAX_OPTIONS__', maxOptions),
+    ENUM_CAPTURE.maxOptions,
+  );
+  await page.evaluate(
+    (maxOptions) => Reflect.set(window, '__DSH_ENUM_MAX_OPTIONS__', maxOptions),
+    ENUM_CAPTURE.maxOptions,
   );
   // 注意：闭包捕获外层变量的 addInitScript 实测不生效（变量不随函数序列化），
   // 必须用参数形式传递

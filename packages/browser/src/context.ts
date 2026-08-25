@@ -127,18 +127,59 @@ async function assertRuntimeInjected(page: Page): Promise<void> {
  * 立即 evaluate 会撞上「Execution context was destroyed」（实测踩过）。
  * 连续 navigationSettle 不变即认为跳转结束，总等待上限 navigationSettleMax。
  */
-export async function settleNavigation(page: Page): Promise<void> {
+export class NavigationStabilizationError extends Error {
+  constructor(public readonly observedStates: readonly string[]) {
+    super(
+      `navigation lifecycle 未在时限内稳定；observed=${JSON.stringify(observedStates)}；`
+      + '建议使用 persistent / attached session',
+    );
+    this.name = 'NavigationStabilizationError';
+  }
+}
+
+/**
+ * 根据主 frame 的实际 navigation lifecycle 判断冷启动是否稳定。
+ * trigger 在监听器安装后执行，确保 initial navigation 和后续 redirect 都进入同一观察窗口。
+ */
+export async function settleNavigation(
+  page: Page,
+  trigger?: () => Promise<unknown>,
+  maxWaitMs = TIMEOUTS.navigationSettleMax,
+): Promise<void> {
+  const startedAt = Date.now();
   let lastUrl = page.url();
-  let lastChange = Date.now();
-  const startedAt = lastChange;
-  while (Date.now() - startedAt < TIMEOUTS.navigationSettleMax) {
-    await page.waitForTimeout(250);
-    const current = page.url();
-    if (current !== lastUrl) {
-      lastUrl = current;
-      lastChange = Date.now();
-      continue;
+  let lastChange = startedAt;
+  const observedStates = [`0ms initial ${lastUrl}`];
+  const observe = (kind: string, url: string): void => {
+    const now = Date.now();
+    observedStates.push(`${now - startedAt}ms ${kind} ${url}`);
+    lastUrl = url;
+    lastChange = now;
+  };
+  const onFrameNavigated = (frame: ReturnType<Page['mainFrame']>): void => {
+    if (frame === page.mainFrame()) observe('navigated', frame.url());
+  };
+  page.on('framenavigated', onFrameNavigated);
+  try {
+    await trigger?.();
+    while (Date.now() - startedAt < maxWaitMs) {
+      await page.waitForTimeout(250);
+      const current = page.url();
+      if (current !== lastUrl) {
+        observe('url-change', current);
+        continue;
+      }
+      let ready = false;
+      try {
+        ready = await page.evaluate(() => document.readyState !== 'loading');
+      } catch {
+        lastChange = Date.now();
+        continue;
+      }
+      if (ready && Date.now() - lastChange >= TIMEOUTS.navigationSettle) return;
     }
-    if (Date.now() - lastChange >= TIMEOUTS.navigationSettle) return;
+    throw new NavigationStabilizationError(observedStates);
+  } finally {
+    page.off('framenavigated', onFrameNavigated);
   }
 }

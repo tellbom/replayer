@@ -37,9 +37,12 @@ test('T-74 录制选择联动时推导请求与审批人非空等待', async ({ 
   );
   expect(selection?.waitAfter).toMatchObject({
     requestUrlPattern: '/api/overtime/approver',
-    notEmpty: { strategy: 'el-form-item', label: '审批人', kind: 'input' },
+    notEmpty: { strategy: 'playwright' },
     timeoutMs: 8_000,
   });
+  expect(selection?.waitAfter?.notEmpty && 'selector' in selection.waitAfter.notEmpty
+    ? selection.waitAfter.notEmpty.selector
+    : '').toContain('textbox');
   expect(selection?.waitAfter?.settleMs).toBeUndefined();
 });
 
