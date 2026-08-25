@@ -423,6 +423,7 @@ export function parseSkill(yamlText: string, entryResolver: (id: string) => Entr
   // 【C17】明文凭证拒绝
   assertNoPlainCredentials(skill.steps, 'steps');
   assertNoPlainCredentials(skill.preflight, 'preflight');
+  assertNoPersistedCredentialHeaders(skill);
 
   // 【C18】bearer 内存态系统禁止 network 通道
   const netUnavailable =
@@ -459,6 +460,20 @@ function containsUnresolvedValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsUnresolvedValue);
   if (typeof value !== 'object' || value === null) return false;
   return Object.values(value).some(containsUnresolvedValue);
+}
+
+/** 技能可共享性门禁：Authorization 只允许运行时占位，不允许真实凭证落盘。 */
+export function assertNoPersistedCredentialHeaders(skill: Skill): void {
+  for (const step of skill.steps) {
+    for (const [name, value] of Object.entries(step.network?.headers ?? {})) {
+      if (/^authorization$/i.test(name) && value !== '<FROM_BROWSER>') {
+        throw new SchemaViolationError(`步骤 ${step.id} 的 Authorization 必须使用 <FROM_BROWSER> 占位符`);
+      }
+      if (/^Bearer\s+/i.test(value) || /^ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\./.test(value)) {
+        throw new SchemaViolationError(`步骤 ${step.id} 的 header ${name} 含疑似实时凭证，拒绝写入`);
+      }
+    }
+  }
 }
 
 export function parseEntry(yamlText: string): Entry {

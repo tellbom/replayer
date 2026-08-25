@@ -51,6 +51,15 @@ describe('generateDraft', () => {
       }),
     );
     expect(submit?.riskLevel).toBe('write');
+    expect(submit?.network?.headers).toEqual({
+      authorization: '<FROM_BROWSER>',
+      'content-type': 'application/json',
+      'x-csrf-token': '<FROM_PREFLIGHT:csrfToken>',
+      'x-tenant-context': 'tenant-a',
+    });
+    expect(result.skill._notes).toContain(
+      '本技能包含 2 个录制时业务 header（content-type, x-tenant-context）；若其值需随调用变化，请人工改为参数引用。',
+    );
     expect(parsed.postcondition).toEqual(
       expect.objectContaining({
         request: { method: 'GET', url: '/api/overtime/history?limit=5' },
@@ -253,7 +262,12 @@ function recording(withHistory: boolean): RecordSession {
       method: 'POST',
       url: 'http://oa/api/overtime/submit',
       resourceType: 'fetch',
-      headers: { 'content-type': 'application/json', 'x-csrf-token': 'fingerprint' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: '<FROM_BROWSER>',
+        'x-csrf-token': '<FROM_PREFLIGHT:csrfToken>',
+        'x-tenant-context': 'tenant-a',
+      },
       postData: JSON.stringify({
         type: 'workday',
         startTime: '2026-08-18 18:00:00',

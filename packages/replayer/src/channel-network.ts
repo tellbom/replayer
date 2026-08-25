@@ -53,6 +53,14 @@ export async function executeNetworkStep(
     return notSent(step.id, startedAt, 'entry.sessionType=unknown，请先执行 dsh doctor --probe-entry 探测');
   }
 
+  try {
+    requests = requests.map((request) =>
+      materializeRuntimeHeaders(request, context, liveAuthorization),
+    );
+  } catch (error) {
+    return notSent(step.id, startedAt, String(error));
+  }
+
   const extracted: Array<Record<string, unknown>> = [];
   let lastRaw: StepResult['raw'];
   for (const request of requests) {
@@ -107,6 +115,29 @@ export async function executeNetworkStep(
     durationMs: Date.now() - startedAt,
     raw: lastRaw,
   };
+}
+
+function materializeRuntimeHeaders(
+  request: NonNullable<Step['network']>,
+  context: ExecContext,
+  liveAuthorization: string | null,
+): NonNullable<Step['network']> {
+  const headers = Object.fromEntries(
+    Object.entries(request.headers ?? {}).map(([name, value]) => {
+      if (value === '<FROM_BROWSER>') {
+        if (!liveAuthorization) throw new BearerUnavailableError('无法从当前浏览器会话取得 Authorization');
+        return [name, liveAuthorization];
+      }
+      const preflight = /^<FROM_PREFLIGHT:([^>]+)>$/.exec(value)?.[1];
+      if (preflight) {
+        const resolved = context.vars[preflight];
+        if (resolved === undefined) throw new Error(`preflight 变量不存在: ${preflight}`);
+        return [name, String(resolved)];
+      }
+      return [name, value];
+    }),
+  );
+  return { ...request, headers };
 }
 
 async function browserFetch(

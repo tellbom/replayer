@@ -372,4 +372,23 @@ entry:
     expect(() => parseEntry(yaml('cookie', 'false'))).toThrow();
     expect(() => parseEntry(yaml('unknown', 'true'))).toThrow(/sessionType/);
   });
+
+  it('T-93：Authorization 仅允许浏览器运行时占位符', () => {
+    const skill = (value: string): string => `
+skill: { id: header, name: header, system: test, baseUrl: http://localhost, entry: oa }
+params: []
+steps:
+  - id: s1
+    desc: submit
+    channel: network
+    network:
+      method: POST
+      url: /submit
+      headers: { Authorization: "${value}" }
+`;
+    expect(() => parseSkill(skill('<FROM_BROWSER>'), entryResolver(testEntry()))).not.toThrow();
+    expect(() => parseSkill(skill('Bearer eyJ.live.token'), entryResolver(testEntry()))).toThrow(
+      /Authorization|凭证/,
+    );
+  });
 });

@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { parseDocument } from 'yaml';
 
-import { parseSkill } from './schema.js';
+import { assertNoPersistedCredentialHeaders, parseSkill } from './schema.js';
 import type { Entry, Skill } from './schema.js';
 import type { HealCandidate } from './types.js';
 
@@ -37,6 +37,7 @@ export async function commitHeal(
   ]);
   const yaml = document.toString({ lineWidth: 0 });
   const updated = parseSkill(yaml, entryResolver);
+  assertNoPersistedCredentialHeaders(updated);
   await writeFile(skillPath, yaml, 'utf8');
   return updated;
 }
@@ -49,5 +50,9 @@ export async function writeSkillVerification(
   const source = await readFile(skillPath, 'utf8');
   const document = parseDocument(source);
   document.set('verification', verification);
-  await writeFile(skillPath, document.toString({ lineWidth: 0 }), 'utf8');
+  const yaml = document.toString({ lineWidth: 0 });
+  // 此写回入口没有 entryResolver；先机械扫描 header 值，完整 Schema 校验仍由加载时执行。
+  const parsed = parseDocument(yaml).toJS() as Skill;
+  assertNoPersistedCredentialHeaders(parsed);
+  await writeFile(skillPath, yaml, 'utf8');
 }

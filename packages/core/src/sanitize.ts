@@ -3,8 +3,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { SchemaViolationError } from './errors.js';
 import type { SanitizeMode } from './types.js';
 
-const SENSITIVE_HEADER =
-  /^(authorization|cookie|set-cookie|x-api-key|proxy-authorization|x-csrf-token)$/i;
+const BROWSER_MANAGED_HEADER =
+  /^(cookie|set-cookie|host|content-length|user-agent|accept-encoding|sec-.+)$/i;
+const OMITTED_CREDENTIAL_HEADER = /^(x-api-key|proxy-authorization)$/i;
+const PREFLIGHT_HEADER = /^(x-csrf-token|x-xsrf-token|__requestverificationtoken)$/i;
 // 敏感词词形匹配：camel/snake 变体均命中（approvalToken、client_secret、api_key），
 // 仅排除同词内的小写延续（secretary、tokenize）这类业务字段误伤。
 const SENSITIVE_FIELD =
@@ -61,13 +63,20 @@ export function createSanitizer(): Sanitizer {
     return value;
   };
 
-  const sanitizeHeaders = (headers: Record<string, string>): Record<string, string> =>
-    Object.fromEntries(
-      Object.entries(headers).map(([key, value]) => [
-        key,
-        SENSITIVE_HEADER.test(key) ? fingerprint(value) : value,
-      ]),
-    );
+  const sanitizeHeaders = (headers: Record<string, string>): Record<string, string> => {
+    const output: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (BROWSER_MANAGED_HEADER.test(key) || OMITTED_CREDENTIAL_HEADER.test(key)) continue;
+      if (/^authorization$/i.test(key)) {
+        output[key] = '<FROM_BROWSER>';
+      } else if (PREFLIGHT_HEADER.test(key)) {
+        output[key] = '<FROM_PREFLIGHT:csrfToken>';
+      } else {
+        output[key] = value;
+      }
+    }
+    return output;
+  };
 
   const sanitizeObject = <T>(value: T): T => sanitizeUnknown(value) as T;
 

@@ -125,6 +125,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       '所有 TODO 项必须在发布前人工确认。',
       '认证载体见 entries/ 目录（C16：技能不含登录环节）。',
       '若未生成 reentry：首步即写时无幂等 anchor 可用，请人工前移幂等步骤（C22）。',
+      ...businessHeaderNotes(steps),
       ...sessionInterruptNotes(items, session),
     ],
   };
@@ -367,13 +368,21 @@ function longestKeyPrefix(node: Record<string, unknown>, path: string): string |
 }
 
 function dynamicHeaders(headers: Record<string, string>): Record<string, string> {
-  const output: Record<string, string> = {};
-  for (const name of Object.keys(headers)) {
-    if (/^(x-csrf-token|x-xsrf-token|__requestverificationtoken)$/i.test(name)) {
-      output[name] = '{{csrfToken}}';
-    }
-  }
-  return output;
+  return { ...headers };
+}
+
+function businessHeaderNotes(steps: Skill['steps']): string[] {
+  const names = new Set(
+    steps.flatMap((step) =>
+      Object.entries(step.network?.headers ?? {})
+        .filter(([, value]) => !/^<FROM_(?:BROWSER|PREFLIGHT:)/.test(value))
+        .map(([name]) => name),
+    ),
+  );
+  if (names.size === 0) return [];
+  return [
+    `本技能包含 ${names.size} 个录制时业务 header（${[...names].join(', ')}）；若其值需随调用变化，请人工改为参数引用。`,
+  ];
 }
 
 function inferPostcondition(

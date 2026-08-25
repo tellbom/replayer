@@ -21,13 +21,17 @@ describe('统一脱敏器', () => {
       'Set-Cookie': 'sid=secret-c',
       'X-CSRF-TOKEN': 'secret-csrf',
       'Content-Type': 'application/json',
+      Host: 'example.test',
+      'Sec-Fetch-Site': 'same-origin',
     });
 
-    expect(result.Authorization).toMatch(/^<REDACTED:sha256:[0-9a-f]{12}>$/);
-    expect(result.Cookie).toMatch(/^<REDACTED:sha256:[0-9a-f]{12}>$/);
-    expect(result['Set-Cookie']).toMatch(/^<REDACTED:sha256:[0-9a-f]{12}>$/);
-    expect(result['X-CSRF-TOKEN']).toMatch(/^<REDACTED:sha256:[0-9a-f]{12}>$/);
+    expect(result.Authorization).toBe('<FROM_BROWSER>');
+    expect(result.Cookie).toBeUndefined();
+    expect(result['Set-Cookie']).toBeUndefined();
+    expect(result['X-CSRF-TOKEN']).toBe('<FROM_PREFLIGHT:csrfToken>');
     expect(result['Content-Type']).toBe('application/json');
+    expect(result.Host).toBeUndefined();
+    expect(result['Sec-Fetch-Site']).toBeUndefined();
   });
 
   it('递归脱敏 password 和嵌套 token，不修改普通业务字段', () => {
