@@ -75,6 +75,7 @@ describe('T-79 LOW 与 Skill 验证契约', () => {
           target: { strategy: 'playwright', selector: 'internal:role=textbox >> nth=5', confidence: 'LOW' },
           recordedHint: {
             action: 'fill', visibleText: '开始时间', visibleTextSource: 'accessible-name',
+            controlSemantics: null,
             tagName: 'input', role: 'textbox', matchCountAtRecord: 1,
           },
         },

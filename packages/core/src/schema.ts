@@ -168,8 +168,16 @@ export const RecordedHintSchema: z.ZodType<RecordedHint> = z.object({
   action: z.enum(['click', 'fill', 'select', 'check', 'datetime', 'navigate']),
   visibleText: z.string().nullable(),
   visibleTextSource: z.enum([
-    'accessible-name', 'label', 'aria', 'placeholder', 'title', 'text', 'none',
+    'accessible-name', 'label', 'aria', 'placeholder', 'title', 'text',
+    'control-semantics', 'adjacent-text', 'none',
   ]),
+  controlSemantics: z.object({
+    tagName: z.string(),
+    type: z.string().nullable(),
+    name: z.string().nullable(),
+    value: z.string().nullable(),
+    checked: z.boolean().nullable(),
+  }).nullable(),
   tagName: z.string(),
   role: z.string().nullable(),
   matchCountAtRecord: z.number(),

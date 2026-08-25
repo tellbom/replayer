@@ -130,6 +130,58 @@ test('V6/V7/V17: 结构失败分类与 LOW 高占比告警', () => {
   expect(summary).toContain('Skill 稳定性较低');
 });
 
+test('V97-1/V97-2: standard control semantics are recorded without framework knowledge', async ({ page }) => {
+  await page.setContent(`
+    <fieldset><legend>Priority</legend>
+      <input id="urgent" type="radio" name="urgency" value="URGENT"><span>Urgent</span>
+    </fieldset>`);
+  const hint = await page.locator('#urgent').evaluate(
+    (element) => window.__DSH_EXTRACT_RECORDED_HINT__(element, 'check', 1),
+  );
+  expect(hint.visibleTextSource).toMatch(/^(control-semantics|adjacent-text)$/);
+  expect(hint.controlSemantics).toEqual({
+    tagName: 'input', type: 'radio', name: 'urgency', value: 'URGENT', checked: false,
+  });
+});
+
+test('V97-3/V97-4: radio semantic drift stops before any side effect', async ({ page }) => {
+  await page.setContent(`
+    <input type="radio" name="urgency" value="INSERTED">
+    <input id="normal" type="radio" name="urgency" value="NORMAL"
+      onclick="window.records.push(this.value)">
+    <script>window.records=[]</script>`);
+  const step = lowCheck('input[type=radio]:nth-of-type(2)', 'URGENT', 'radio');
+
+  await expect(executeUiStep(page, step, context(), [])).rejects.toBeInstanceOf(SemanticDriftError);
+  expect(await page.evaluate(() => Reflect.get(window, 'records'))).toEqual([]);
+  await expect(page.locator('#normal')).not.toBeChecked();
+});
+
+test('V97-5/V97-6: checkbox and native select drift are blocked', async ({ page }) => {
+  await page.setContent(`
+    <input id="flag" type="checkbox" name="flag" value="NEW">
+    <select id="level" name="level"><option value="NORMAL" selected>Normal</option></select>`);
+  await expect(
+    executeUiStep(page, lowCheck('#flag', 'ORIGINAL', 'checkbox'), context(), []),
+  ).rejects.toBeInstanceOf(SemanticDriftError);
+  await expect(
+    executeUiStep(page, lowSelect('#level', 'URGENT'), context(), []),
+  ).rejects.toBeInstanceOf(SemanticDriftError);
+  await expect(page.locator('#flag')).not.toBeChecked();
+  await expect(page.locator('#level')).toHaveValue('NORMAL');
+});
+
+test('V97-7/V97-8: matching LOW controls pass repeatedly and HIGH remains exempt', async ({ page }) => {
+  await page.setContent('<input id="urgent" type="radio" name="urgency" value="URGENT">');
+  for (let index = 0; index < 10; index += 1) {
+    await page.locator('#urgent').uncheck().catch(() => undefined);
+    await executeUiStep(page, lowCheck('#urgent', 'URGENT', 'radio'), context(), []);
+  }
+  const high = lowCheck('#urgent', 'DIFFERENT', 'radio');
+  high.ui!.target = { strategy: 'playwright', selector: '#urgent', confidence: 'HIGH' };
+  await executeUiStep(page, high, context(), []);
+});
+
 function lowFill(selector: string, visibleText: string | null): Step {
   return StepSchema.parse({
     id: 'low', desc: '填写', channel: 'ui',
@@ -139,7 +191,44 @@ function lowFill(selector: string, visibleText: string | null): Step {
       recordedHint: {
         action: 'fill', visibleText,
         visibleTextSource: visibleText === null ? 'none' : 'accessible-name',
+        controlSemantics: null,
         tagName: 'input', role: 'textbox', matchCountAtRecord: 1,
+      },
+    },
+  });
+}
+
+function lowCheck(selector: string, value: string, type: 'radio' | 'checkbox'): Step {
+  return StepSchema.parse({
+    id: `low-${type}`, desc: 'check control', channel: 'ui',
+    ui: {
+      action: 'check', checked: true,
+      target: { strategy: 'playwright', selector, confidence: 'LOW' },
+      recordedHint: {
+        action: 'check', visibleText: `urgency = ${value}`,
+        visibleTextSource: 'control-semantics',
+        controlSemantics: {
+          tagName: 'input', type, name: type === 'radio' ? 'urgency' : 'flag', value, checked: false,
+        },
+        tagName: 'input', role: type, matchCountAtRecord: 1,
+      },
+    },
+  });
+}
+
+function lowSelect(selector: string, value: string): Step {
+  return StepSchema.parse({
+    id: 'low-select', desc: 'select control', channel: 'ui',
+    ui: {
+      action: 'selectOption', value,
+      target: { strategy: 'playwright', selector, confidence: 'LOW' },
+      recordedHint: {
+        action: 'select', visibleText: `level = ${value}`,
+        visibleTextSource: 'control-semantics',
+        controlSemantics: {
+          tagName: 'select', type: 'select-one', name: 'level', value, checked: null,
+        },
+        tagName: 'select', role: 'combobox', matchCountAtRecord: 1,
       },
     },
   });

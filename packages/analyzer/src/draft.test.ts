@@ -165,6 +165,7 @@ describe('generateDraft', () => {
     };
     session.actions[1]!.recordedHint = {
       action: 'fill', visibleText: '开始时间', visibleTextSource: 'accessible-name',
+      controlSemantics: null,
       tagName: 'input', role: 'textbox', matchCountAtRecord: 1,
     };
     const result = generateDraft(session);

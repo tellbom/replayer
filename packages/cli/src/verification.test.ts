@@ -97,6 +97,7 @@ steps:
         action: click
         visibleText: Submit
         visibleTextSource: accessible-name
+        controlSemantics: null
         tagName: button
         role: button
         matchCountAtRecord: 1

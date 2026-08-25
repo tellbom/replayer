@@ -26,7 +26,15 @@ export interface RecordedHint {
   action: 'click' | 'fill' | 'select' | 'check' | 'datetime' | 'navigate';
   visibleText: string | null;
   visibleTextSource:
-    | 'accessible-name' | 'label' | 'aria' | 'placeholder' | 'title' | 'text' | 'none';
+    | 'accessible-name' | 'label' | 'aria' | 'placeholder' | 'title' | 'text'
+    | 'control-semantics' | 'adjacent-text' | 'none';
+  controlSemantics: {
+    tagName: string;
+    type: string | null;
+    name: string | null;
+    value: string | null;
+    checked: boolean | null;
+  } | null;
   tagName: string;
   role: string | null;
   matchCountAtRecord: number;
