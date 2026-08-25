@@ -1,0 +1,268 @@
+# TODO: 请确认参数名称、类型与枚举映射。
+# TODO: 请确认每个步骤的 channel 与 riskLevel。
+# TODO: 请确认预取值、依赖模板与断言。
+
+skill:
+  id: form_apply_submit
+  name: 录制技能草稿
+  description: 根据浏览器录制自动生成，发布前需复核 TODO
+  system: localhost
+  baseUrl: http://localhost:4100
+  entry: ta-main
+  version: 1
+  recordedAt: 2026-08-25T05:33:23.014Z
+params:
+  - name: 故障描述
+    type: string
+    required: true
+  - name: 分机号
+    type: string
+    required: true
+  # TODO: 请复核此参数推断
+  - name: deviceType
+    type: enum
+    values:
+      - label: 笔记本电脑
+        value: LAPTOP
+    enumMap:
+      笔记本电脑: LAPTOP
+    required: true
+    prompt: 设备类型
+  # TODO: 请复核此参数推断
+  - name: urgency
+    type: enum
+    values:
+      - label: URGENT
+        value: URGENT
+    enumMap:
+      URGENT: URGENT
+    required: true
+    prompt: urgency
+  # TODO: 请复核此参数推断
+  - name: fill
+    type: string
+    required: true
+preflight:
+  # TODO: 请复核此 preflight 推断
+  - name: __VIEWSTATE
+    request:
+      method: GET
+      url: http://localhost:4100/form/apply
+    extract:
+      type: dom
+      selector: input[name="__VIEWSTATE"]
+      attribute: value
+  # TODO: 请复核此 preflight 推断
+  - name: __TOKEN
+    request:
+      method: GET
+      url: http://localhost:4100/form/apply
+    extract:
+      type: dom
+      selector: input[name="__TOKEN"]
+      attribute: value
+  # TODO: 请复核此 preflight 推断
+  - name: seqCode
+    request:
+      method: GET
+      url: http://localhost:4100/form/apply
+    extract:
+      type: dom
+      selector: input[name="seqCode"]
+      attribute: value
+steps:
+  # TODO: 请复核此录制步骤
+  - id: s1
+    desc: navigate
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /home
+      contentType: json
+    ui:
+      action: navigate
+      url: http://localhost:4100/home
+    requires: []
+  # TODO: 请复核此录制步骤
+  - id: s2
+    desc: navigate
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /form/apply
+      contentType: json
+    ui:
+      action: navigate
+      url: http://localhost:4100/form/apply
+    requires: []
+  # TODO: 请复核此录制步骤
+  - id: s3
+    desc: 设备类型
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    ui:
+      action: selectOption
+      target:
+        strategy: playwright
+        selector: internal:label="设备类型"i
+        confidence: HIGH
+      label: 设备类型
+      value: "{{deviceType}}"
+      recordedHint:
+        action: select
+        visibleText: 设备类型
+        visibleTextSource: accessible-name
+        controlSemantics:
+          tagName: select
+          type: select-one
+          name: deviceType
+          value: LAPTOP
+          checked: null
+        tagName: select
+        role: combobox
+        matchCountAtRecord: 1
+    requires: []
+  # TODO: 请复核此录制步骤
+  - id: s4
+    desc: urgency
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    ui:
+      action: check
+      target:
+        strategy: playwright
+        selector: internal:role=radio >> nth=1
+        confidence: LOW
+      label: urgency
+      value: "{{urgency}}"
+      checked: true
+      recordedHint:
+        action: check
+        visibleText: urgency = URGENT
+        visibleTextSource: control-semantics
+        controlSemantics:
+          tagName: input
+          type: radio
+          name: urgency
+          value: URGENT
+          checked: true
+        tagName: input
+        role: radio
+        matchCountAtRecord: 1
+    requires: []
+  # TODO: 请复核此录制步骤
+  # TODO: 此请求的归属由时间窗推断（置信度低）。
+  # 请求距最近前置动作 10ms，无 DOM 或请求值因果证据。请确认它是否应归属于 s5。
+  - id: s5
+    desc: fill
+    channel: network
+    riskLevel: write
+    hasSideEffect: true
+    expectsRedirect: true
+    network:
+      method: POST
+      url: /form/apply/submit
+      headers:
+        accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+        accept-language: zh-CN,zh;q=0.9
+        cache-control: max-age=0
+        connection: keep-alive
+        content-type: application/x-www-form-urlencoded
+        origin: http://localhost:4100
+        referer: http://localhost:4100/form/apply
+        upgrade-insecure-requests: "1"
+      contentType: form
+      body:
+        __VIEWSTATE: "{{__VIEWSTATE}}"
+        __TOKEN: "{{__TOKEN}}"
+        seqCode: "{{seqCode}}"
+        deviceType: "{{deviceType|enumValue}}"
+        urgency: "{{urgency|enumValue}}"
+        desc: "{{故障描述}}"
+        ext: ""
+    ui:
+      action: fill
+      target:
+        strategy: playwright
+        selector: internal:role=textbox[name="故障描述"i]
+        confidence: HIGH
+      value: "{{故障描述}}"
+      recordedHint:
+        action: fill
+        visibleText: 故障描述
+        visibleTextSource: accessible-name
+        controlSemantics: null
+        tagName: textarea
+        role: textbox
+        matchCountAtRecord: 1
+    requires: []
+    _correlation:
+      method: time-window
+      confidence: low
+      ownerAction: s5
+      evidence: 请求距最近前置动作 10ms，无 DOM 或请求值因果证据
+  # TODO: 请复核此录制步骤
+  # TODO: 此请求的归属由时间窗推断（置信度低）。
+  # 请求距最近前置动作 35ms，无 DOM 或请求值因果证据。请确认它是否应归属于 s5。
+  - id: s6
+    desc: http://localhost:4100/api/records?limit=20
+    channel: network
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /api/records?limit=20
+      headers:
+        accept: "*/*"
+        accept-language: zh-CN,zh;q=0.9
+        connection: keep-alive
+        referer: http://localhost:4100/records
+      contentType: json
+    requires: []
+    _correlation:
+      method: time-window
+      confidence: low
+      ownerAction: s5
+      evidence: 请求距最近前置动作 35ms，无 DOM 或请求值因果证据
+assertions: []
+postcondition:
+  # TODO: 请确认此查询能唯一定位本次提交
+  request:
+    method: GET
+    url: /api/records?limit=20
+  match:
+    jsonPath: $.list[*]
+    where:
+      deviceType: "{{deviceType|enumValue}}"
+      urgency: "{{urgency|enumValue}}"
+    limit: 5
+  expectFound: true
+  timeoutMs: 10000
+reentry:
+  strategy: restart-from-anchor
+  identityLock: true
+  anchor: s4
+  maxReentries: 2
+verification:
+  status: draft
+  requiresFirstRunVerification: true
+  verifiedAt: null
+  verifiedRunId: null
+  verifiedBy: null
+  verifiedTtlDays: 30
+  rerecordReason: null
+_notes:
+  - 动作与请求仅按 requestTs 关联。
+  - 参数来自用户 fill/select/datetime 动作。
+  - 跨请求依赖来自结构化脱敏后的叶子值匹配。
+  - 所有 TODO 项必须在发布前人工确认。
+  - 认证载体见 entries/ 目录（C16：技能不含登录环节）。
+  - 若未生成 reentry：首步即写时无幂等 anchor 可用，请人工前移幂等步骤（C22）。
+  - 本技能包含 8 个录制时业务 header（accept, accept-language, cache-control, connection, content-type, origin, referer, upgrade-insecure-requests）；若其值需随调用变化，请人工改为参数引用。
+  - 步骤 s5 写请求字段 desc 的字面量 "TA6 漂移复证基线" 无法溯源；请确认其来源并显式修正。

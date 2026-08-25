@@ -1,0 +1,32 @@
+entry:
+  id: ro-main
+  name: 真实OA(5173)
+  via: direct
+  directUrl: http://localhost:5173/#/dashboard
+  landingUrlPattern: /#/dashboard
+  excludeUrlPatterns:
+    - '\?token='
+    - '\?code='
+    - '192.168.124.2'
+  sessionType: bearer
+  bearerSource:
+    strategy: storage
+    key: oa.token
+  channelCapability:
+    network: true
+    ui: true
+  sessionProbe:
+    url: /api/health
+  identityProbe:
+    url: /api/auth/me
+    jsonPath: $.data.user.username
+    requiresAuth: true
+  loginUrlPatterns:
+    - '192.168.124.2'
+    - /#/login
+  loginDomMarkers: ['input[name="username"]', '#username']
+  loginTimeoutMs: 300000
+  credentialProvider:
+    type: none
+    ref: ''
+    ttlMs: 30000

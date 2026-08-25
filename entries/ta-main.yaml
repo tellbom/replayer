@@ -1,0 +1,39 @@
+# 本轮验收专用 entry（TA = Test Acceptance d25b8fe）——门户跳转 legacy 主链
+# 按新 schema：identityProbe.requiresAuth 必填；landingUrlPattern 子串语义；TTL advisory 字段
+entry:
+  id: ta-main
+  name: TA 门户 Legacy 主链
+  via: portal
+  portalUrl: http://localhost:4000/portal
+  linkText: "Legacy 业务系统"
+  landingUrlPattern: "4100/home"
+  excludeUrlPatterns:
+    - '\?token='
+    - '/sso\?'
+  sessionType: cookie
+  channelCapability:
+    network: true
+    ui: true
+  sessionProbe:
+    url: http://localhost:4100/api/whoami
+    okStatus: [200]
+  identityProbe:
+    url: http://localhost:4100/api/whoami
+    jsonPath: $.username
+    requiresAuth: true
+  loginUrlPatterns:
+    - '/portal/login'
+  loginDomMarkers:
+    - '#portal-login-form'
+  loginTimeoutMs: 120000
+  sessionHolding:
+    strategy: daemon
+    probeIntervalMs: 30000
+    stateTtlMs: 1800000
+    cookieKind: session
+    expectedPortalTtlMs: 14400000
+    warnBeforeExpiryMs: 1800000
+  credentialProvider:
+    type: none
+    ref: ''
+    ttlMs: 30000
