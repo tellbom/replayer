@@ -50,7 +50,7 @@ export function diffRecordings(left: RecordSession, right: RecordSession): Recor
       path: `action[${index}].value`,
       left: leftAction.value,
       right: rightAction.value,
-      suggestedParam: actionParamName(leftAction.label, leftAction.type),
+      suggestedParam: actionParamName(leftAction.name, leftAction.type),
     });
   }
 
@@ -144,14 +144,8 @@ function dynamicHeaders(
   return [...names].filter((name) => /csrf|requestverificationtoken/i.test(name));
 }
 
-function actionParamName(label: string | undefined, type: string): string {
-  const names: Record<string, string> = {
-    '加班类型': 'type',
-    '开始时间': 'startTime',
-    '结束时间': 'endTime',
-    '事由': 'reason',
-  };
-  return (label && names[label]) || type;
+function actionParamName(name: string | undefined, type: string): string {
+  return name?.trim() || type;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

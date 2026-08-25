@@ -31,7 +31,7 @@ describe('dsh diff', () => {
 function session(type: string, reason: string, csrf: string): RecordSession {
   return {
     meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
-    actions: [{ ts: 1, type: 'select', label: '加班类型', value: type }],
+    actions: [{ ts: 1, type: 'select', name: 'type', value: type }],
     network: [
       {
         requestId: 'request-1',
