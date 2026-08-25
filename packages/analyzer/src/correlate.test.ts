@@ -99,17 +99,22 @@ describe('correlate', () => {
     session.network = [
       {
         ...request('serverinfo', 900, 950),
-        responseBody: JSON.stringify({ flags: [false, false, false], approverId: 1023, name: '' }),
+        responseBody: JSON.stringify({
+          flags: [false, false, false], approverId: 1023, balanceId: 301, name: '',
+        }),
       },
       {
         ...request('submit', 1_100, 1_200),
-        postData: JSON.stringify({ enabled: false, approverId: 1023, name: '' }),
+        postData: JSON.stringify({ enabled: false, approverId: 1023, balanceId: 301, name: '' }),
       },
     ];
     const submit = correlate(session)
       .flatMap((step) => step.requests)
       .find((item) => item.requestId === 'submit');
-    expect(submit?.dependsOn).toEqual([{ from: 'serverinfo', path: '$.approverId', to: 'body.approverId' }]);
+    expect(submit?.dependsOn).toEqual([
+      { from: 'serverinfo', path: '$.approverId', to: 'body.approverId' },
+      { from: 'serverinfo', path: '$.balanceId', to: 'body.balanceId' },
+    ]);
   });
 
   it('keeps orphan requests in temporal order across action steps', () => {
@@ -140,7 +145,7 @@ describe('correlate', () => {
     expect(() => correlate(session)).toThrow(/structured/);
   });
 
-  it('uses a unique request value match instead of the nearest fast-paced action', () => {
+  it('uses an observed response value match instead of the nearest fast-paced action', () => {
     const session = baseSession();
     session.actions = [
       { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
@@ -161,7 +166,7 @@ describe('correlate', () => {
     const owner = correlate(session).find((step) => step.requests.some((item) => item.requestId === 'approver'));
     expect(owner?.action?.type).toBe('select');
     expect(owner?.requests[0]?.correlation).toMatchObject({
-      method: 'request-value-match', confidence: 'high', ownerActionIndex: 0,
+      method: 'response-value-match', confidence: 'high', ownerActionIndex: 0,
     });
   });
 

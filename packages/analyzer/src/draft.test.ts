@@ -65,7 +65,10 @@ describe('generateDraft', () => {
         request: { method: 'GET', url: '/api/overtime/history?limit=5' },
         match: expect.objectContaining({
           jsonPath: '$.list[*]',
-          where: { startTime: '{{startTime}}', reason: '{{reason}}' },
+          where: expect.objectContaining({
+            type: '{{type|enumValue}}',
+            startTime: '{{startTime}}',
+          }),
         }),
       }),
     );
@@ -306,6 +309,25 @@ describe('generateDraft', () => {
     expect(write?.network?.body?.ownerId).toBe('TODO_UNRESOLVED');
     expect(() => parseSkill(duplicate.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
   });
+
+  it('derives redirect semantics and a postcondition from browser and HTTP data flow', () => {
+    const session = recording(true);
+    const submit = session.network.find((item) => item.requestId === 'submit')!;
+    submit.resourceType = 'document';
+    session.pages = [
+      { ts: 500, url: 'http://oa/form', title: 'Form' },
+      { ts: 5_150, url: 'http://oa/records', title: 'Records' },
+    ];
+
+    const result = generateDraft(session);
+    const redirectStep = result.skill.steps.find((step) => step.network?.url.includes('/submit'));
+    expect(redirectStep?.expectsRedirect).toBe(true);
+    expect(result.skill.assertions).toEqual([]);
+    expect(result.skill.postcondition).toEqual(expect.objectContaining({
+      request: { method: 'GET', url: '/api/overtime/history?limit=5' },
+      match: expect.objectContaining({ jsonPath: '$.list[*]' }),
+    }));
+  });
 });
 
 function responseChainSession(items: Array<{ identifier: string; display: string }>): RecordSession {
@@ -408,7 +430,13 @@ function recording(withHistory: boolean): RecordSession {
       headers: {},
       postData: null,
       status: 200,
-      responseBody: JSON.stringify({ list: [] }),
+      responseBody: JSON.stringify({
+        list: [{
+          type: 'workday',
+          startTime: '2026-08-18 18:00:00',
+          reason: '鐗堟湰涓婄嚎',
+        }],
+      }),
       mutating: false,
       sanitizeMode: 'structured',
     });

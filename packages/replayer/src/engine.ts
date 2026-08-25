@@ -124,8 +124,21 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
                 ? (inspection) => opts.onLowTarget!(step, inspection)
                 : undefined,
             });
-            stepResults.push(result);
-            if (!result.ok) break;
+            let resolved = result;
+            if (step.expectsRedirect) {
+              const postcondition = step.postcondition ?? skill.postcondition;
+              if (!postcondition) {
+                throw new OutcomeUnknownError(
+                  `Step ${step.id} is a redirecting write and has no postcondition`,
+                );
+              }
+              resolved = withPostcondition(
+                { ...result, ok: false, outcome: 'outcome_unknown' },
+                await executePostcondition(page, postcondition, executionContext, skill.params),
+              );
+            }
+            stepResults.push(resolved);
+            if (!resolved.ok) break;
           } catch (error) {
             if (!(error instanceof LocatorNotFoundError) || !opts.onLocatorFailure) throw error;
             const healed = await opts.onLocatorFailure({
@@ -304,6 +317,7 @@ async function resolveNetworkOutcome(
     const resolution = await executePostcondition(page, postcondition, context, skill.params);
     const resolved = withPostcondition(result, resolution);
     if (resolved.ok) return resolved;
+    if (step.expectsRedirect) return resolved;
     if (allowUiFallback && step.ui && resolution.found === false) {
       return executeUiFallback(page, step, context, skill, opts, resolution);
     }

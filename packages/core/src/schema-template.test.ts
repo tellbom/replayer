@@ -392,3 +392,20 @@ steps:
     );
   });
 });
+
+describe('T-102 redirect contract', () => {
+  it('requires a postcondition for redirecting writes', () => {
+    expect(() => parseSkill(`
+skill: { id: redirect, name: redirect, system: test, baseUrl: http://localhost, entry: oa }
+params: []
+steps:
+  - id: submit
+    desc: submit
+    channel: network
+    riskLevel: write
+    hasSideEffect: true
+    expectsRedirect: true
+    network: { method: POST, url: /submit, contentType: form }
+`, entryResolver(testEntry()))).toThrow(/redirecting write.*postcondition/i);
+  });
+});

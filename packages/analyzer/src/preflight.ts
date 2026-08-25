@@ -39,12 +39,12 @@ export function detectPreflight(session: RecordSession): PreflightDraft[] {
 
   for (const request of session.network) {
     const form = formFields(request);
-    for (const name of ['__VIEWSTATE', '__EVENTVALIDATION']) {
-      if (!form.has(name)) continue;
+    for (const [name, value] of form) {
+      if (!isDomSourcedFormValue(session, name, value)) continue;
       drafts.push({
         name,
         request: { method: 'GET', url: currentFormUrl(session, request) },
-        extract: { type: 'dom', selector: `input[name="${name}"]`, attribute: 'value' },
+        extract: { type: 'dom', selector: `input[name="${cssAttributeValue(name)}"]`, attribute: 'value' },
       });
     }
     const jsonToken = jsonTokenField(request);
@@ -59,42 +59,24 @@ export function detectPreflight(session: RecordSession): PreflightDraft[] {
   return uniquePreflights(drafts);
 }
 
+function isDomSourcedFormValue(session: RecordSession, name: string, value: string): boolean {
+  if (!name || !value) return false;
+  const inputs = [...session.actions, ...(session.initialFormState ?? [])];
+  return !inputs.some((input) => input.name === name || input.value === value);
+}
+
+function cssAttributeValue(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
 /** 只根据明确登录页与会话接口证据生成认证建议。 */
 export function detectAuth(session: RecordSession): AuthDetection {
   const forbiddenUrls = session.network
     .filter((request) => request.status === 403)
     .map((request) => request.url);
-  const loginPages = session.pages.filter(
-    (page) => /\/(login|signin|sso)(\/|$|\?)/i.test(new URL(page.url).pathname),
-  );
-  const loginUrlPatterns = [
-    ...new Set(loginPages.map((page) => new URL(page.url).pathname)),
-  ];
-  const loginDomMarkers = session.network.some(
-    (request) =>
-      request.responseBody?.includes('type="password"') ||
-      request.responseBody?.includes("type='password'"),
-  )
-    ? ['input[type="password"]']
-    : undefined;
-  const sessionRequest = session.network.find(
-    (request) =>
-      request.method === 'GET' && /\/api\/(session|user\/current|current\/user|me)(\?|$)/i.test(request.url),
-  );
-  if (!sessionRequest && loginUrlPatterns.length === 0 && !loginDomMarkers) {
-    return { forbiddenUrls };
-  }
-  return {
-    auth: {
-      probeUrl: sessionRequest?.url ?? session.meta.baseUrl,
-      sessionApi: sessionRequest?.url,
-      loggedInJsonPath: hasLoggedInBoolean(sessionRequest) ? '$.loggedIn' : undefined,
-      loginUrlPatterns,
-      loginDomMarkers,
-      loginTimeoutMs: 300_000,
-    },
-    forbiddenUrls,
-  };
+  // Endpoint names and response field names are not authentication evidence. Authentication is
+  // configured explicitly by Entry.sessionProbe/identityProbe and never guessed from a recording.
+  return { forbiddenUrls };
 }
 
 function hasCsrfHeader(request: RecordedRequest): boolean {
@@ -125,21 +107,6 @@ function jsonTokenField(request: RecordedRequest): string | undefined {
     return Object.keys(body).find((key) => /token/i.test(key));
   } catch {
     return undefined;
-  }
-}
-
-function hasLoggedInBoolean(request: RecordedRequest | undefined): boolean {
-  if (!request?.responseBody) return false;
-  try {
-    const body: unknown = JSON.parse(request.responseBody);
-    return (
-      typeof body === 'object' &&
-      body !== null &&
-      'loggedIn' in body &&
-      typeof (body as { loggedIn: unknown }).loggedIn === 'boolean'
-    );
-  } catch {
-    return false;
   }
 }
 

@@ -1,4 +1,4 @@
-import { LocatorNotFoundError, SemanticDriftError, ScopeNotReadyError, resolveTemplate } from '@dsh/core';
+import { LocatorNotFoundError, SemanticDriftError, ScopeNotReadyError, TIMEOUTS, resolveTemplate } from '@dsh/core';
 import type { ExecContext, LocatorStrategy, ParamDefinition, Step, StepResult } from '@dsh/core';
 import type { Locator, Page } from 'playwright';
 
@@ -57,7 +57,13 @@ export async function executeUiStep(
           { timeout: step.waitAfter.timeoutMs },
         )
       : null;
-    const value = await runAction(page, action, context);
+    const navigationWait = step.expectsRedirect
+      ? page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: step.waitAfter?.timeoutMs ?? TIMEOUTS.navigation })
+      : null;
+    const actionRun = runAction(page, action, context);
+    const value = navigationWait
+      ? (await Promise.all([actionRun, navigationWait]))[0]
+      : await actionRun;
     if (requestWait) await requestWait;
     await waitAfterAction(page, step.waitAfter);
     if (step.produces) await registerScope(page, step, context);

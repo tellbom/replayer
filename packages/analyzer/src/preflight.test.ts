@@ -17,25 +17,26 @@ describe('detectPreflight', () => {
     });
   });
 
-  it('detects legacy ViewState form fields from the current page', () => {
+  it('derives DOM-sourced form fields without fixed framework field names', () => {
     const session = baseSession();
     session.pages = [{ ts: 1, url: 'http://oa/legacy/overtime', title: 'Legacy' }];
     session.network = [
       request({
         url: 'http://oa/legacy/overtime/submit',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        postData: '__VIEWSTATE=fingerprint&__EVENTVALIDATION=fingerprint',
+        postData: 'runtimeNonce=fingerprint&userChoice=selected',
       }),
     ];
+    session.actions = [{ ts: 0, type: 'fill', name: 'userChoice', value: 'selected' }];
     expect(detectPreflight(session)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: '__VIEWSTATE',
+          name: 'runtimeNonce',
           request: { method: 'GET', url: 'http://oa/legacy/overtime' },
         }),
-        expect.objectContaining({ name: '__EVENTVALIDATION' }),
       ]),
     );
+    expect(detectPreflight(session).some((item) => item.name === 'userChoice')).toBe(false);
   });
 
   it('detects a JSON token endpoint', () => {
@@ -57,7 +58,7 @@ describe('detectPreflight', () => {
 });
 
 describe('detectAuth', () => {
-  it('detects login expiry and a session API', () => {
+  it('does not guess authentication contracts from familiar endpoint or field names', () => {
     const session = baseSession();
     session.pages = [{ ts: 1, url: 'http://oa/login', title: '登录' }];
     session.network = [
@@ -70,13 +71,7 @@ describe('detectAuth', () => {
         responseBody: JSON.stringify({ loggedIn: false }),
       }),
     ];
-    expect(detectAuth(session).auth).toEqual(
-      expect.objectContaining({
-        sessionApi: 'http://oa/api/session',
-        loggedInJsonPath: '$.loggedIn',
-        loginUrlPatterns: ['/login'],
-      }),
-    );
+    expect(detectAuth(session).auth).toBeUndefined();
   });
 
   it('records forbidden evidence without treating 403 as login expiry', () => {

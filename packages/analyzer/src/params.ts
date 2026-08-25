@@ -1,7 +1,7 @@
 import type { ParamDefinition } from '@dsh/core';
 import type { RecordedAction, RecordSession } from '@dsh/core';
 
-const SENSITIVE_PARAM = /token|viewstate|eventvalidation|csrf|session|timestamp/i;
+const SENSITIVE_PARAM = /token|csrf|session|timestamp/i;
 const DATE_VALUE = /^\d{4}-\d{2}-\d{2}/;
 
 export interface ParamCandidate {

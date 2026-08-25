@@ -297,6 +297,8 @@ export const StepSchema = z.object({
   channel: z.enum(['network', 'ui', 'merged', 'auto']),
   riskLevel: z.enum(['read', 'write', 'critical']).default('read'),
   hasSideEffect: z.boolean().default(false),
+  /** A mutating browser submission whose HTTP redirect response is not a reliable success signal. */
+  expectsRedirect: z.boolean().optional(),
   /**
    * 【C22】重跑是否无副作用。未显式声明时按 riskLevel 推导：read → true，write/critical → false
    */
@@ -434,6 +436,19 @@ export function parseSkill(yamlText: string, entryResolver: (id: string) => Entr
     );
   }
   const entry = entryResolver(skill.skill.entry);
+
+  const redirectWithoutPostcondition = skill.steps.find(
+    (step) =>
+      step.expectsRedirect === true
+      && (step.riskLevel === 'write' || step.riskLevel === 'critical')
+      && !step.postcondition
+      && !skill.postcondition,
+  );
+  if (redirectWithoutPostcondition) {
+    throw new SchemaViolationError(
+      `Step ${redirectWithoutPostcondition.id} is a redirecting write and requires a postcondition`,
+    );
+  }
 
   // 【C17】明文凭证拒绝
   assertNoPlainCredentials(skill.steps, 'steps');

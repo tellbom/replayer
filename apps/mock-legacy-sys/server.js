@@ -20,7 +20,7 @@ const SUB_TTL_MS = Number(process.env.SUB_SESSION_TTL ?? 300) * 1000;
 /** jsessionid → { user, name, expiresAt } */
 const subSessions = new Map();
 /** 一次性 token 白名单（由 mock-portal 写入共享文件；同进程族约定：直接内联校验函数） */
-import { accessSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 const TOKEN_STORE = '../mock-portal/.tokens.json';
 /** records 落库 */
 const records = [];
@@ -230,6 +230,11 @@ const server = createServer((req, res) => {
 ${rows || '<tr><td colspan="7" style="color:#888">暂无记录</td></tr>'}
 </table>
 <p><a href="/form/apply">继续申请</a></p>
+<script>
+// Regression evidence only: let the recorder observe a JSON collection. Product code must infer
+// the postcondition from this HTTP/data-flow evidence and must not guess this fixture endpoint.
+fetch('/api/records?limit=20', { credentials: 'include' }).catch(() => undefined);
+</script>
 </body></html>`);
   }
 

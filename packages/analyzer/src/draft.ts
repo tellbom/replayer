@@ -13,6 +13,7 @@ interface DraftItem {
   hasSideEffect: boolean;
   afterSessionInterrupt: boolean;
   sourceActionIndex: number;
+  expectsRedirect: boolean;
 }
 
 export interface DraftResult {
@@ -54,6 +55,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
         hasSideEffect: false,
         afterSessionInterrupt,
         sourceActionIndex: actionIndex,
+        expectsRedirect: false,
       });
       continue;
     }
@@ -65,6 +67,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
         hasSideEffect: request.mutating,
         afterSessionInterrupt: index === 0 && afterSessionInterrupt,
         sourceActionIndex: actionIndex,
+        expectsRedirect: isRedirectingSubmission(session, request),
       });
     });
   }
@@ -120,7 +123,9 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     params,
     preflight,
     steps,
-    assertions: [{ type: 'httpStatus', expect: 200 }],
+    assertions: steps.some((step) => step.expectsRedirect)
+      ? []
+      : [{ type: 'httpStatus', expect: 200 }],
     verification: {
       status: 'draft',
       requiresFirstRunVerification: steps.some(
@@ -251,6 +256,7 @@ function draftStep(
           : 'ui',
     riskLevel: critical ? 'critical' : request?.mutating ? 'write' : 'read',
     hasSideEffect: item.hasSideEffect,
+    ...(item.expectsRedirect ? { expectsRedirect: true } : {}),
     ...(network ? { network } : {}),
     ...(ui ? { ui } : {}),
     ...(item.action?.scope && !item.afterSessionInterrupt ? { requires: [item.action.scope] } : {}),
@@ -542,25 +548,94 @@ function inferPostcondition(
   params: Skill['params'],
   baseUrl: string,
 ): Skill['postcondition'] {
-  const submitTs = items.find((item) => item.request?.isSubmit)?.request?.requestTs;
-  const candidate = items.find(
-    (item) =>
-      item.request?.method === 'GET' &&
-      /history|list/i.test(item.request.url) &&
-      (submitTs === undefined || item.request.requestTs > submitTs),
-  )?.request;
-  if (!candidate) return undefined;
-  const where = Object.fromEntries(
-    params
-      .filter((param) => param.name === 'reason' || param.name === 'startTime')
-      .map((param) => [param.name, `{{${param.name}}}`]),
+  const submit = items.find((item) => item.request?.isSubmit)?.request;
+  if (!submit) return undefined;
+  const submitBody = safeObjectBody(submit);
+  const candidates = items
+    .map((item) => item.request)
+    .filter((request): request is CorrelatedRequest =>
+      request?.method === 'GET'
+      && request.requestTs > submit.requestTs
+      && request.responseBody !== null,
   );
-  return {
-    request: { method: 'GET', url: relativeUrl(candidate.url, baseUrl) },
-    match: { jsonPath: '$.list[*]', where, limit: 5 },
-    expectFound: true,
-    timeoutMs: 10_000,
-  };
+  for (const candidate of candidates) {
+    for (const collection of findJsonCollections(candidate.responseBody!)) {
+      const where = Object.fromEntries(
+        params.flatMap((param) => {
+          if (!(param.name in submitBody)) return [];
+          const recorded = submitBody[param.name];
+          const matches = collection.items.some(
+            (item) => typeof item === 'object' && item !== null
+              && String((item as Record<string, unknown>)[param.name]) === String(recorded),
+          );
+          return matches ? [[param.name, `{{${param.name}${param.type === 'enum' ? '|enumValue' : ''}}}`]] : [];
+        }),
+      );
+      if (Object.keys(where).length === 0) continue;
+      const recordedMatch = collection.items.some((item) =>
+        typeof item === 'object' && item !== null
+        && Object.keys(where).every((name) =>
+          String((item as Record<string, unknown>)[name]) === String(submitBody[name]),
+        ),
+      );
+      if (!recordedMatch) continue;
+      return {
+        request: { method: 'GET', url: relativeUrl(candidate.url, baseUrl) },
+        match: { jsonPath: collection.path, where, limit: 5 },
+        expectFound: true,
+        timeoutMs: 10_000,
+      };
+    }
+  }
+  return undefined;
+}
+
+function isRedirectingSubmission(session: RecordSession, request: RecordedRequest): boolean {
+  if (!request.mutating || request.resourceType !== 'document') return false;
+  const nextActionTs = session.actions.find((action) => action.ts > request.requestTs)?.ts;
+  const before = [...session.pages]
+    .filter((page) => page.ts <= request.requestTs)
+    .sort((left, right) => right.ts - left.ts)[0];
+  const after = [...session.pages]
+    .filter((page) => page.ts >= request.requestTs && (nextActionTs === undefined || page.ts < nextActionTs))
+    .sort((left, right) => left.ts - right.ts)[0];
+  if (!after) return false;
+  return !before || withoutHash(before.url) !== withoutHash(after.url);
+}
+
+function withoutHash(url: string): string {
+  const parsed = new URL(url);
+  parsed.hash = '';
+  return parsed.href;
+}
+
+function safeObjectBody(request: RecordedRequest): Record<string, unknown> {
+  if (!request.postData) return {};
+  try {
+    if ((request.headers['content-type'] ?? '').includes('application/x-www-form-urlencoded')) {
+      return Object.fromEntries(new URLSearchParams(request.postData));
+    }
+    const value: unknown = JSON.parse(request.postData);
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function findJsonCollections(body: string): Array<{ path: string; items: unknown[] }> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch { return []; }
+  return findCollectionNodes(parsed, '$');
+}
+
+function findCollectionNodes(value: unknown, path: string): Array<{ path: string; items: unknown[] }> {
+  if (Array.isArray(value)) return [{ path: `${path}[*]`, items: value }];
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.entries(value).flatMap(([key, child]) =>
+    findCollectionNodes(child, `${path}.${key}`),
+  );
 }
 
 function renderDraftYaml(skill: Skill, hasPostcondition: boolean): string {

@@ -113,7 +113,8 @@ function correlateRequest(
         if (dependency.ambiguous) return [];
         const source = correlatedRequests.find((candidate) => candidate.requestId === dependency.from);
         if (!source) return [];
-        const sourceOwner = source.correlation?.ownerActionIndex
+        const sourceOwner = dependency.discriminator?.actionIndex
+          ?? source.correlation?.ownerActionIndex
           ?? ownerActionIndex(session.actions, source.requestTs);
         return sourceOwner === -1 ? [] : [{ dependency, source, sourceOwner }];
       })
@@ -122,9 +123,11 @@ function correlateRequest(
     const latestSource = responseDependencies.sort(
       (left, right) => right.source.requestTs - left.source.requestTs,
     )[0]!;
-    const owner = request.isSubmit
-      ? ownerActionIndex(session.actions, request.requestTs)
-      : firstSuccessorAction(
+    const immediateOwner = ownerActionIndex(session.actions, request.requestTs);
+    const owner = immediateOwner !== -1 && session.actions[immediateOwner]?.type === 'click'
+      ? immediateOwner
+      : latestSource.dependency.discriminator?.actionIndex
+        ?? firstSuccessorAction(
           session.actions,
           latestSource.sourceOwner,
           latestSource.source.requestTs,
@@ -241,9 +244,12 @@ function analyzeDependencies(
     for (const source of requests.slice(0, targetIndex)) {
       const sourceLeaves = responseBodyLeaves(source);
       for (const targetLeaf of targetLeaves) {
-        if (isWeakValue(targetLeaf.value, globalValueCounts)) continue;
         for (const sourceLeaf of sourceLeaves) {
           if (targetLeaf.value !== sourceLeaf.value) continue;
+          if (
+            isWeakValue(targetLeaf.value, globalValueCounts)
+            && !isUniqueSameFieldValue(sourceLeaf, targetLeaf, globalValueCounts)
+          ) continue;
           if (source.sanitizeMode !== 'structured' || target.sanitizeMode !== 'structured') {
             throw new Error(
               `依赖识别要求 structured 脱敏: ${source.requestId} -> ${target.requestId}`,
@@ -261,6 +267,18 @@ function analyzeDependencies(
     }
     return { ...target, dependsOn, isSubmit: target.requestId === lastMutating };
   });
+}
+
+function isUniqueSameFieldValue(
+  source: ValueLeaf,
+  target: ValueLeaf,
+  counts: Map<string, number>,
+): boolean {
+  if (typeof source.value === 'boolean' || source.value === '') return false;
+  const sourceName = source.path.split('.').at(-1);
+  const targetName = target.path.split('.').at(-1);
+  const key = `${typeof source.value}:${String(source.value)}`;
+  return sourceName !== undefined && sourceName === targetName && counts.get(key) === 1;
 }
 
 function indexedSelection(

@@ -9,6 +9,7 @@ interface BrowserFetchResult {
   status: number | null;
   text: string | null;
   error?: string;
+  opaqueRedirect?: boolean;
 }
 
 /** 在页面会话中执行 network 步骤，并按 fetch 调用边界机械分类结果。 */
@@ -64,7 +65,13 @@ export async function executeNetworkStep(
   const extracted: Array<Record<string, unknown>> = [];
   let lastRaw: StepResult['raw'];
   for (const request of requests) {
-    const result = await browserFetch(page, request, context.baseUrl, liveAuthorization);
+    const result = await browserFetch(
+      page,
+      request,
+      context.baseUrl,
+      liveAuthorization,
+      step.expectsRedirect === true,
+    );
     if (!result.fetchStarted) return notSent(step.id, startedAt, result.error ?? '未调用 fetch');
     if (result.status === null) {
       return {
@@ -77,6 +84,19 @@ export async function executeNetworkStep(
       };
     }
     lastRaw = { status: result.status, text: result.text ?? undefined };
+    if (step.expectsRedirect) {
+      return {
+        stepId: step.id,
+        ok: false,
+        outcome: 'outcome_unknown',
+        channelUsed: 'network',
+        durationMs: Date.now() - startedAt,
+        error: result.opaqueRedirect
+          ? 'redirect response is opaque; resolving by postcondition'
+          : 'redirecting write requires postcondition verification',
+        raw: lastRaw,
+      };
+    }
     if (result.status < 200 || result.status >= 300) {
       const outcome = explicitRejection(result.status, result.text)
         ? 'confirmed_failure'
@@ -145,6 +165,7 @@ async function browserFetch(
   request: NonNullable<Step['network']>,
   baseUrl: string,
   liveAuthorization: string | null,
+  expectsRedirect: boolean,
 ): Promise<BrowserFetchResult> {
   return page.evaluate(
     async ({ spec, origin, timeoutMs, authorization }) => {
@@ -176,9 +197,15 @@ async function browserFetch(
           headers,
           body,
           signal: controller.signal,
+          redirect: spec.expectsRedirect ? 'manual' : 'follow',
         });
         clearTimeout(timer);
-        return { fetchStarted, status: response.status, text: await response.text() };
+        return {
+          fetchStarted,
+          status: response.status,
+          text: response.type === 'opaqueredirect' ? null : await response.text(),
+          opaqueRedirect: response.type === 'opaqueredirect',
+        };
       } catch (error) {
         return {
           fetchStarted,
@@ -188,7 +215,12 @@ async function browserFetch(
         };
       }
     },
-    { spec: request, origin: baseUrl, timeoutMs: TIMEOUTS.networkStep, authorization: liveAuthorization },
+    {
+      spec: { ...request, expectsRedirect },
+      origin: baseUrl,
+      timeoutMs: TIMEOUTS.networkStep,
+      authorization: liveAuthorization,
+    },
   );
 }
 

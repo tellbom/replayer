@@ -5,6 +5,16 @@ Reflect.set(window, '__dsh_clicked__', clickedElements);
 
 function emit(action: Record<string, unknown>, clickedElement?: Element): void {
   if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
+  if (!initialNavigationEmitted && action.type !== 'navigate') {
+    const navigationRecord = Reflect.get(window, '__DSH_RECORD__');
+    if (typeof navigationRecord === 'function') {
+      initialNavigationEmitted = true;
+      navigationRecord({
+        ts: Date.now(), actionIdx: nextActionIdx, type: 'navigate', url: location.href,
+      });
+      nextActionIdx += 1;
+    }
+  }
   const actionIdx = nextActionIdx;
   nextActionIdx += 1;
   if (clickedElement) {
@@ -208,6 +218,16 @@ Reflect.set(window, '__DSH_INITIAL_FORM_STATE__', scanInitialFormState);
 new MutationObserver(scanInitialFormState).observe(document.documentElement, { childList: true, subtree: true });
 queueMicrotask(scanInitialFormState);
 
-window.addEventListener('DOMContentLoaded', () => {
+let initialNavigationEmitted = false;
+const emitInitialNavigation = (): void => {
+  if (initialNavigationEmitted) return;
+  if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
+  if (typeof Reflect.get(window, '__DSH_RECORD__') !== 'function') return;
+  initialNavigationEmitted = true;
   emit({ type: 'navigate', url: location.href });
-});
+};
+const scheduleInitialNavigation = (): void => { setTimeout(emitInitialNavigation, 0); };
+window.addEventListener('DOMContentLoaded', scheduleInitialNavigation);
+window.addEventListener('load', scheduleInitialNavigation);
+queueMicrotask(emitInitialNavigation);
+setTimeout(emitInitialNavigation, 0);

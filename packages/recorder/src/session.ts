@@ -112,7 +112,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
             const scoped = await tolerateNavigation(page, () => page.evaluate(
               ({ producerIdx, currentIdx }) => {
                 const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
-                return window.__DSH_MUTATION__.deriveScope(producerIdx, clicked[currentIdx]!);
+                const current = clicked?.[currentIdx];
+                if (!current?.isConnected) return null;
+                return window.__DSH_MUTATION__.deriveScope(producerIdx, current);
               },
               { producerIdx: producerActionIdx, currentIdx: actionIdx },
             ));
@@ -197,8 +199,6 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const reinjectRecorderProbe = await installRecorderProbe(page);
   const startedAt = opts.resumeSession?.meta.startedAt ?? new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
-  actions.push({ ts: Date.now(), type: 'navigate', url: page.url() });
-
   const pages: RecordSession['pages'] = [
     ...(opts.resumeSession?.pages ?? []),
     { ts: Date.now(), url: page.url(), title: await page.title() },
@@ -217,7 +217,6 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const probeMatchers = [opts.entry.entry.sessionProbe.url, opts.entry.entry.identityProbe.url].map(
     (url) => new RegExp(escapeRegExp(new URL(url, baseUrl).href)),
   );
-  const networkRecording = startNetworkRecording(page, [...excludeMatchers, ...probeMatchers]);
   const previousNetwork = [...(opts.resumeSession?.network ?? [])];
   let partialWrite = Promise.resolve();
   const persistPartial = (reason: string, identityChanged = false): Promise<void> => {
@@ -237,6 +236,11 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     }));
     return partialWrite;
   };
+  const networkRecording = startNetworkRecording(
+    page,
+    [...excludeMatchers, ...probeMatchers],
+    () => { void persistPartial('mutating-request-started'); },
+  );
   const partialTimer = setInterval(() => {
     void persistPartial('periodic-time-checkpoint');
   }, 10_000);
@@ -646,7 +650,9 @@ async function promoteByAncestor(
       targetConfidence: 'HIGH' | 'LOW';
     } | null;
     const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
-    return derive(clicked[idx]!);
+    const target = clicked?.[idx];
+    if (typeof derive !== 'function' || !target?.isConnected) return null;
+    return derive(target);
   }, actionIdx));
   if (!candidate || candidate.targetConfidence !== 'HIGH') return null;
 

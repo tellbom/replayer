@@ -9,7 +9,8 @@ const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js',
 test('network-record: 加班请求按发出时间录入并结构化脱敏', async ({ page }) => {
   await page.addInitScript({ content: locatorScript });
   await login(page);
-  const recording = startNetworkRecording(page);
+  const mutating: string[] = [];
+  const recording = startNetworkRecording(page, [], (request) => mutating.push(request.requestId));
   await page.goto('/overtime/apply');
   await expect(page.getByRole('heading', { name: '加班申请' })).toBeVisible();
 
@@ -40,6 +41,7 @@ test('network-record: 加班请求按发出时间录入并结构化脱敏', asyn
   const submit = records.find((record) => record.url.includes('/overtime/submit'));
   expect(approver).toBeDefined();
   expect(submit).toBeDefined();
+  expect(mutating).toContain(submit?.requestId);
   expect(approver?.sanitizeMode).toBe('structured');
   expect(submit?.sanitizeMode).toBe('structured');
   expect(records.filter((record) => record.sanitizeMode === 'fallback')).toHaveLength(0);

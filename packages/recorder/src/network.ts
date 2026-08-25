@@ -15,6 +15,7 @@ export interface NetworkRecording {
 export function startNetworkRecording(
   page: Page,
   excludeMatchers: RegExp[] = [],
+  onMutatingRequest?: (record: RecordedRequest) => void,
 ): NetworkRecording {
   const sanitizer = createSanitizer();
   const records: RecordedRequest[] = [];
@@ -55,6 +56,7 @@ export function startNetworkRecording(
     };
     records.push(record);
     byRequest.set(request, record);
+    if (record.mutating) onMutatingRequest?.(record);
 
     track(
       request.allHeaders().then((headers) => {
