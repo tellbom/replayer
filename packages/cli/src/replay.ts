@@ -25,6 +25,7 @@ interface ReplayCliOptions {
   entries: string;
   stateDir: string;
   yes?: boolean;
+  forceTakeover?: boolean;
 }
 
 interface ReplayDependencies {
@@ -44,6 +45,7 @@ export function configureReplayCommand(program: Command): void {
     .option('--entries <directory>', 'entry 认证载体配置目录', './entries')
     .option('--profile <directory>', '持久化浏览器配置目录', './profiles/default')
     .option('--state-dir <directory>', '会话状态目录', './.dsh')
+    .option('--force-takeover', '显式关闭已知常驻浏览器后自行启动（会丢失会话）')
     .option('--yes', '跳过高风险确认，仅用于自动化测试')
     .action(runReplay);
 }
@@ -76,7 +78,11 @@ export async function runReplay(
   const params = await parseReplayParams(options.params);
   const cdpEndpoint = options.dryRun
     ? undefined
-    : await (dependencies.sessionEndpoint ?? resolveSessionEndpoint)(entry, options.stateDir);
+    : await (dependencies.sessionEndpoint ?? resolveSessionEndpoint)(
+        entry,
+        options.stateDir,
+        options.forceTakeover,
+      );
   const confirm = options.yes ? async () => true : confirmRisk;
   let result: RunResult | undefined;
   try {

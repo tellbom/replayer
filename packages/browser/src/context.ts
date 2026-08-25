@@ -48,27 +48,10 @@ export async function launchDSHContext(options: BrowserOptions): Promise<Browser
     args,
   });
 
-  for (const relativePath of INIT_SCRIPT_PATHS) {
-    const path = fileURLToPath(new URL(relativePath, import.meta.url));
-    await context.addInitScript({ content: await readFile(path, 'utf8') });
-  }
+  await installRuntime(context, false);
   const auditPage = await context.newPage();
   try {
-    const injected = await auditPage.evaluate(() => ({
-      locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
-      snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
-      generator: typeof Reflect.get(window, '__DSH_PWGEN__'),
-      mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
-      ancestorScope: typeof Reflect.get(window, '__DSH_ANCESTOR_SCOPE__'),
-    }));
-    const missing = Object.entries(injected).filter(([, value]) =>
-      value === 'undefined' || value === undefined,
-    );
-    if (missing.length > 0) {
-      throw new Error(
-        `[注入自检失败] ${JSON.stringify(injected)} — 缺失: ${missing.map(([name]) => name).join(',')}`,
-      );
-    }
+    await assertRuntimeInjected(auditPage);
   } finally {
     await auditPage.close();
   }
@@ -80,13 +63,63 @@ export async function acquireDSHContext(
   cdpEndpoint?: string,
 ): Promise<BrowserLease> {
   if (cdpEndpoint) {
-    const browser = await chromium.connectOverCDP(cdpEndpoint);
-    const context = browser.contexts()[0];
-    if (!context) throw new Error(`CDP 会话没有默认 context: ${cdpEndpoint}`);
-    return { context, release: () => browser.close() };
+    try {
+      const browser = await chromium.connectOverCDP(cdpEndpoint);
+      const context = browser.contexts()[0];
+      if (!context) throw new Error(`CDP 会话没有默认 context: ${cdpEndpoint}`);
+      await installRuntime(context, true);
+      return { context, release: () => browser.close() };
+    } catch (error) {
+      throw new Error(
+        `检测到常驻会话但无法附着，未关闭现有浏览器。请修复 endpoint 或显式使用 --force-takeover（会丢失会话）：${String(error)}`,
+        { cause: error },
+      );
+    }
   }
-  const context = await launchDSHContext(options);
-  return { context, release: () => context.close() };
+  try {
+    const context = await launchDSHContext(options);
+    return { context, release: () => context.close() };
+  } catch (error) {
+    if (/profile|user data|singleton|already in use/i.test(String(error))) {
+      throw new Error(
+        '检测到 profile 已被其他进程使用但没有可附着的 DSH endpoint；未接管该进程。请关闭该实例，或先用 dsh session start 建立可附着会话。',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+async function installRuntime(context: BrowserContext, injectExistingPages: boolean): Promise<void> {
+  const scripts = await Promise.all(INIT_SCRIPT_PATHS.map(async (relativePath) => {
+    const path = fileURLToPath(new URL(relativePath, import.meta.url));
+    return readFile(path, 'utf8');
+  }));
+  for (const content of scripts) await context.addInitScript({ content });
+  if (!injectExistingPages) return;
+
+  for (const page of context.pages()) {
+    for (const content of scripts) await page.evaluate(content);
+    await assertRuntimeInjected(page);
+  }
+}
+
+async function assertRuntimeInjected(page: Page): Promise<void> {
+  const injected = await page.evaluate(() => ({
+    locator: typeof Reflect.get(window, '__DSH_LOCATOR__'),
+    snapshot: typeof Reflect.get(window, '__DSH_SNAPSHOT__'),
+    generator: typeof Reflect.get(window, '__DSH_PWGEN__'),
+    mutation: typeof Reflect.get(window, '__DSH_MUTATION__'),
+    ancestorScope: typeof Reflect.get(window, '__DSH_ANCESTOR_SCOPE__'),
+  }));
+  const missing = Object.entries(injected).filter(([, value]) =>
+    value === 'undefined' || value === undefined,
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `[注入自检失败] ${JSON.stringify(injected)} — 缺失: ${missing.map(([name]) => name).join(',')}`,
+    );
+  }
 }
 
 /**

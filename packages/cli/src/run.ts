@@ -14,6 +14,8 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
+import { resolveSessionEndpoint } from './session.js';
+
 import {
   finishVerification,
   createLowTargetObserver,
@@ -32,6 +34,8 @@ interface RunCliOptions {
   llm: boolean;
   yes?: boolean;
   dryRun?: boolean;
+  stateDir?: string;
+  forceTakeover?: boolean;
 }
 
 interface LoadedSkill {
@@ -55,6 +59,8 @@ export function configureRunCommand(program: Command): void {
     .option('--skill <file>', '--no-llm 时明确指定技能文件')
     .option('--params <json>', '--no-llm 时提供确定性参数 JSON', '{}')
     .option('--profile <directory>', '持久化浏览器配置目录', './profiles/default')
+    .option('--state-dir <directory>', '会话状态目录', './.dsh')
+    .option('--force-takeover', '显式关闭已知常驻浏览器后自行启动（会丢失会话）')
     .option('--no-llm', '跳过路由和自愈，仅确定性回放')
     .option('--yes', '跳过高风险确认，仅用于自动化测试')
     .option('--dry-run', '只打印执行计划')
@@ -87,8 +93,15 @@ export async function runNaturalLanguage(
     if (!verification.proceed) return;
     let result: RunResult | undefined;
     try {
+      const cdpEndpoint = options.dryRun
+        ? undefined
+        : await resolveSessionEndpoint(
+            selected.entry,
+            options.stateDir ?? './.dsh',
+            options.forceTakeover,
+          );
       result = await replayImpl(selected.skill, {
-        ...replayOptions(options, params, confirm, selected.entry),
+        ...replayOptions(options, params, confirm, selected.entry, cdpEndpoint),
         supervisedVerification: verification.supervised,
         onLowTarget: createLowTargetObserver(verification.supervised, prompter),
       });
@@ -114,7 +127,20 @@ export async function runNaturalLanguage(
     options.dryRun,
   );
   if (!verification.proceed) return;
-  const optionsForReplay = replayOptions(options, routed.params, confirm, selected.entry);
+  const cdpEndpoint = options.dryRun
+    ? undefined
+    : await resolveSessionEndpoint(
+        selected.entry,
+        options.stateDir ?? './.dsh',
+        options.forceTakeover,
+      );
+  const optionsForReplay = replayOptions(
+    options,
+    routed.params,
+    confirm,
+    selected.entry,
+    cdpEndpoint,
+  );
   optionsForReplay.supervisedVerification = verification.supervised;
   optionsForReplay.onLowTarget = createLowTargetObserver(verification.supervised, prompter);
   optionsForReplay.onLocatorFailure = async (failure: NonNullable<ReplayOptions['onLocatorFailure']> extends (input: infer I) => Promise<StepResult | null> ? I : never) => {
@@ -183,11 +209,13 @@ function replayOptions(
   params: Record<string, unknown>,
   confirm: NonNullable<ReplayOptions['onConfirm']>,
   entry: Entry,
+  cdpEndpoint?: string,
 ): ReplayOptions {
   return {
     params,
     profileDir: options.profile,
     entry,
+    cdpEndpoint,
     dryRun: options.dryRun,
     noLLM: !options.llm,
     onConfirm: confirm,

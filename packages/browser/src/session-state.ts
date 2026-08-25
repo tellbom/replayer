@@ -10,6 +10,7 @@ export interface SessionState {
   identityDigest?: string;
   lastProbeAt?: string;
   pageUrl?: string;
+  sessionEstablishedAt?: string;
 }
 
 export function sessionStatePath(stateDir: string, entryId: string): string {

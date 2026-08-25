@@ -55,9 +55,11 @@ export async function runSessionDaemon(options: DaemonOptions): Promise<void> {
     status: 'active',
     identityDigest: session.identityDigest,
     lastProbeAt: new Date().toISOString(),
+    sessionEstablishedAt: new Date().toISOString(),
     pageUrl: page.url(),
   };
   await writeState(options.statePath, state);
+  await updateExpiryReminder(page, entry, state).catch(() => undefined);
 
   let probing = false;
   const timer = setInterval(() => {
@@ -79,9 +81,11 @@ export async function runSessionDaemon(options: DaemonOptions): Promise<void> {
           status: 'active',
           identityDigest: recovered.identityDigest,
           lastProbeAt: new Date().toISOString(),
+          sessionEstablishedAt: new Date().toISOString(),
           pageUrl: page.url(),
         };
         await writeState(options.statePath, state);
+        await updateExpiryReminder(page, entry, state).catch(() => undefined);
         return;
       }
       const valid = authState === 'authenticated';
@@ -93,6 +97,7 @@ export async function runSessionDaemon(options: DaemonOptions): Promise<void> {
         ...(valid ? { identityDigest: await readIdentityDigest(page, entry) } : {}),
       };
       await writeState(options.statePath, state);
+      await updateExpiryReminder(page, entry, state).catch(() => undefined);
       if (!valid) await page.bringToFront();
     })()
       .catch(async () => {
@@ -117,6 +122,37 @@ export async function runSessionDaemon(options: DaemonOptions): Promise<void> {
   clearInterval(timer);
   await context.close();
   await rm(options.statePath, { force: true });
+}
+
+async function updateExpiryReminder(page: import('playwright').Page, entry: ReturnType<typeof parseEntry>, state: SessionState): Promise<void> {
+  const expected = entry.entry.sessionHolding.expectedPortalTtlMs;
+  const warnBefore = entry.entry.sessionHolding.warnBeforeExpiryMs;
+  const established = state.sessionEstablishedAt ? Date.parse(state.sessionEstablishedAt) : Number.NaN;
+  if (expected === undefined || warnBefore === undefined || !Number.isFinite(established)) {
+    await page.evaluate(() => document.querySelector('#__dsh_session_expiry_hint__')?.remove());
+    return;
+  }
+  const remaining = established + expected - Date.now();
+  if (remaining > warnBefore) {
+    await page.evaluate(() => document.querySelector('#__dsh_session_expiry_hint__')?.remove());
+    return;
+  }
+  const minutes = Math.max(0, Math.ceil(remaining / 60_000));
+  await page.evaluate((value) => {
+    let hint = document.querySelector('#__dsh_session_expiry_hint__');
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.id = '__dsh_session_expiry_hint__';
+      Object.assign((hint as HTMLElement).style, {
+        position: 'fixed', inset: 'auto 12px 12px auto', zIndex: '2147483647',
+        padding: '10px 14px', color: 'white', background: '#ad6800',
+      });
+      (document.body ?? document.documentElement).append(hint);
+    }
+    hint.textContent = value > 0
+      ? `DSH：会话配置 TTL 预计约 ${value} 分钟后到达，请在长流程前重新认证`
+      : 'DSH：会话配置 TTL 预计时长已耗尽；实际状态仍以实时探测为准';
+  }, minutes);
 }
 
 async function reservePort(): Promise<number> {

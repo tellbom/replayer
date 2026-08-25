@@ -138,6 +138,8 @@ export const EntrySchema = z.object({
         probeIntervalMs: z.number().default(30_000),
         stateTtlMs: z.number().default(1_800_000),
         cookieKind: z.enum(['persistent', 'session', 'mixed', 'unknown']).default('unknown'),
+        expectedPortalTtlMs: z.number().positive().optional(),
+        warnBeforeExpiryMs: z.number().positive().optional(),
       })
       .default({}),
 

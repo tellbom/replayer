@@ -28,10 +28,35 @@ npm run dev --workspace mock-oa-frontend -- --host 127.0.0.1
 
 访问 `http://127.0.0.1:5173/login`，测试账号和密码均为 `tester`。
 
+## 标准使用流程：浏览器会话常驻
+
+每天开始工作时先启动一次常驻会话，并在弹出的浏览器中自行完成登录：
+
+```powershell
+npm run dsh -- session start --entry <系统>
+```
+
+之后的录制和回放会优先附着该浏览器。录制示例：
+
+```powershell
+npm run dsh -- record --entry <系统> --out ./tmp/rec1
+```
+
+使用期间请勿关闭该浏览器窗口。这是保持会话的使用前提：短期子系统会话失效后，需要依靠仍然存活的浏览器会话重新认证。需要并行操作时，请在同一浏览器中打开新标签页。
+
+```powershell
+npm run dsh -- session status --entry <系统>
+npm run dsh -- session stop --entry <系统>
+```
+
+若 entry 同时配置 `expectedPortalTtlMs` 与 `warnBeforeExpiryMs`，`session status` 会按配置显示估算提醒；字段缺失时不产生阈值提醒。估算值不参与登录状态判断，实际有效性始终以 `sessionProbe` 为准。
+
+默认检测到常驻会话时只附着、不关闭 owner。只有明确接受会话丢失时才可使用 `--force-takeover`。
+
 ## 录制与生成技能草稿
 
 ```powershell
-npm run dsh -- record --url http://127.0.0.1:5173/login --out ./tmp/rec1
+npm run dsh -- record --entry <系统> --out ./tmp/rec1
 ```
 
 在打开的 Chrome 中完成业务操作，回到终端按 Enter 结束。生成确定性草稿：

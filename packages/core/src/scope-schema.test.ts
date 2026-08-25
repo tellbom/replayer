@@ -46,6 +46,8 @@ describe('T-76 sessionHolding 契约', () => {
       probeIntervalMs: 30_000,
       stateTtlMs: 1_800_000,
       cookieKind: 'unknown',
+      expectedPortalTtlMs: undefined,
+      warnBeforeExpiryMs: undefined,
     });
   });
 });
