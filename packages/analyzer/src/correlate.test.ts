@@ -197,6 +197,21 @@ describe('correlate', () => {
     expect(correlated?.evidence).toContain('137ms');
   });
 
+  it('matches a query value when HTTP input precedes the later change event', () => {
+    const session = baseSession();
+    session.actions = [{ ts: 1_500, type: 'fill', label: 'Lookup', value: 'Alexandra' }];
+    session.network = [{
+      ...request('lookup', 1_100, 1_400), method: 'GET', mutating: false, postData: null,
+      url: 'http://example.test/lookup?q=Alexandra',
+    }];
+
+    const owner = correlate(session).find((step) => step.requests.length > 0);
+    expect(owner?.action?.value).toBe('Alexandra');
+    expect(owner?.requests[0]?.correlation).toMatchObject({
+      method: 'request-value-match', confidence: 'high',
+    });
+  });
+
   it('does not treat weak response scalars as DOM causality evidence', () => {
     const session = baseSession();
     session.actions = [

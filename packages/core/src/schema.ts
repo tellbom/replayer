@@ -309,7 +309,7 @@ export const StepSchema = z.object({
   pageState: z.string().optional(),
   _correlation: z
     .object({
-      method: z.enum(['dom-causality', 'request-value-match', 'time-window']),
+            method: z.enum(['dom-causality', 'response-value-match', 'request-value-match', 'time-window']),
       confidence: z.enum(['high', 'low']),
       ownerAction: z.string(),
       evidence: z.string(),

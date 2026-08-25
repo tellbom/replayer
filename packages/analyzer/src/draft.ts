@@ -76,12 +76,17 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       .filter((item): item is DraftItem & { request: CorrelatedRequest } => item.request !== null)
       .map((item) => [item.request.requestId, item.id]),
   );
-  const stepByActionIndex = new Map(
-    items
-      .filter((item) => item.sourceActionIndex >= 0)
-      .map((item) => [item.sourceActionIndex, item.id]),
-  );
-  const extracts = dependencyExtracts(items);
+  const stepByActionIndex = new Map<number, string>();
+  for (const item of items) {
+    if (item.sourceActionIndex >= 0 && !stepByActionIndex.has(item.sourceActionIndex)) {
+      stepByActionIndex.set(item.sourceActionIndex, item.id);
+    }
+  }
+  const recordedInputs: RecordedAction[] = [
+    ...session.actions,
+    ...(session.initialFormState ?? []).map((state) => ({ ...state })),
+  ];
+  const extracts = dependencyExtracts(items, params, recordedInputs);
   const preflight = detectPreflight(session);
   const steps: Skill['steps'] = items.map(
     (item) =>
@@ -92,6 +97,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
         extracts,
         session.meta.baseUrl,
         stepByActionIndex,
+        recordedInputs,
       ) as Skill['steps'][number],
   );
   const provenanceNotes = guardMutatingBodyLiterals(
@@ -204,11 +210,14 @@ function draftStep(
   extracts: Map<string, Record<string, string>>,
   baseUrl: string,
   stepByActionIndex: Map<number, string>,
+  recordedInputs: RecordedAction[],
 ): unknown {
   const request = item.request;
   const ui = item.action ? uiAction(item.action, params, item.afterSessionInterrupt) : undefined;
   const network = request
-    ? networkAction(request, params, stepByRequest, extracts.get(request.requestId), baseUrl)
+    ? networkAction(
+        request, params, stepByRequest, extracts.get(request.requestId), baseUrl, recordedInputs,
+      )
     : item.action?.type === 'navigate'
       ? {
           method: 'GET',
@@ -267,6 +276,7 @@ function networkAction(
   stepByRequest: Map<string, string>,
   extract: Record<string, string> | undefined,
   baseUrl: string,
+  recordedInputs: RecordedAction[],
 ): unknown {
   const contentType = (request.headers['content-type'] ?? '').includes(
     'application/x-www-form-urlencoded',
@@ -278,18 +288,19 @@ function networkAction(
   for (const dependency of request.dependsOn) {
     const targetParam = params.find((param) => dependency.to.split('.').at(-1) === param.name);
     if (targetParam) continue;
-    if (/\[\d+\]/.test(dependency.path)) {
+    const dependencyPath = resolvedDependencyPath(dependency, params, recordedInputs);
+    if (!dependencyPath) {
       setBodyPath(body, dependency.to, 'TODO_UNRESOLVED');
       continue;
     }
     const sourceStep = stepByRequest.get(dependency.from);
     if (!sourceStep) throw new Error(`依赖源请求未生成步骤: ${dependency.from}`);
-    setBodyPath(body, dependency.to, `{{${sourceStep}${dependency.path.slice(1)}}}`);
+    setBodyPath(body, dependency.to, `{{${sourceStep}.${dependencyTargetName(dependency)}}}`);
   }
   const headers = dynamicHeaders(request.headers);
   return {
     method: request.method,
-    url: relativeUrl(request.url, baseUrl),
+    url: parameterizeUrl(relativeUrl(request.url, baseUrl), params, recordedInputs),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
     contentType,
     ...(Object.keys(body).length > 0 ? { body } : {}),
@@ -316,19 +327,75 @@ function uiAction(action: RecordedAction, params: Skill['params'], discardScope 
   return { action: action.type, ...common };
 }
 
-function dependencyExtracts(items: DraftItem[]): Map<string, Record<string, string>> {
+function dependencyExtracts(
+  items: DraftItem[],
+  params: Skill['params'],
+  recordedInputs: RecordedAction[],
+): Map<string, Record<string, string>> {
   const extracts = new Map<string, Record<string, string>>();
   for (const item of items) {
     for (const dependency of item.request?.dependsOn ?? []) {
-      if (/\[\d+\]/.test(dependency.path)) continue;
-      const name = dependency.path.split('.').at(-1);
-      if (!name) continue;
+      const path = resolvedDependencyPath(dependency, params, recordedInputs);
+      if (!path) continue;
+      const name = dependencyTargetName(dependency);
       const current = extracts.get(dependency.from) ?? {};
-      current[name] = dependency.path;
+      current[name] = path;
       extracts.set(dependency.from, current);
     }
   }
   return extracts;
+}
+
+function resolvedDependencyPath(
+  dependency: CorrelatedRequest['dependsOn'][number],
+  params: Skill['params'],
+  recordedInputs: RecordedAction[],
+): string | undefined {
+  if (dependency.ambiguous) return undefined;
+  if (!dependency.discriminator) return dependency.path;
+  const action = recordedInputs[dependency.discriminator.actionIndex];
+  const param = action ? parameterForAction(action, params) : undefined;
+  const indexed = /^(.*)\[\d+\](.*)$/.exec(dependency.path);
+  if (!param || !indexed || !/^[A-Za-z_$][\w$]*$/.test(dependency.discriminator.field)) {
+    return undefined;
+  }
+  return `${indexed[1]}[?(@.${dependency.discriminator.field}=="{{${param.name}}}")]${indexed[2]}`;
+}
+
+function dependencyTargetName(dependency: CorrelatedRequest['dependsOn'][number]): string {
+  return dependency.to.split('.').at(-1) ?? 'value';
+}
+
+function parameterizeUrl(
+  url: string,
+  params: Skill['params'],
+  recordedInputs: RecordedAction[],
+): string {
+  return url.replace(/([?&][^=&#]+=)([^&#]*)/g, (match, prefix: string, encoded: string) => {
+    let value: string;
+    try {
+      value = decodeURIComponent(encoded.replace(/\+/g, ' '));
+    } catch {
+      return match;
+    }
+    const candidates = recordedInputs
+      .filter((action) => action.value === value)
+      .map((action) => parameterForAction(action, params))
+      .filter((param): param is Skill['params'][number] => param !== undefined);
+    const unique = [...new Map(candidates.map((param) => [param.name, param])).values()];
+    return unique.length === 1 ? `${prefix}{{${unique[0]!.name}}}` : match;
+  });
+}
+
+function parameterForAction(
+  action: RecordedAction,
+  params: Skill['params'],
+): Skill['params'][number] | undefined {
+  return params.find((param) =>
+    (action.name && param.name === action.name)
+    || (action.label && param.prompt === action.label)
+    || param.values?.some((value) => value.label === action.value || value.value === action.value),
+  );
 }
 
 function requestBody(

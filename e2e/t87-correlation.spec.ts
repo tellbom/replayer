@@ -42,7 +42,7 @@ test('T-87: delayed approver request remains owned by the select action under fa
   console.log(`T87_CORRELATION=${JSON.stringify(approver?._correlation)}`);
   expect(owner?.ui?.action).toBe('selectOption');
   expect(approver?._correlation).toMatchObject({
-    method: 'request-value-match',
+    method: 'response-value-match',
     confidence: 'high',
   });
 });
@@ -81,7 +81,7 @@ test('T-87: request value causality remains high confidence with a slow recordin
   console.log(`T87_SLOW_CORRELATION=${JSON.stringify(approver?._correlation)}`);
   expect(owner?.ui?.action).toBe('selectOption');
   expect(approver?._correlation).toMatchObject({
-    method: 'request-value-match',
+    method: 'response-value-match',
     confidence: 'high',
   });
 });

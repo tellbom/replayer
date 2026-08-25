@@ -234,7 +234,7 @@ describe('generateDraft', () => {
     expect(approver?._correlation).toMatchObject({
       method: 'request-value-match', confidence: 'high', ownerAction: approver?.id,
     });
-    expect(result.yaml).toContain('TODO: 此请求的归属由时间窗推断（置信度低）');
+    expect(result.yaml).not.toContain('TODO: 此请求的归属由时间窗推断（置信度低）');
   });
 
   it('parameterizes a standard control initial value even when the user does not change it', () => {
@@ -272,7 +272,68 @@ describe('generateDraft', () => {
     ]));
     expect(() => parseSkill(result.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
   });
+
+  it('parameterizes a query and extracts a unique response item for a later write', () => {
+    const result = generateDraft(responseChainSession([
+      { identifier: 'ACT-100', display: 'Alex' },
+    ]));
+    const lookup = result.skill.steps.find((step) => step.network?.method === 'GET');
+    const write = result.skill.steps.find((step) => step.network?.method === 'POST');
+
+    expect(lookup?.network?.url).toBe('/lookup?q={{Assignee}}');
+    expect(lookup?.network?.extract).toEqual({ ownerId: '$[0].identifier' });
+    expect(write?.network?.body?.ownerId).toBe(`{{${lookup?.id}.ownerId}}`);
+    expect(write?._correlation).toMatchObject({
+      method: 'response-value-match', confidence: 'high',
+    });
+    expect(() => parseSkill(result.yaml, resolver())).not.toThrow();
+  });
+
+  it('uses a unique user-value discriminator and rejects duplicate display values', () => {
+    const unique = generateDraft(responseChainSession([
+      { identifier: 'ACT-100', display: 'Alex' },
+      { identifier: 'ACT-200', display: 'Bailey' },
+    ]));
+    expect(unique.skill.steps.find((step) => step.network?.method === 'GET')?.network?.extract)
+      .toEqual({ ownerId: '$[?(@.display=="{{Assignee}}")].identifier' });
+
+    const duplicate = generateDraft(responseChainSession([
+      { identifier: 'ACT-100', display: 'Alex' },
+      { identifier: 'ACT-200', display: 'Alex' },
+    ]));
+    const write = duplicate.skill.steps.find((step) => step.network?.method === 'POST');
+    expect(write?.network?.body?.ownerId).toBe('TODO_UNRESOLVED');
+    expect(() => parseSkill(duplicate.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
+  });
 });
+
+function responseChainSession(items: Array<{ identifier: string; display: string }>): RecordSession {
+  return {
+    meta: {
+      startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:03.000Z',
+      baseUrl: 'http://example.test', userAgent: 'test', entryId: 'oa',
+    },
+    actions: [
+      { ts: 1_000, type: 'fill', label: 'Assignee', value: 'Alex' },
+      { ts: 2_000, type: 'click', text: 'Confirm' },
+    ],
+    network: [
+      {
+        requestId: 'lookup', requestTs: 1_100, responseTs: 1_200, method: 'GET',
+        url: 'http://example.test/lookup?q=Alex', resourceType: 'fetch', headers: {}, postData: null,
+        status: 200, responseBody: JSON.stringify(items), mutating: false, sanitizeMode: 'structured',
+      },
+      {
+        requestId: 'write', requestTs: 2_100, responseTs: 2_200, method: 'POST',
+        url: 'http://example.test/jobs', resourceType: 'fetch',
+        headers: { 'content-type': 'application/json' },
+        postData: JSON.stringify({ ownerId: 'ACT-100' }), status: 200, responseBody: '{}',
+        mutating: true, sanitizeMode: 'structured',
+      },
+    ],
+    pages: [],
+  };
+}
 
 function genericWriteSession(body: Record<string, unknown>): RecordSession {
   return {

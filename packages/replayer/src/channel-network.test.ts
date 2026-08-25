@@ -2,7 +2,7 @@ import type { Entry, ExecContext, Step } from '@dsh/core';
 import type { Page } from 'playwright';
 import { describe, expect, it } from 'vitest';
 
-import { executeNetworkStep } from './channel-network.js';
+import { executeNetworkStep, readJsonPath } from './channel-network.js';
 
 const testEntry: Entry = {
   entry: {
@@ -23,6 +23,18 @@ const testEntry: Entry = {
 };
 
 describe('executeNetworkStep', () => {
+  it('requires a conditional JSONPath to identify exactly one array item', () => {
+    const body = [
+      { identifier: 'ACT-100', display: 'Alex' },
+      { identifier: 'ACT-200', display: 'Bailey' },
+    ];
+    expect(readJsonPath(body, '$[?(@.display=="Alex")].identifier')).toBe('ACT-100');
+    expect(() => readJsonPath(
+      [...body, { identifier: 'ACT-300', display: 'Alex' }],
+      '$[?(@.display=="Alex")].identifier',
+    )).toThrow(/唯一命中/);
+  });
+
   it('classifies a missing template variable as not_sent before page access', async () => {
     const step: Step = {
       id: 's1',

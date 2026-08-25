@@ -244,7 +244,20 @@ function extractResponse(
   );
 }
 
-function readJsonPath(value: unknown, path: string): unknown {
+export function readJsonPath(value: unknown, path: string): unknown {
+  const filtered = /^(.*)\[\?\(@\.([A-Za-z_$][\w$]*)=="(.*)"\)\](.*)$/.exec(path);
+  if (filtered) {
+    const collection = readJsonPath(value, filtered[1] || '$');
+    if (!Array.isArray(collection)) throw new Error(`JSONPath 条件目标不是数组: ${path}`);
+    const matches = collection.filter(
+      (item) => typeof item === 'object' && item !== null
+        && String((item as Record<string, unknown>)[filtered[2]!]) === filtered[3],
+    );
+    if (matches.length !== 1) {
+      throw new Error(`JSONPath 条件必须唯一命中，实际 ${matches.length} 项: ${path}`);
+    }
+    return readJsonPath(matches[0], `$${filtered[4]}`);
+  }
   const segments = path
     .replace(/^\$\.?/, '')
     .replace(/\[(\d+)\]/g, '.$1')

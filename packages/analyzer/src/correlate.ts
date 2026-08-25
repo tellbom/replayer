@@ -15,6 +15,8 @@ export interface RequestDependency {
   from: string;
   path: string;
   to: string;
+  ambiguous?: boolean;
+  discriminator?: { field: string; actionIndex: number };
 }
 
 export interface CorrelatedRequest extends RecordedRequest {
@@ -24,7 +26,7 @@ export interface CorrelatedRequest extends RecordedRequest {
 }
 
 export interface RequestCorrelation {
-  method: 'dom-causality' | 'request-value-match' | 'time-window';
+  method: 'dom-causality' | 'response-value-match' | 'request-value-match' | 'time-window';
   confidence: 'high' | 'low';
   ownerActionIndex: number;
   evidence: string;
@@ -34,7 +36,7 @@ export interface RequestCorrelation {
  * 按请求发起时间将网络请求归给最近的前置动作。
  */
 export function correlate(session: RecordSession): CorrelatedStep[] {
-  const requests = analyzeDependencies(session.network);
+  const requests = analyzeDependencies(session.network, session.actions);
   const steps: CorrelatedStep[] = session.actions.map((action, index) => ({
     id: `action-${index + 1}`,
     action,
@@ -45,7 +47,7 @@ export function correlate(session: RecordSession): CorrelatedStep[] {
   const orphanRequests: CorrelatedRequest[] = [];
 
   for (const request of requests) {
-    const correlation = correlateRequest(session, request);
+    const correlation = correlateRequest(session, request, requests);
     const actionIndex = correlation?.ownerActionIndex ?? -1;
     request.correlation = correlation;
     const owner = actionIndex === -1 ? undefined : steps[actionIndex];
@@ -77,6 +79,7 @@ export function correlate(session: RecordSession): CorrelatedStep[] {
 function correlateRequest(
   session: RecordSession,
   request: CorrelatedRequest,
+  correlatedRequests: CorrelatedRequest[],
 ): RequestCorrelation | undefined {
   const eligible = session.actions
     .map((action, index) => ({ action, index }))
@@ -105,9 +108,44 @@ function correlateRequest(
     };
   }
 
-  const requestValues = new Set(requestBodyLeaves(request).map((leaf) => String(leaf.value)));
+  const responseDependencies = request.mutating
+    ? request.dependsOn.flatMap((dependency) => {
+        if (dependency.ambiguous) return [];
+        const source = correlatedRequests.find((candidate) => candidate.requestId === dependency.from);
+        if (!source) return [];
+        const sourceOwner = source.correlation?.ownerActionIndex
+          ?? ownerActionIndex(session.actions, source.requestTs);
+        return sourceOwner === -1 ? [] : [{ dependency, source, sourceOwner }];
+      })
+    : [];
+  if (responseDependencies.length > 0) {
+    const latestSource = responseDependencies.sort(
+      (left, right) => right.source.requestTs - left.source.requestTs,
+    )[0]!;
+    const owner = request.isSubmit
+      ? ownerActionIndex(session.actions, request.requestTs)
+      : firstSuccessorAction(
+          session.actions,
+          latestSource.sourceOwner,
+          latestSource.source.requestTs,
+          request.requestTs,
+        );
+    if (owner !== -1) {
+      return {
+        method: 'response-value-match',
+        confidence: 'high',
+        ownerActionIndex: owner,
+        evidence: `写请求体值可溯源到先前响应 ${[
+          ...new Set(responseDependencies.map((item) => item.dependency.from)),
+        ].join('、')}`,
+      };
+    }
+  }
+
+  const requestValues = new Set(requestInputLeaves(request).map((leaf) => String(leaf.value)));
   const aliases = enumAliases(session.network);
-  const valueOwners = [...eligible].reverse().filter(({ action }) =>
+  // input 可先触发 HTTP，change/blur 动作后到；值因果不依赖固定毫秒窗口。
+  const valueOwners = session.actions.map((action, index) => ({ action, index })).filter(({ action }) =>
     action.value !== undefined &&
     actionValues(action.value, aliases).some((value) => requestValues.has(value)),
   );
@@ -131,6 +169,26 @@ function correlateRequest(
     ownerActionIndex: timeOwner,
     evidence: `请求距最近前置动作 ${distance}ms，无 DOM 或请求值因果证据`,
   };
+}
+
+function firstSuccessorAction(
+  actions: RecordedAction[],
+  sourceOwner: number,
+  sourceStartedAt: number,
+  targetRequestAt: number,
+): number {
+  const valueAction = actions.findIndex((action, index) =>
+    index > sourceOwner
+    && action.ts >= sourceStartedAt
+    && action.ts <= targetRequestAt
+    && action.value !== undefined,
+  );
+  if (valueAction !== -1) return valueAction;
+  for (let index = sourceOwner + 1; index < actions.length; index += 1) {
+    const action = actions[index];
+    if (action && action.ts >= sourceStartedAt && action.ts <= targetRequestAt) return index;
+  }
+  return sourceOwner;
 }
 
 function enumAliases(requests: RecordedRequest[]): Map<string, string> {
@@ -162,7 +220,10 @@ function actionValues(value: string, aliases: Map<string, string>): string[] {
   return alias === undefined ? [value] : [value, alias];
 }
 
-function analyzeDependencies(requests: RecordedRequest[]): CorrelatedRequest[] {
+function analyzeDependencies(
+  requests: RecordedRequest[],
+  actions: RecordedAction[],
+): CorrelatedRequest[] {
   const lastMutating = [...requests]
     .filter((request) => request.mutating)
     .sort((left, right) => right.requestTs - left.requestTs)[0]?.requestId;
@@ -188,16 +249,61 @@ function analyzeDependencies(requests: RecordedRequest[]): CorrelatedRequest[] {
               `依赖识别要求 structured 脱敏: ${source.requestId} -> ${target.requestId}`,
             );
           }
+          const selection = indexedSelection(source, sourceLeaf, actions);
           dependsOn.push({
             from: source.requestId,
             path: sourceLeaf.path,
             to: targetLeaf.path,
+            ...selection,
           });
         }
       }
     }
     return { ...target, dependsOn, isSubmit: target.requestId === lastMutating };
   });
+}
+
+function indexedSelection(
+  source: RecordedRequest,
+  leaf: ValueLeaf,
+  actions: RecordedAction[],
+): Pick<RequestDependency, 'ambiguous' | 'discriminator'> {
+  const indexed = /^(.*)\[(\d+)\](.*)$/.exec(leaf.path);
+  if (!indexed || !source.responseBody) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source.responseBody);
+  } catch {
+    return { ambiguous: true };
+  }
+  const array = readCollectedPath(parsed, indexed[1]!);
+  if (!Array.isArray(array)) return { ambiguous: true };
+  if (array.length === 1) return {};
+  const selected = array[Number(indexed[2])];
+  if (typeof selected !== 'object' || selected === null || Array.isArray(selected)) {
+    return { ambiguous: true };
+  }
+  const candidates = Object.entries(selected).flatMap(([field, value]) => {
+    if (typeof value !== 'string' && typeof value !== 'number') return [];
+    const actionIndex = actions.findIndex((action) => action.value === String(value));
+    if (actionIndex < 0) return [];
+    const occurrences = array.filter(
+      (item) => typeof item === 'object' && item !== null
+        && String((item as Record<string, unknown>)[field]) === String(value),
+    ).length;
+    return occurrences === 1 ? [{ field, actionIndex }] : [];
+  });
+  return candidates.length === 1 ? { discriminator: candidates[0] } : { ambiguous: true };
+}
+
+function readCollectedPath(root: unknown, path: string): unknown {
+  const segments = path.replace(/^\$\.?/, '').split('.').filter(Boolean);
+  let current = root;
+  for (const segment of segments) {
+    if (typeof current !== 'object' || current === null || !(segment in current)) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
 }
 
 /** fingerprint 形态豁免弱值规则——依赖识别恰恰依赖它们。 */
@@ -248,6 +354,20 @@ function requestBodyLeaves(request: RecordedRequest): ValueLeaf[] {
     }));
   }
   return [];
+}
+
+function requestInputLeaves(request: RecordedRequest): ValueLeaf[] {
+  const body = requestBodyLeaves(request);
+  let parsed: URL;
+  try {
+    parsed = new URL(request.url);
+  } catch {
+    return body;
+  }
+  return [
+    ...body,
+    ...[...parsed.searchParams].map(([key, value]) => ({ path: `query.${key}`, value })),
+  ];
 }
 
 function responseBodyLeaves(request: RecordedRequest): ValueLeaf[] {
