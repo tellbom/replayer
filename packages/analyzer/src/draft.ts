@@ -124,8 +124,20 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     verification: {
       status: 'draft',
       requiresFirstRunVerification: steps.some(
-        (step) => step.ui?.target?.strategy === 'playwright' && step.ui.target.confidence === 'LOW',
+        (step) => (
+          step.ui?.target?.strategy === 'playwright'
+          || step.ui?.target?.strategy === 'frame-playwright'
+        ) && step.ui.target.confidence === 'LOW',
       ),
+      verifiedTtlDays: steps.some((step) => {
+        const hint = step.ui?.recordedHint;
+        return (
+          step.ui?.target?.strategy === 'playwright'
+          || step.ui?.target?.strategy === 'frame-playwright'
+        )
+          && step.ui.target.confidence === 'LOW'
+          && (!hint || (hint.controlSemantics === null && hint.visibleText === null));
+      }) ? 7 : 30,
     },
     ...(postcondition ? { postcondition } : {}),
     ...(reentryDraft(steps) ? { reentry: reentryDraft(steps) } : {}),

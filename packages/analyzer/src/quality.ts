@@ -7,7 +7,10 @@ export function renderLocatorQualitySummary(skill: Skill): string {
       target: Extract<NonNullable<typeof ui>['target'], { strategy: 'playwright' | 'frame-playwright' }>;
     } => ui?.target?.strategy === 'playwright' || ui?.target?.strategy === 'frame-playwright');
   const low = targets.filter((ui) => ui.target.confidence === 'LOW');
-  const checkable = low.filter((ui) => ui.recordedHint?.visibleText !== null && ui.recordedHint?.visibleText !== undefined);
+  const checkable = low.filter((ui) => {
+    const hint = ui.recordedHint;
+    return Boolean(hint && (hint.controlSemantics !== null || hint.visibleText !== null));
+  });
   const percent = targets.length === 0 ? 0 : Math.round((low.length / targets.length) * 100);
   const lines = [
     `Skill：${skill.skill.name}`,

@@ -16,6 +16,7 @@ import { createInterface } from 'node:readline/promises';
 
 import {
   finishVerification,
+  createLowTargetObserver,
   prepareVerification,
   terminalVerificationPrompter,
 } from './verification.js';
@@ -89,6 +90,7 @@ export async function runNaturalLanguage(
       result = await replayImpl(selected.skill, {
         ...replayOptions(options, params, confirm, selected.entry),
         supervisedVerification: verification.supervised,
+        onLowTarget: createLowTargetObserver(verification.supervised, prompter),
       });
       await outputReplay(result);
     } finally {
@@ -114,6 +116,7 @@ export async function runNaturalLanguage(
   if (!verification.proceed) return;
   const optionsForReplay = replayOptions(options, routed.params, confirm, selected.entry);
   optionsForReplay.supervisedVerification = verification.supervised;
+  optionsForReplay.onLowTarget = createLowTargetObserver(verification.supervised, prompter);
   optionsForReplay.onLocatorFailure = async (failure: NonNullable<ReplayOptions['onLocatorFailure']> extends (input: infer I) => Promise<StepResult | null> ? I : never) => {
     const { page, skill, step, error, context } = failure;
     const snapshot = await page.evaluate(() => window.__DSH_SNAPSHOT__());

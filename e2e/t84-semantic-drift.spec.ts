@@ -182,6 +182,35 @@ test('V97-7/V97-8: matching LOW controls pass repeatedly and HIGH remains exempt
   await executeUiStep(page, high, context(), []);
 });
 
+test('V98-2: unverifiable LOW target can be stopped before the action', async ({ page }) => {
+  await page.setContent('<button id="anonymous" onclick="window.clicked=true"></button>');
+  const step = StepSchema.parse({
+    id: 'anonymous', desc: 'anonymous click', channel: 'ui',
+    ui: {
+      action: 'click',
+      target: { strategy: 'playwright', selector: '#anonymous', confidence: 'LOW' },
+      recordedHint: {
+        action: 'click', visibleText: null, visibleTextSource: 'none', controlSemantics: null,
+        tagName: 'button', role: 'button', matchCountAtRecord: 1,
+      },
+    },
+  });
+  let observed: unknown;
+  const result = await executeUiStep(page, step, context(), [], {
+    onLowTarget: async (inspection) => {
+      observed = inspection;
+      return false;
+    },
+  });
+
+  expect(result).toMatchObject({ ok: false, outcome: 'not_sent' });
+  expect(observed).toEqual(expect.objectContaining({
+    unverifiable: true,
+    element: expect.objectContaining({ tagName: 'button' }),
+  }));
+  expect(await page.evaluate(() => Reflect.get(window, 'clicked'))).not.toBe(true);
+});
+
 function lowFill(selector: string, visibleText: string | null): Step {
   return StepSchema.parse({
     id: 'low', desc: '填写', channel: 'ui',

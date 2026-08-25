@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline/promises';
 import { resolveSessionEndpoint } from './session.js';
 import {
   finishVerification,
+  createLowTargetObserver,
   prepareVerification,
   terminalVerificationPrompter,
 } from './verification.js';
@@ -89,6 +90,7 @@ export async function runReplay(
       noLLM: !options.llm,
       supervisedVerification: verification.supervised,
       onConfirm: confirm,
+      onLowTarget: createLowTargetObserver(verification.supervised, prompter),
     });
   } finally {
     await finishVerification(skill, skillPath, verification, result, prompter);

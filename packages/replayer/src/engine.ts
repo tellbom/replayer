@@ -20,6 +20,7 @@ import type {
   StepResult,
 } from '@dsh/core';
 import type { Page } from 'playwright';
+import type { LowTargetInspection } from './semantic-guard.js';
 
 import { runAssertions } from './assert.js';
 import { startDiagnosticSession, writeDiagnosticBundle } from './diagnostic.js';
@@ -42,6 +43,7 @@ export interface ReplayOptions {
   supervisedVerification?: boolean;
   cdpEndpoint?: string;
   onConfirm?: (step: Step, context: ExecContext) => Promise<boolean>;
+  onLowTarget?: (step: Step, inspection: LowTargetInspection) => Promise<boolean>;
   onLocatorFailure?: (input: {
     page: Page;
     skill: Skill;
@@ -117,7 +119,13 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
         }
         if (channel === 'ui' && step.ui) {
           try {
-            stepResults.push(await executeUiStep(page, step, executionContext, skill.params));
+            const result = await executeUiStep(page, step, executionContext, skill.params, {
+              onLowTarget: opts.onLowTarget
+                ? (inspection) => opts.onLowTarget!(step, inspection)
+                : undefined,
+            });
+            stepResults.push(result);
+            if (!result.ok) break;
           } catch (error) {
             if (!(error instanceof LocatorNotFoundError) || !opts.onLocatorFailure) throw error;
             const healed = await opts.onLocatorFailure({
@@ -387,7 +395,11 @@ async function executeUiFallback(
       ? { ...result, outcomeResolvedBy: 'postcondition', postconditionResult: resolution }
       : result;
   }
-  const result = await executeUiStep(page, step, context, skill.params);
+  const result = await executeUiStep(page, step, context, skill.params, {
+    onLowTarget: opts.onLowTarget
+      ? (inspection) => opts.onLowTarget!(step, inspection)
+      : undefined,
+  });
   return resolution
     ? {
         ...result,

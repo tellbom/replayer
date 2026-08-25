@@ -2,6 +2,18 @@ import { SemanticDriftError } from '@dsh/core';
 import type { RecordedHint } from '@dsh/core';
 import type { Locator } from 'playwright';
 
+export interface LowTargetInspection {
+  recorded: RecordedHint;
+  current: RecordedHint;
+  element: {
+    tagName: string;
+    text: string | null;
+    attributes: Record<string, string>;
+    box: { x: number; y: number; width: number; height: number } | null;
+  };
+  unverifiable: boolean;
+}
+
 export function normalizeVisibleText(value: string): string {
   return value
     .trim()
@@ -19,10 +31,46 @@ export async function assertLowSemantic(
   hint: RecordedHint,
   stepId: string,
 ): Promise<void> {
+  const inspection = await inspectLowTarget(locator, hint);
+  assertLowInspection(inspection, stepId);
+}
+
+export async function inspectLowTarget(
+  locator: Locator,
+  hint: RecordedHint,
+): Promise<LowTargetInspection> {
   const current = await locator.evaluate(
     (element, input) => window.__DSH_EXTRACT_RECORDED_HINT__(element, input.action, 1),
     hint,
   );
+  const element = await locator.evaluate((node) => {
+    const allowed = ['id', 'class', 'name', 'type', 'role', 'aria-label', 'title'];
+    const attributes = Object.fromEntries(
+      allowed.flatMap((name) => {
+        const value = node.getAttribute(name);
+        return value === null ? [] : [[name, value]];
+      }),
+    );
+    const rect = node.getBoundingClientRect();
+    return {
+      tagName: node.tagName.toLowerCase(),
+      text: node.textContent?.trim().slice(0, 80) || null,
+      attributes,
+      box: rect.width || rect.height
+        ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+        : null,
+    };
+  });
+  return {
+    recorded: hint,
+    current,
+    element,
+    unverifiable: hint.controlSemantics === null && hint.visibleText === null,
+  };
+}
+
+export function assertLowInspection(inspection: LowTargetInspection, stepId: string): void {
+  const { recorded: hint, current } = inspection;
   if (hint.controlSemantics) {
     const keys = ['name', 'value', 'type'] as const;
     const mismatch = keys.find(

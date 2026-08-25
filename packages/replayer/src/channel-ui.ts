@@ -2,9 +2,14 @@ import { LocatorNotFoundError, SemanticDriftError, ScopeNotReadyError, resolveTe
 import type { ExecContext, LocatorStrategy, ParamDefinition, Step, StepResult } from '@dsh/core';
 import type { Locator, Page } from 'playwright';
 
-import { assertLowSemantic } from './semantic-guard.js';
+import { assertLowInspection, inspectLowTarget } from './semantic-guard.js';
+import type { LowTargetInspection } from './semantic-guard.js';
 
 type UiAction = NonNullable<Step['ui']>;
+
+export interface UiExecutionHooks {
+  onLowTarget?: (inspection: LowTargetInspection) => Promise<boolean>;
+}
 
 /** Execute one UI step through the injected semantic locator runtime. */
 export async function executeUiStep(
@@ -12,6 +17,7 @@ export async function executeUiStep(
   step: Step,
   context: ExecContext,
   params: readonly ParamDefinition[],
+  hooks: UiExecutionHooks = {},
 ): Promise<StepResult> {
   const startedAt = Date.now();
   if (!step.ui) throw locatorFailure(step, undefined, new Error('step has no ui action'));
@@ -29,11 +35,21 @@ export async function executeUiStep(
       action.target.confidence === 'LOW' &&
       action.recordedHint
     ) {
-      await assertLowSemantic(
+      const inspection = await inspectLowTarget(
         await resolvePlaywrightTarget(page, action, context),
         action.recordedHint,
-        step.id,
       );
+      if (hooks.onLowTarget && !(await hooks.onLowTarget(inspection))) {
+        return {
+          stepId: step.id,
+          ok: false,
+          outcome: 'not_sent',
+          channelUsed: 'ui',
+          durationMs: Date.now() - startedAt,
+          error: 'User cancelled unverifiable LOW action',
+        };
+      }
+      assertLowInspection(inspection, step.id);
     }
     const requestWait = step.waitAfter?.requestUrlPattern
       ? page.waitForResponse(

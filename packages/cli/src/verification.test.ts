@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
 
-import { finishVerification, prepareVerification } from './verification.js';
+import { createLowTargetObserver, finishVerification, prepareVerification } from './verification.js';
 
 const successfulRun: RunResult = {
   ok: true,
@@ -70,6 +70,47 @@ describe('T-81 LOW supervised verification', () => {
     expect(session).toMatchObject({ proceed: true, supervised: false });
     expect(prompter.confirmSupervised).not.toHaveBeenCalled();
   });
+
+  it('V98-4/V98-5: unverifiable LOW forces first-run verification and seven-day TTL', async () => {
+    const fixture = await skillFixture('LOW', false);
+    fixture.skill.steps[0]!.ui!.recordedHint!.visibleText = null;
+    fixture.skill.steps[0]!.ui!.recordedHint!.visibleTextSource = 'none';
+    const prompter = prompts(false, true);
+    await prepareVerification(fixture.skill, fixture.path, prompter);
+
+    expect(fixture.skill.verification.requiresFirstRunVerification).toBe(true);
+    expect(fixture.skill.verification.verifiedTtlDays).toBe(7);
+  });
+
+  it('V98-1/V98-2/V98-3: target details always render but only supervised unverifiable steps pause', async () => {
+    const prompter = prompts(true, true);
+    const output = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const inspection = {
+      recorded: {
+        action: 'click' as const, visibleText: null, visibleTextSource: 'none' as const,
+        controlSemantics: null, tagName: 'button', role: 'button', matchCountAtRecord: 1,
+      },
+      current: {
+        action: 'click' as const, visibleText: null, visibleTextSource: 'none' as const,
+        controlSemantics: null, tagName: 'button', role: 'button', matchCountAtRecord: 1,
+      },
+      element: {
+        tagName: 'button', text: null, attributes: { class: 'generated' },
+        box: { x: 1, y: 2, width: 3, height: 4 },
+      },
+      unverifiable: true,
+    };
+    const fixture = await skillFixture('LOW', true);
+    const step = fixture.skill.steps[0]!;
+
+    await expect(createLowTargetObserver(true, prompter)(step, inspection)).resolves.toBe(true);
+    expect(prompter.confirmUnverifiable).toHaveBeenCalledOnce();
+    expect(output.mock.calls.flat().join('')).toContain('Current target:');
+
+    prompter.confirmUnverifiable.mockClear();
+    await expect(createLowTargetObserver(false, prompter)(step, inspection)).resolves.toBe(true);
+    expect(prompter.confirmUnverifiable).not.toHaveBeenCalled();
+  });
 });
 
 async function skillFixture(
@@ -112,6 +153,7 @@ verification:
 function prompts(supervised: boolean, complete: boolean) {
   return {
     confirmSupervised: vi.fn(async () => supervised),
+    confirmUnverifiable: vi.fn(async () => supervised),
     confirmComplete: vi.fn(async () => complete),
   };
 }
