@@ -96,9 +96,10 @@ export const EntrySchema = z.object({
     linkText: z.string().optional(),
     directUrl: z.string().optional(),
 
+    /** 字面子串匹配（url.includes），不是正则表达式。 */
     landingUrlPattern: z.string(),
 
-    /** 【C19】必须排除的一次性认证跳转 */
+    /** 【C19】JavaScript RegExp 语义；必须排除的一次性认证跳转。 */
     excludeUrlPatterns: z
       .array(z.string())
       .default(['\\?token=', '\\?ticket=', '/sso/callback', '/sso/redirect']),
@@ -128,6 +129,7 @@ export const EntrySchema = z.object({
       requiresAuth: z.literal(true),
     }),
 
+    /** 每项均为字面子串匹配（url.includes），不是正则表达式。 */
     loginUrlPatterns: z.array(z.string()).default([]),
     loginDomMarkers: z.array(z.string()).optional(),
     loginTimeoutMs: z.number().default(300_000),
@@ -491,6 +493,7 @@ export function assertNoPersistedCredentialHeaders(skill: Skill): void {
 
 export function parseEntry(yamlText: string): Entry {
   const entry = EntrySchema.parse(parse(yamlText));
+  for (const warning of entryPatternWarnings(entry)) process.stderr.write(`⚠️ ${warning}\n`);
   if (entry.entry.sessionType === 'unknown') {
     throw new SchemaViolationError(
       `entry "${entry.entry.id}" 的 sessionType 未探测。请先运行 dsh doctor --probe-entry。`,
@@ -502,4 +505,15 @@ export function parseEntry(yamlText: string): Entry {
     );
   }
   return entry;
+}
+
+export function entryPatternWarnings(entry: Entry): string[] {
+  const pattern = entry.entry.landingUrlPattern;
+  const metacharacters = [...new Set(pattern.match(/[\\^$()[\]{}|+*]/g) ?? [])];
+  if (metacharacters.length === 0) return [];
+  const suggestion = pattern.replace(/[\\^$()[\]{}|+*]/g, '');
+  return [
+    `entry "${entry.entry.id}" 的 landingUrlPattern 含正则元字符 ${metacharacters.map((value) => JSON.stringify(value)).join('、')}，`
+    + `但该字段是字面子串匹配。建议改为：${JSON.stringify(suggestion)}`,
+  ];
 }

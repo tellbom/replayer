@@ -5,7 +5,9 @@ entry:
   via: portal
   portalUrl: http://127.0.0.1:15173/portal
   linkText: OA办公系统
+  # 字面子串匹配（url.includes），不是正则
   landingUrlPattern: /home
+  # JavaScript RegExp 语义
   excludeUrlPatterns:
     - '\\?token='
     - '\\?ticket='
@@ -23,6 +25,7 @@ entry:
     url: /api/userinfo?_nodelay=1
     jsonPath: $.sub
     requiresAuth: true
+  # 每项均为字面子串匹配（url.includes），不是正则
   loginUrlPatterns: [/login]
   loginDomMarkers: ['input[type="password"]']
   loginTimeoutMs: 300000

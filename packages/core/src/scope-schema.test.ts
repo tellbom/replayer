@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { LocatorStrategySchema, SkillSchema, StepSchema } from './schema.js';
+import { LocatorStrategySchema, SkillSchema, StepSchema, parseEntry } from './schema.js';
 
 describe('T-71 scope 契约', () => {
   it('保留原字段并填充 requires、portaled、timeoutMs 默认值', () => {
@@ -49,6 +49,23 @@ describe('T-76 sessionHolding 契约', () => {
       expectedPortalTtlMs: undefined,
       warnBeforeExpiryMs: undefined,
     });
+  });
+
+  it('T-101: landingUrlPattern 的正则元字符产生非阻断警告', () => {
+    const warning = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const entry = parseEntry(`entry:
+  id: pattern-check
+  name: Pattern check
+  via: direct
+  directUrl: https://host.example.test/home
+  landingUrlPattern: ^https://host.example.test/home$
+  sessionType: cookie
+  sessionProbe: { url: /session, okStatus: [200] }
+  identityProbe: { url: /identity, jsonPath: $.id, requiresAuth: true }
+`);
+    expect(entry.entry.landingUrlPattern.startsWith('^')).toBe(true);
+    expect(warning.mock.calls.flat().join('')).toContain('字面子串匹配');
+    expect(warning.mock.calls.flat().join('')).toContain('建议改为');
   });
 });
 

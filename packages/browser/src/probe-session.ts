@@ -31,19 +31,58 @@ export async function probeSessionType(
 ): Promise<SessionTypeProbeResult> {
   const cdp = await attachCDP(page);
   await cdp.enableNetwork();
+  const targetUrl = new URL(triggerUrl ?? page.url(), page.url());
+  targetUrl.hash = '';
+  const target = targetUrl.href;
   const observed = new Promise<{ authorization: boolean; cookie: boolean }>((resolve) => {
-    const timer = setTimeout(() => resolve({ authorization: false, cookie: false }), 10_000);
+    const requests = new Map<string, {
+      target: boolean;
+      mainSeen: boolean;
+      extraSeen: boolean;
+      authorization: boolean;
+      cookie: boolean;
+    }>();
+    const timer = setTimeout(() => {
+      const evidence = [...requests.values()].find((item) => item.target);
+      resolve(evidence ?? { authorization: false, cookie: false });
+    }, 10_000);
+    const finish = (requestId: string): void => {
+      const evidence = requests.get(requestId);
+      if (!evidence?.target || !evidence.mainSeen || !evidence.extraSeen) return;
+      clearTimeout(timer);
+      resolve({ authorization: evidence.authorization, cookie: evidence.cookie });
+    };
     cdp.session.on('Network.requestWillBeSent', (event: unknown) => {
-      const request = (event as { request: { headers: Record<string, string>; url: string } }).request;
-      const authorization = Boolean(request.headers['Authorization'] ?? request.headers['authorization']);
-      const cookie = Boolean(request.headers['Cookie'] ?? request.headers['cookie']);
-      if (authorization || cookie) {
-        clearTimeout(timer);
-        resolve({ authorization, cookie });
-      }
+      const value = event as {
+        requestId: string;
+        request: { headers: Record<string, string>; url: string };
+      };
+      const previous = requests.get(value.requestId);
+      requests.set(value.requestId, {
+        target: value.request.url === target,
+        mainSeen: true,
+        extraSeen: previous?.extraSeen ?? false,
+        authorization: previous?.authorization
+          || Boolean(value.request.headers.Authorization ?? value.request.headers.authorization),
+        cookie: previous?.cookie
+          || Boolean(value.request.headers.Cookie ?? value.request.headers.cookie),
+      });
+      finish(value.requestId);
+    });
+    cdp.session.on('Network.requestWillBeSentExtraInfo', (event: unknown) => {
+      const value = event as { requestId: string; headers: Record<string, string> };
+      const previous = requests.get(value.requestId);
+      requests.set(value.requestId, {
+        target: previous?.target ?? false,
+        mainSeen: previous?.mainSeen ?? false,
+        extraSeen: true,
+        authorization: previous?.authorization
+          || Boolean(value.headers.Authorization ?? value.headers.authorization),
+        cookie: previous?.cookie || Boolean(value.headers.Cookie ?? value.headers.cookie),
+      });
+      finish(value.requestId);
     });
   });
-  const target = triggerUrl ? new URL(triggerUrl, page.url()).href : page.url();
   await page.evaluate(async (url) => {
     void fetch(url, { credentials: 'include' }).catch(() => undefined);
   }, target);
@@ -52,6 +91,7 @@ export async function probeSessionType(
 
   const evidence = [`Authorization=${result.authorization}`, `Cookie=${result.cookie}`];
   if (!result.authorization && !result.cookie) {
+    evidence.push('未捕获到任何凭证证据');
     return { sessionType: 'unknown', channelCapability: { network: false, ui: true }, evidence };
   }
   if (result.cookie && !result.authorization) {

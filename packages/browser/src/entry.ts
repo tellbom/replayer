@@ -96,7 +96,7 @@ async function waitForLanding(page: Page, entry: Entry): Promise<void> {
 }
 
 function urlMatches(url: string, pattern: string): boolean {
-  return url.includes(pattern.replaceAll('\\', ''));
+  return url.includes(pattern);
 }
 
 export async function probeSession(page: Page, entry: Entry): Promise<boolean> {

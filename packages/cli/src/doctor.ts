@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { classifyCookieKind, launchDSHContext, probeSessionType } from '@dsh/browser';
 import { draftEntryYaml } from '@dsh/browser';
+import { parseEntry } from '@dsh/core';
 
 export interface FrontendProbeResult {
   vue: number | null;
@@ -23,9 +24,16 @@ export interface DoctorOptions {
   /** 【probe-entry 专用】使用指定持久 profile（探测需在已登录会话上进行） */
   profile?: string;
   sessionStrategy?: 'daemon' | 'storage-state' | 'probe-only';
+  checkEntry?: string;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<void> {
+  if (options.checkEntry) {
+    const { readFile } = await import('node:fs/promises');
+    const checked = parseEntry(await readFile(options.checkEntry, 'utf8'));
+    process.stdout.write(`✓ entry ${checked.entry.id} 已完成 schema 与 pattern 检查\n`);
+    if (!options.probeEntry && !options.probeFrontend) return;
+  }
   const profileDir = options.profile ?? (await mkdtemp(join(tmpdir(), 'dsh-doctor-')));
   const channel = process.env.DSH_CHANNEL === 'msedge' ? 'msedge' : 'chrome';
   const context = await launchDSHContext({ profileDir, channel, headless: true });

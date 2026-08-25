@@ -3,7 +3,9 @@ entry:
   name: Keycloak 管理台
   via: direct
   directUrl: http://192.168.124.2:18085/admin/master/console/
+  # 字面子串匹配（url.includes），不是正则
   landingUrlPattern: "/admin/master/console"
+  # JavaScript RegExp 语义
   excludeUrlPatterns:
     - '\\?token='
     - '\\?ticket='
@@ -15,6 +17,7 @@ entry:
     url: /realms/master/protocol/openid-connect/userinfo
     jsonPath: "$.sub"
     requiresAuth: true
+  # 每项均为字面子串匹配（url.includes），不是正则
   loginUrlPatterns:
     - /realms/master/protocol/openid-connect/auth
   sessionType: bearer
