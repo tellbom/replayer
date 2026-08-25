@@ -16,7 +16,7 @@ entry:
     network: true
     ui: true
   sessionProbe:
-    url: /api/health
+    url: /api/auth/me
   identityProbe:
     url: /api/auth/me
     jsonPath: $.data.user.username

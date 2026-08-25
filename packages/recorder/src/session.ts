@@ -706,16 +706,15 @@ function isNavigationRace(error: unknown): boolean {
 }
 
 function waitForManualStop(context: BrowserContext, page: Page): Promise<void> {
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
   const terminal = new Promise<void>((resolve) => {
-    const readline = createInterface({ input: process.stdin, output: process.stdout });
     readline.question('按 Enter 结束录制...\n', () => {
-      readline.close();
       resolve();
     });
   });
   return Promise.race([
     terminal,
-    page.waitForEvent('close').then(() => undefined),
-    context.waitForEvent('close').then(() => undefined),
-  ]);
+    page.waitForEvent('close', { timeout: 0 }).then(() => undefined),
+    context.waitForEvent('close', { timeout: 0 }).then(() => undefined),
+  ]).finally(() => readline.close());
 }

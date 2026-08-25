@@ -1,0 +1,11 @@
+{
+  "entryId": "ro-main",
+  "pid": 39156,
+  "endpoint": "http://127.0.0.1:58086",
+  "profileDir": "E:\\replayer\\profiles\\ro-main-manual",
+  "status": "active",
+  "pageUrl": "http://localhost:5173/#/dashboard",
+  "identityDigest": "a849b883d6c3ce48bb3acc2e75fad136588204a0dfeb13e281aaf3624b0a46c7",
+  "lastProbeAt": "2026-08-25T08:08:37.598Z",
+  "sessionEstablishedAt": "2026-08-25T06:44:06.291Z"
+}

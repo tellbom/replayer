@@ -1,0 +1,92 @@
+skill:
+  id: applications_leave
+  name: 提交请假申请
+  description: 根据人工录制整理的参数化请假申请；当前版本不上传附件
+  system: localhost
+  baseUrl: http://localhost:5173
+  entry: ro-main
+  version: 1
+  recordedAt: 2026-08-25T06:58:53.468Z
+
+params:
+  - name: leaveType
+    type: enum
+    values:
+      - { label: 年假, value: ANNUAL }
+    enumMap:
+      年假: ANNUAL
+    required: true
+  - { name: startDate, type: date, required: true, prompt: 开始日期 }
+  - { name: endDate, type: date, required: true, prompt: 结束日期 }
+  - name: startHalf
+    type: enum
+    values:
+      - { label: 上午, value: morning }
+      - { label: 下午, value: afternoon }
+    enumMap:
+      上午: morning
+      下午: afternoon
+    required: true
+  - name: endHalf
+    type: enum
+    values:
+      - { label: 上午, value: morning }
+      - { label: 下午, value: afternoon }
+    enumMap:
+      上午: morning
+      下午: afternoon
+    required: true
+  - { name: reason, type: string, required: true, prompt: 请假原因 }
+  - { name: days, type: number, required: true, prompt: 请假天数 }
+  - { name: handoverId, type: string, required: true, prompt: 工作交接人 ID }
+  - { name: handoverName, type: string, required: true, prompt: 工作交接人姓名 }
+  - { name: approverId, type: string, required: true, prompt: 审批人 ID }
+  - { name: approverName, type: string, required: true, prompt: 审批人姓名 }
+
+preflight: []
+
+steps:
+  - id: submit
+    desc: 提交请假申请
+    channel: network
+    riskLevel: write
+    hasSideEffect: true
+    network:
+      method: POST
+      url: /api/applications/leave
+      headers:
+        authorization: <FROM_BROWSER>
+      contentType: json
+      body:
+        leaveType: "{{leaveType|enumValue}}"
+        startDate: "{{startDate}}"
+        endDate: "{{endDate}}"
+        startHalf: "{{startHalf|enumValue}}"
+        endHalf: "{{endHalf|enumValue}}"
+        reason: "{{reason}}"
+        diseaseType: ""
+        hospital: ""
+        days: "{{days}}"
+        handoverId: "{{handoverId}}"
+        handoverName: "{{handoverName}}"
+        approverId: "{{approverId}}"
+        approverName: "{{approverName}}"
+        attachments: []
+
+assertions:
+  - { type: httpStatus, expect: 200 }
+  - { type: jsonPath, path: $.code, expect: 0 }
+
+verification:
+  status: draft
+  requiresFirstRunVerification: true
+  verifiedAt: null
+  verifiedRunId: null
+  verifiedBy: null
+  verifiedTtlDays: 30
+  rerecordReason: null
+
+_notes:
+  - 登录和 Authorization 由 ro-main Entry 及当前浏览器会话提供。
+  - 本次录制的文件选择被记录成 fill，上传请求又缺少可回放的 multipart 请求体，因此当前版本明确不回放附件。
+  - 未自动生成稳定 GET postcondition；若响应丢失，必须人工确认业务结果，不自动重试写请求。
