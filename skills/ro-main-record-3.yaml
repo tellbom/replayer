@@ -1,0 +1,453 @@
+# TODO: 请确认参数名称、类型与枚举映射。
+# TODO: 请确认每个步骤的 channel 与 riskLevel。
+# TODO: 请确认预取值、依赖模板与断言。
+
+skill:
+  id: applications_leave
+  name: 录制技能草稿
+  description: 根据浏览器录制自动生成，发布前需复核 TODO
+  system: localhost
+  baseUrl: http://localhost:5173
+  entry: ro-main
+  version: 1
+  recordedAt: 2026-08-25T08:57:08.048Z
+params:
+  # TODO: 请复核此参数推断
+  - name: leaveType
+    type: enum
+    values:
+      - label: 年假
+        value: ANNUAL
+    enumMap:
+      年假: ANNUAL
+    required: true
+  # TODO: 请复核此参数推断
+  - name: reason
+    type: string
+    required: true
+    prompt: 请假原因
+  # TODO: 请复核此参数推断
+  - name: 工作交接人
+    type: string
+    required: true
+    prompt: 工作交接人
+  # TODO: 请复核此参数推断
+  - name: 审批人
+    type: string
+    required: true
+    prompt: 审批人
+  # TODO: 请复核此参数推断
+  - name: startHalf
+    type: enum
+    values:
+      - label: 上午
+        value: morning
+    enumMap:
+      上午: morning
+    required: true
+    prompt: 上午
+  # TODO: 请复核此参数推断
+  - name: endHalf
+    type: enum
+    values:
+      - label: 下午
+        value: afternoon
+    enumMap:
+      下午: afternoon
+    required: true
+    prompt: 下午
+preflight: []
+steps:
+  # TODO: 请复核此录制步骤
+  - id: s1
+    desc: navigate
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /
+      contentType: json
+    ui:
+      action: navigate
+      url: http://localhost:5173/#/dashboard
+    requires: []
+  # TODO: 请复核此录制步骤
+  # TODO: 此请求的归属由时间窗推断（置信度低）。
+  # 请求距最近前置动作 79ms，无 DOM 或请求值因果证据。请确认它是否应归属于 s2。
+  - id: s2
+    desc: 🕐考勤管理
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /api/dept-tree
+      headers:
+        accept: application/json, text/plain, */*
+        accept-language: zh-CN,zh;q=0.9
+        authorization: <FROM_BROWSER>
+        connection: keep-alive
+        if-none-match: W/"3a1-omYDSFSdD2vfVhc3mP7WzhvW9+w"
+        referer: http://localhost:5173/
+      contentType: json
+    ui:
+      action: click
+      target:
+        strategy: playwright
+        selector: internal:role=button[name="🕐 考勤管理"i]
+        confidence: HIGH
+      value: "{{leaveType}}"
+      recordedHint:
+        action: click
+        visibleText: 🕐 考勤管理
+        visibleTextSource: accessible-name
+        controlSemantics: null
+        tagName: button
+        role: button
+        matchCountAtRecord: 1
+    requires: []
+    _correlation:
+      method: time-window
+      confidence: low
+      ownerAction: s2
+      evidence: 请求距最近前置动作 79ms，无 DOM 或请求值因果证据
+  # TODO: 请复核此录制步骤
+  - id: s3
+    desc: 📝我的申请
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    ui:
+      action: click
+      target:
+        strategy: playwright
+        selector: internal:role=button[name="📝 我的申请"i]
+        confidence: HIGH
+      value: "{{leaveType}}"
+      recordedHint:
+        action: click
+        visibleText: 📝 我的申请
+        visibleTextSource: accessible-name
+        controlSemantics: null
+        tagName: button
+        role: button
+        matchCountAtRecord: 1
+    requires: []
+  # TODO: 请复核此录制步骤
+  - id: s4
+    desc: 新建请假
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    ui:
+      action: click
+      target:
+        strategy: playwright
+        selector: internal:role=button[name="新建请假"i]
+        confidence: HIGH
+      value: "{{leaveType}}"
+      recordedHint:
+        action: click
+        visibleText: 新建请假
+        visibleTextSource: accessible-name
+        controlSemantics: null
+        tagName: button
+        role: button
+        matchCountAtRecord: 1
+    requires: []
+    produces:
+      scopeId: sc4
+      root:
+        strategy: playwright
+        selector: internal:role=group[name="* 请假类型"i]
+        confidence: HIGH
+      kind: panel
+      portaled: false
+      appearedAfterMs: 73.30000007152557
+    waitAfter:
+      scopeReady: sc4
+      settleMs: 200
+      timeoutMs: 8000
+  # TODO: 请复核此录制步骤
+  - id: s5
+    desc: 年假
+    channel: ui
+    riskLevel: read
+    hasSideEffect: false
+    ui:
+      action: selectOption
+      target:
+        strategy: playwright
+        selector: internal:role=combobox
+        confidence: HIGH
+      value: "{{leaveType}}"
+      scope: sc4
+      recordedHint:
+        action: select
+        visibleText: 请选择年假事假病假调休婚假陪产假
+        visibleTextSource: text
+        controlSemantics:
+          tagName: select
+          type: select-one
+          name: null
+          value: ANNUAL
+          checked: null
+        tagName: select
+        role: combobox
+        matchCountAtRecord: 1
+    requires:
+      - sc4
+  # TODO: 请复核此录制步骤
+  - id: s6
+    desc: 请假原因
+    channel: merged
+    riskLevel: read
+    hasSideEffect: false
+    ui:
+      action: fill
+      target:
+        strategy: playwright
+        selector: internal:role=textbox[name="* 请假原因"i]
+        confidence: HIGH
+      label: 请假原因
+      value: "{{reason}}"
+      recordedHint:
+        action: fill
+        visibleText: "* 请假原因"
+        visibleTextSource: accessible-name
+        controlSemantics: null
+        tagName: textarea
+        role: textbox
+        matchCountAtRecord: 1
+    requires: []
+    produces:
+      scopeId: sc6
+      root:
+        strategy: playwright
+        selector: internal:role=group[name="工作交接人"i]
+        confidence: HIGH
+      kind: panel
+      portaled: false
+      appearedAfterMs: 666.2000000476837
+    waitAfter:
+      scopeReady: sc6
+      settleMs: 200
+      timeoutMs: 8000
+  # TODO: 请复核此录制步骤
+  - id: s7
+    desc: 工作交接人
+    channel: merged
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /api/attendance?name=&department=&status=&page={{工作交接人}}&pageSize=10
+      headers:
+        accept: application/json, text/plain, */*
+        accept-language: zh-CN,zh;q=0.9
+        authorization: <FROM_BROWSER>
+        connection: keep-alive
+        if-none-match: W/"a5b-3GjyoIAlmiNTAR/C6C3RKXGnbKM"
+        referer: http://localhost:5173/
+      contentType: json
+    ui:
+      action: fill
+      target:
+        strategy: playwright
+        selector: internal:role=textbox[name="输入姓名搜索同事"i]
+        confidence: HIGH
+      label: 工作交接人
+      value: "{{工作交接人}}"
+      scope: sc6
+      recordedHint:
+        action: fill
+        visibleText: 输入姓名搜索同事...
+        visibleTextSource: accessible-name
+        controlSemantics: null
+        tagName: input
+        role: textbox
+        matchCountAtRecord: 1
+    requires:
+      - sc6
+    _correlation:
+      method: request-value-match
+      confidence: high
+      ownerAction: s7
+      evidence: 请求体值 1 匹配动作输入 1
+  # TODO: 请复核此录制步骤
+  - id: s8
+    desc: http://localhost:5173/api/applications?keyword=&bizType=&status=&page=1&pageSize=10
+    channel: network
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /api/applications?keyword=&bizType=&status=&page={{工作交接人}}&pageSize=10
+      headers:
+        accept: application/json, text/plain, */*
+        accept-language: zh-CN,zh;q=0.9
+        authorization: <FROM_BROWSER>
+        connection: keep-alive
+        referer: http://localhost:5173/
+      contentType: json
+    requires: []
+    _correlation:
+      method: request-value-match
+      confidence: high
+      ownerAction: s7
+      evidence: 请求体值 1 匹配动作输入 1
+  # TODO: 请复核此录制步骤
+  - id: s9
+    desc: http://localhost:5173/api/employees/search?keyword=1
+    channel: network
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /api/employees/search?keyword={{工作交接人}}
+      headers:
+        accept: application/json, text/plain, */*
+        accept-language: zh-CN,zh;q=0.9
+        authorization: <FROM_BROWSER>
+        connection: keep-alive
+        if-none-match: W/"51d-gx1LbPbiQpoAH9Tlcoa5LKgle2k"
+        referer: http://localhost:5173/
+      contentType: json
+    requires: []
+    _correlation:
+      method: request-value-match
+      confidence: high
+      ownerAction: s7
+      evidence: 请求体值 1 匹配动作输入 1
+  # TODO: 请复核此录制步骤
+  - id: s10
+    desc: 审批人
+    channel: merged
+    riskLevel: read
+    hasSideEffect: false
+    network:
+      method: GET
+      url: /api/employees/search?keyword={{审批人}}
+      headers:
+        accept: application/json, text/plain, */*
+        accept-language: zh-CN,zh;q=0.9
+        authorization: <FROM_BROWSER>
+        connection: keep-alive
+        if-none-match: W/"508-j7pPVloDg+pxIDJhtvgh9XjroZY"
+        referer: http://localhost:5173/
+      contentType: json
+    ui:
+      action: fill
+      target:
+        strategy: playwright
+        selector: internal:role=textbox[name="输入姓名搜索审批人"i]
+        confidence: HIGH
+      label: 审批人
+      value: "{{审批人}}"
+      recordedHint:
+        action: fill
+        visibleText: 输入姓名搜索审批人...
+        visibleTextSource: accessible-name
+        controlSemantics: null
+        tagName: input
+        role: textbox
+        matchCountAtRecord: 1
+    requires: []
+    _correlation:
+      method: request-value-match
+      confidence: high
+      ownerAction: s10
+      evidence: 请求体值 2 匹配动作输入 2
+  # TODO: 请复核此录制步骤
+  # TODO: 此请求的归属由时间窗推断（置信度低）。
+  # 请求距最近前置动作 7ms，无 DOM 或请求值因果证据。请确认它是否应归属于 s11。
+  - id: s11
+    desc: 确认提交
+    channel: network
+    riskLevel: write
+    hasSideEffect: true
+    network:
+      method: POST
+      url: /api/applications/leave
+      headers:
+        accept: application/json, text/plain, */*
+        accept-language: zh-CN,zh;q=0.9
+        authorization: <FROM_BROWSER>
+        connection: keep-alive
+        content-type: application/json
+        origin: http://localhost:5173
+        referer: http://localhost:5173/
+      contentType: json
+      body:
+        leaveType: "{{leaveType|enumValue}}"
+        startDate: TODO_UNRESOLVED
+        endDate: TODO_UNRESOLVED
+        startHalf: "{{startHalf|enumValue}}"
+        endHalf: "{{endHalf|enumValue}}"
+        reason: "{{reason}}"
+        diseaseType: ""
+        hospital: ""
+        days: TODO_UNRESOLVED
+        handoverId: TODO_UNRESOLVED
+        handoverName: TODO_UNRESOLVED
+        approverId: TODO_UNRESOLVED
+        approverName: TODO_UNRESOLVED
+        attachments: []
+    ui:
+      action: click
+      target:
+        strategy: playwright
+        selector: internal:role=button[name="确认提交"i]
+        confidence: HIGH
+      value: "{{leaveType}}"
+      recordedHint:
+        action: click
+        visibleText: 确认提交
+        visibleTextSource: accessible-name
+        controlSemantics: null
+        tagName: button
+        role: button
+        matchCountAtRecord: 1
+    requires: []
+    _correlation:
+      method: time-window
+      confidence: low
+      ownerAction: s11
+      evidence: 请求距最近前置动作 7ms，无 DOM 或请求值因果证据
+assertions:
+  - type: httpStatus
+    expect: 200
+reentry:
+  strategy: restart-from-anchor
+  identityLock: true
+  anchor: s10
+  maxReentries: 2
+verification:
+  status: draft
+  requiresFirstRunVerification: false
+  verifiedAt: null
+  verifiedRunId: null
+  verifiedBy: null
+  verifiedTtlDays: 30
+  rerecordReason: null
+_notes:
+  - 动作与请求仅按 requestTs 关联。
+  - 参数来自用户 fill/select/datetime 动作。
+  - 跨请求依赖来自结构化脱敏后的叶子值匹配。
+  - 所有 TODO 项必须在发布前人工确认。
+  - 认证载体见 entries/ 目录（C16：技能不含登录环节）。
+  - 若未生成 reentry：首步即写时无幂等 anchor 可用，请人工前移幂等步骤（C22）。
+  - 本技能包含 7 个录制时业务 header（accept, accept-language, connection, if-none-match, referer, content-type, origin）；若其值需随调用变化，请人工改为参数引用。
+  - 步骤 s11 写请求字段 startDate 的字面量 "2026-08-25" 无法溯源；请确认其来源并显式修正。
+  - 步骤 s11 写请求字段 endDate 的字面量 "2026-08-27" 无法溯源；请确认其来源并显式修正。
+  - 步骤 s11 写请求字段 days 的字面量 3 无法溯源；请确认其来源并显式修正。
+  - 步骤 s11 写请求字段 handoverId 的字面量 "EMP010" 无法溯源；请确认其来源并显式修正。
+  - 步骤 s11 写请求字段 handoverName 的字面量 "陈默" 无法溯源；请确认其来源并显式修正。
+  - 步骤 s11 写请求字段 approverId 的字面量 "EMP002" 无法溯源；请确认其来源并显式修正。
+  - 步骤 s11 写请求字段 approverName 的字面量 "张三" 无法溯源；请确认其来源并显式修正。
+
+# TODO: 未能自动推断 postcondition。
+# 缺少 postcondition 时，提交响应丢失将中止并要求人工判断。
+# TODO: 强烈建议手工补一个幂等的 GET 查询。
+# TODO: postcondition.request.method 必须为 GET。

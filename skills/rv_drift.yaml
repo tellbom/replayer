@@ -10,7 +10,7 @@ skill:
   baseUrl: http://localhost:4100
   entry: ta-main
   version: 1
-  recordedAt: 2026-08-26T07:26:54.903Z
+  recordedAt: 2026-08-27T01:31:12.717Z
 params:
   # TODO: 请复核此参数推断
   - name: deviceType
@@ -18,10 +18,6 @@ params:
     values:
       - label: 笔记本电脑
         value: LAPTOP
-      - label: 打印机
-        value: PRINTER
-      - label: 显示器
-        value: MONITOR
     enumMap:
       笔记本电脑: LAPTOP
       打印机: PRINTER
@@ -32,46 +28,14 @@ params:
   - name: urgency
     type: enum
     values:
-      - label: 一般
-        value: NORMAL
       - label: URGENT
         value: URGENT
-      - label: 紧急
-        value: URGENT
-      - label: CRITICAL
-        value: CRITICAL
-      - label: 严重
-        value: CRITICAL
     enumMap:
-      一般: NORMAL
       URGENT: URGENT
-      紧急: URGENT
-      CRITICAL: CRITICAL
-      严重: CRITICAL
     required: true
     prompt: urgency
   # TODO: 请复核此参数推断
   - name: fill
-    type: string
-    required: true
-  # TODO: 请复核此参数推断
-  - name: parts
-    type: enum
-    values:
-      - label: 电池
-        value: BATTERY
-      - label: 屏幕
-        value: SCREEN
-      - label: 键盘
-        value: KBD
-    enumMap:
-      电池: BATTERY
-      屏幕: SCREEN
-      键盘: KBD
-    required: true
-    prompt: parts
-  # TODO: 请复核此参数推断
-  - name: fill_2
     type: string
     required: true
 preflight: []
@@ -168,57 +132,6 @@ steps:
   # TODO: 请复核此录制步骤
   - id: s5
     desc: fill
-    channel: merged
-    riskLevel: read
-    hasSideEffect: false
-    ui:
-      action: fill
-      target:
-        strategy: playwright
-        selector: internal:role=textbox[name="故障描述"i]
-        confidence: HIGH
-      value: "{{fill}}"
-      recordedHint:
-        action: fill
-        visibleText: 故障描述
-        visibleTextSource: accessible-name
-        controlSemantics: null
-        tagName: textarea
-        role: textbox
-        matchCountAtRecord: 1
-    requires: []
-  # TODO: 请复核此录制步骤
-  - id: s6
-    desc: parts
-    channel: ui
-    riskLevel: read
-    hasSideEffect: false
-    ui:
-      action: check
-      target:
-        strategy: playwright
-        selector: internal:role=checkbox >> nth=1
-        confidence: LOW
-      label: parts
-      value: "{{parts}}"
-      checked: true
-      recordedHint:
-        action: check
-        visibleText: parts = SCREEN
-        visibleTextSource: control-semantics
-        controlSemantics:
-          tagName: input
-          type: checkbox
-          name: parts
-          value: SCREEN
-          checked: true
-        tagName: input
-        role: checkbox
-        matchCountAtRecord: 1
-    requires: []
-  # TODO: 请复核此录制步骤
-  - id: s7
-    desc: fill
     channel: network
     riskLevel: write
     hasSideEffect: true
@@ -243,34 +156,33 @@ steps:
         deviceType: "{{deviceType|enumValue}}"
         urgency: "{{urgency|enumValue}}"
         desc: "{{fill}}"
-        parts: "{{parts|enumValue}}"
-        ext: "{{fill_2}}"
+        ext: ""
     ui:
       action: fill
       target:
         strategy: playwright
-        selector: input[name="ext"]
+        selector: internal:role=textbox[name="故障描述"i]
         confidence: HIGH
-      value: "{{fill_2}}"
+      value: "{{fill}}"
       recordedHint:
         action: fill
-        visibleText: 报修人分机
-        visibleTextSource: adjacent-text
+        visibleText: 故障描述
+        visibleTextSource: accessible-name
         controlSemantics: null
-        tagName: input
+        tagName: textarea
         role: textbox
         matchCountAtRecord: 1
     requires: []
     _correlation:
       method: action-causality
       confidence: high
-      ownerAction: s7
-      evidence: request carried browser-observed actionIdx=6
+      ownerAction: s5
+      evidence: request carried browser-observed actionIdx=4
   # TODO: 请复核此录制步骤
   # TODO: 此请求的归属由时间窗推断（置信度低）。
   # 该请求未携带 actionIdx，可能由页面自动触发而非用户操作。
-  # 请求距最近前置动作 315ms，无 DOM 或请求值因果证据。请确认它是否应归属于 s7。
-  - id: s8
+  # 请求距最近前置动作 93ms，无 DOM 或请求值因果证据。请确认它是否应归属于 s5。
+  - id: s6
     desc: http://localhost:4100/api/records?limit=20
     channel: network
     riskLevel: read
@@ -288,8 +200,8 @@ steps:
     _correlation:
       method: time-window
       confidence: low
-      ownerAction: s7
-      evidence: 请求距最近前置动作 315ms，无 DOM 或请求值因果证据
+      ownerAction: s5
+      evidence: 请求距最近前置动作 93ms，无 DOM 或请求值因果证据
 assertions: []
 postcondition:
   # TODO: 请确认此查询能唯一定位本次提交
@@ -301,14 +213,13 @@ postcondition:
     where:
       deviceType: "{{deviceType|enumValue}}"
       urgency: "{{urgency|enumValue}}"
-      parts: "{{parts}}"
     limit: 5
   expectFound: true
   timeoutMs: 10000
 reentry:
   strategy: restart-from-anchor
   identityLock: true
-  anchor: s6
+  anchor: s4
   maxReentries: 2
 verification:
   status: draft

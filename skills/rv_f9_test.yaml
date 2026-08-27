@@ -243,7 +243,6 @@ steps:
         deviceType: "{{deviceType|enumValue}}"
         urgency: "{{urgency|enumValue}}"
         desc: "{{fill}}"
-        parts: "{{parts|enumValue}}"
         ext: "{{fill_2}}"
     ui:
       action: fill
@@ -301,7 +300,6 @@ postcondition:
     where:
       deviceType: "{{deviceType|enumValue}}"
       urgency: "{{urgency|enumValue}}"
-      parts: "{{parts}}"
     limit: 5
   expectFound: true
   timeoutMs: 10000
