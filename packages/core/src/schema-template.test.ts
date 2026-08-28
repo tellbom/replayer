@@ -92,6 +92,18 @@ describe('模板引擎', () => {
     expect(resolveTemplate('{{type|enumValue}}', weekend, definitions)).toBe('weekend');
   });
 
+  it('V-110: maps every enum label in an array without flattening the array', () => {
+    const definitions: ParamDefinition[] = [{
+      name: 'parts', type: 'enum', required: true,
+      enumMap: { 屏幕: 'SCREEN', 电池: 'BATTERY' },
+    }];
+    const multiple = { ...context, params: { ...context.params, parts: ['屏幕', '电池'] } };
+
+    expect(resolveTemplate('{{parts|enumValue}}', multiple, definitions)).toEqual([
+      'SCREEN', 'BATTERY',
+    ]);
+  });
+
   it('格式化日期', () => {
     expect(resolveTemplate('{{startTime|date:YYYY-MM-DD}}', context)).toBe('2026-08-18');
   });
@@ -103,7 +115,7 @@ describe('模板引擎', () => {
   it('枚举 label 缺失时抛错', () => {
     const invalidContext = { ...context, params: { ...context.params, type: '不存在' } };
     expect(() => resolveTemplate('{{type|enumValue}}', invalidContext, paramDefinitions)).toThrow(
-      '枚举参数不存在 label: 不存在',
+      '参数 type 的值 不存在 无法映射为提交值',
     );
   });
 

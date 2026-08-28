@@ -2,11 +2,15 @@ import { acquireDSHContext, ensureEntry } from '@dsh/browser';
 import type { Entry } from '@dsh/core';
 import {
   ForbiddenError,
+  ChannelCarrierMissingError,
   FirstRunVerificationRequiredError,
   LocatorNotFoundError,
   OutcomeUnknownError,
   StepExecutionError,
   resolveTemplate,
+  assertNoUnresolvedExecutableValues,
+  validateExecutionParams,
+  requestUsesMultipart,
   SemanticDriftError,
   SkillNeedsRerecordError,
   ScopeNotReadyError,
@@ -55,6 +59,8 @@ export interface ReplayOptions {
 
 /** 回放统一入口；各执行器按任务顺序接入此编排。 */
 export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResult> {
+  assertNoUnresolvedExecutableValues(skill);
+  validateExecutionParams(skill.params, opts.params);
   refreshVerification(skill);
   if (skill.verification.status === 'needs_rerecord') {
     throw new SkillNeedsRerecordError(
@@ -318,9 +324,6 @@ async function resolveNetworkOutcome(
     const resolved = withPostcondition(result, resolution);
     if (resolved.ok) return resolved;
     if (step.expectsRedirect) return resolved;
-    if (allowUiFallback && step.ui && resolution.found === false) {
-      return executeUiFallback(page, step, context, skill, opts, resolution);
-    }
     throw new OutcomeUnknownError(`Step ${step.id} could not be resolved safely`);
   }
 
@@ -349,7 +352,14 @@ export async function executePostcondition(
   context: ExecContext,
   params: Skill['params'],
 ): Promise<{ found: boolean; expectFound: boolean; matched?: unknown }> {
-  const spec = resolveTemplate(postcondition, context, params);
+  let spec: ReturnType<typeof resolveTemplate<Postcondition>>;
+  try {
+    spec = resolveTemplate(postcondition, context, params);
+  } catch (error) {
+    throw new OutcomeUnknownError(`Postcondition parameter mapping failed: ${String(error)}`, {
+      cause: error,
+    });
+  }
   const deadline = Date.now() + spec.timeoutMs;
   do {
     let response: { status: number; text: string };
@@ -403,6 +413,7 @@ async function executeUiFallback(
   opts: ReplayOptions,
   resolution?: { found: boolean; expectFound: boolean; matched?: unknown },
 ): Promise<StepResult> {
+  assertUiFallbackCarrier(skill, step);
   if (!(await confirmStep(step, context, opts))) {
     const result = cancelled(step, 'ui');
     return resolution
@@ -421,6 +432,30 @@ async function executeUiFallback(
         postconditionResult: resolution,
       }
     : result;
+}
+
+export function assertUiFallbackCarrier(skill: Skill, step: Step): void {
+  if (!step.network) return;
+  if (requestUsesMultipart(step.network)) {
+    throw new ChannelCarrierMissingError(
+      `步骤 ${step.id} 的 multipart 字段或文件在 UI 降级后无载体。` +
+      '已中止以避免提交空请求体。',
+    );
+  }
+  const mergedIds = new Set(
+    skill.steps.filter((candidate) => candidate.channel === 'merged').map((candidate) => candidate.id),
+  );
+  const dependencies = new Set<string>();
+  const serialized = JSON.stringify(step.network);
+  for (const match of serialized.matchAll(/\{\{\s*([^.[|\s}]+)/g)) {
+    const root = match[1];
+    if (root && mergedIds.has(root)) dependencies.add(root);
+  }
+  if (dependencies.size === 0) return;
+  throw new ChannelCarrierMissingError(
+    `步骤 ${step.id} 依赖 ${dependencies.size} 个 merged 步骤的值，` +
+    '降级为 UI 通道后这些值无载体。已中止以避免提交不完整数据。',
+  );
 }
 
 function executeMergedStep(
@@ -473,11 +508,54 @@ function readCandidateList(body: unknown, path: string): unknown[] {
   return current;
 }
 
-function matchesWhere(candidate: unknown, where: Record<string, string>): boolean {
+export function matchesWhere(candidate: unknown, where: Record<string, unknown>): boolean {
   if (typeof candidate !== 'object' || candidate === null) return false;
   return Object.entries(where).every(
-    ([key, expected]) => String((candidate as Record<string, unknown>)[key]) === expected,
+    ([key, expected]) => matchesValue((candidate as Record<string, unknown>)[key], expected),
   );
+}
+
+function matchesValue(candidate: unknown, expected: unknown): boolean {
+  if (Array.isArray(candidate) && Array.isArray(expected)) {
+    if (candidate.length !== expected.length) return false;
+    const remaining = [...candidate];
+    return expected.every((value) => {
+      const index = remaining.findIndex((item) => matchesScalar(item, value));
+      if (index < 0) return false;
+      remaining.splice(index, 1);
+      return true;
+    });
+  }
+  if (Array.isArray(candidate)) return candidate.some((value) => matchesScalar(value, expected));
+  if (Array.isArray(expected)) {
+    return expected.length === 1 && matchesScalar(candidate, expected[0]);
+  }
+  return matchesScalar(candidate, expected);
+}
+
+function matchesScalar(candidate: unknown, expected: unknown): boolean {
+  if (typeof candidate === 'string' && typeof expected === 'string') {
+    return candidate.trim() === expected.trim();
+  }
+  if (typeof candidate === 'number' && typeof expected === 'number') {
+    return Object.is(candidate, expected);
+  }
+  if (typeof candidate === 'boolean' && typeof expected === 'boolean') {
+    return candidate === expected;
+  }
+  if (typeof candidate === 'number' && typeof expected === 'string') {
+    return Number.isFinite(candidate) && String(candidate) === expected.trim();
+  }
+  if (typeof candidate === 'string' && typeof expected === 'number') {
+    return candidate.trim() === String(expected);
+  }
+  if (typeof candidate === 'boolean' && typeof expected === 'string') {
+    return String(candidate) === expected.trim();
+  }
+  if (typeof candidate === 'string' && typeof expected === 'boolean') {
+    return candidate.trim() === String(expected);
+  }
+  return candidate === expected;
 }
 
 async function confirmStep(

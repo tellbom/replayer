@@ -1,4 +1,12 @@
-import { LocatorNotFoundError, SemanticDriftError, ScopeNotReadyError, TIMEOUTS, resolveTemplate } from '@dsh/core';
+import {
+  LocatorNotFoundError,
+  SemanticDriftError,
+  ScopeNotReadyError,
+  TIMEOUTS,
+  UiCarrierIncompleteError,
+  assertNoUnresolvedValue,
+  resolveTemplate,
+} from '@dsh/core';
 import type { ExecContext, LocatorStrategy, ParamDefinition, Step, StepResult } from '@dsh/core';
 import type { Locator, Page } from 'playwright';
 
@@ -25,7 +33,9 @@ export async function executeUiStep(
   let action: UiAction;
   try {
     action = resolveTemplate(step.ui, context, params);
+    assertNoUnresolvedValue(action, `ui step ${step.id}`);
   } catch (error) {
+    if (isNotSentSafetyError(error)) return uiNotSent(step.id, startedAt, error);
     throw locatorFailure(step, step.ui.target, error);
   }
 
@@ -60,7 +70,9 @@ export async function executeUiStep(
     const navigationWait = step.expectsRedirect
       ? page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: step.waitAfter?.timeoutMs ?? TIMEOUTS.navigation })
       : null;
-    const actionRun = runAction(page, action, context);
+    const actionRun = step.riskLevel === 'write' || step.riskLevel === 'critical'
+      ? runWriteActionWithCarrierGate(page, step, action, context)
+      : runAction(page, action, context);
     const value = navigationWait
       ? (await Promise.all([actionRun, navigationWait]))[0]
       : await actionRun;
@@ -80,9 +92,126 @@ export async function executeUiStep(
       raw: action.action === 'readValue' ? { text: JSON.stringify(value) } : undefined,
     };
   } catch (error) {
+    if (isNotSentSafetyError(error)) return uiNotSent(step.id, startedAt, error);
     if (error instanceof ScopeNotReadyError || error instanceof SemanticDriftError) throw error;
     throw locatorFailure(step, action.target ?? shortcutTarget(action), error);
   }
+}
+
+async function runWriteActionWithCarrierGate(
+  page: Page,
+  step: Step,
+  action: UiAction,
+  context: ExecContext,
+): Promise<Record<string, unknown>> {
+  if (!action.preAction) return runAction(page, action, context);
+  await runAction(page, action.preAction, context);
+  await assertUiCarrierChain(page, step, action.preAction, context);
+  return runAction(page, { ...action, preAction: undefined }, context);
+}
+
+async function assertUiCarrierChain(
+  page: Page,
+  step: Step,
+  action: UiAction,
+  context: ExecContext,
+): Promise<void> {
+  if (action.preAction) await assertUiCarrierChain(page, step, action.preAction, context);
+  if (!['fill', 'setDateTime', 'selectOption', 'check'].includes(action.action)) return;
+  const current = await readUiCarrier(page, action, context);
+  const expected = action.action === 'check' ? action.checked !== false : action.value;
+  const matches = Array.isArray(current) ? current.includes(String(expected)) : current === expected;
+  if (expected === undefined || !matches) {
+    throw new UiCarrierIncompleteError(
+      `步骤 ${step.id} 的 ${action.action} UI 载体未保持期望值。` +
+      '已在提交动作前中止，请检查页面联动或重新录制。',
+    );
+  }
+}
+
+type UiCarrierValue = string | boolean | string[] | undefined;
+
+async function readUiCarrier(page: Page, action: UiAction, context: ExecContext): Promise<UiCarrierValue> {
+  if (action.target?.strategy === 'playwright' || action.target?.strategy === 'frame-playwright') {
+    return (await resolvePlaywrightTarget(page, action, context)).evaluate((element) => {
+      if (element instanceof HTMLInputElement && element.type === 'checkbox') return element.checked;
+      const nativeSelect = element instanceof HTMLSelectElement
+        ? element
+        : element.querySelector('select');
+      if (nativeSelect) {
+        return [nativeSelect.value, ...Array.from(nativeSelect.selectedOptions, (option) => option.textContent?.trim() ?? '')];
+      }
+      const ariaControl = element.hasAttribute('aria-controls')
+        ? element
+        : element.querySelector('[aria-controls]');
+      const controlledId = ariaControl?.getAttribute('aria-controls');
+      const controlled = controlledId ? document.getElementById(controlledId) : null;
+      const selectedOptions = controlled
+        ? Array.from(controlled.querySelectorAll('[role="option"][aria-selected="true"]'))
+        : [];
+      if (selectedOptions.length > 0) {
+        return selectedOptions.flatMap((option) => [
+          option.getAttribute('value') ?? '',
+          option.getAttribute('data-value') ?? '',
+          option.textContent?.trim() ?? '',
+        ]).filter(Boolean);
+      }
+      if (element instanceof HTMLInputElement
+        || element instanceof HTMLTextAreaElement) return element.value;
+      return element.textContent?.trim();
+    });
+  }
+  return page.evaluate(async (spec) => {
+    const inferredKind = spec.kind
+      ?? (spec.action === 'selectOption' ? 'select'
+        : spec.action === 'setDateTime' ? 'datepicker'
+          : undefined);
+    const target = spec.target ?? (spec.label && inferredKind
+      ? { strategy: 'el-form-item' as const, label: spec.label, kind: inferredKind }
+      : undefined);
+    if (!target) return undefined;
+    const element = await window.__DSH_LOCATOR__.resolve(target);
+    if (element instanceof HTMLInputElement && element.type === 'checkbox') return element.checked;
+    const nativeSelect = element instanceof HTMLSelectElement
+      ? element
+      : element.querySelector('select');
+    if (nativeSelect) {
+      return [nativeSelect.value, ...Array.from(nativeSelect.selectedOptions, (option) => option.textContent?.trim() ?? '')];
+    }
+    const ariaControl = element.hasAttribute('aria-controls')
+      ? element
+      : element.querySelector('[aria-controls]');
+    const controlledId = ariaControl?.getAttribute('aria-controls');
+    const controlled = controlledId ? document.getElementById(controlledId) : null;
+    const selectedOptions = controlled
+      ? Array.from(controlled.querySelectorAll('[role="option"][aria-selected="true"]'))
+      : [];
+    if (selectedOptions.length > 0) {
+      return selectedOptions.flatMap((option) => [
+        option.getAttribute('value') ?? '',
+        option.getAttribute('data-value') ?? '',
+        option.textContent?.trim() ?? '',
+      ]).filter(Boolean);
+    }
+    if (element instanceof HTMLInputElement
+      || element instanceof HTMLTextAreaElement) return element.value;
+    return element.textContent?.trim();
+  }, action);
+}
+
+function isNotSentSafetyError(error: unknown): error is Error & { outcome: 'not_sent' } {
+  return error instanceof Error && 'outcome' in error && error.outcome === 'not_sent';
+}
+
+function uiNotSent(stepId: string, startedAt: number, error: Error): StepResult {
+  return {
+    stepId,
+    ok: false,
+    outcome: 'not_sent',
+    channelUsed: 'ui',
+    durationMs: Date.now() - startedAt,
+    error: `${error.name}: ${error.message}`,
+  };
 }
 
 async function extractPageVariables(

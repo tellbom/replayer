@@ -1,4 +1,11 @@
-import { TIMEOUTS, resolveTemplate } from '@dsh/core';
+import {
+  TIMEOUTS,
+  UnsupportedMultipartError,
+  assertNoUnresolvedValue,
+  requestUsesMultipart,
+  resolveTemplate,
+  validateExecutionParams,
+} from '@dsh/core';
 import { BearerUnavailableError } from '@dsh/core';
 import type { ExecContext, ParamDefinition, Step, StepResult } from '@dsh/core';
 import { getLiveAuthHeader } from '@dsh/browser';
@@ -23,9 +30,14 @@ export async function executeNetworkStep(
   if (!step.network) return notSent(step.id, startedAt, '步骤缺少 network 配置');
   let requests: Array<NonNullable<Step['network']>>;
   try {
-    validateParams(params, context.params);
+    validateExecutionParams(params, context.params);
     requests = expandRequests(step.network, context, params);
     requests.forEach((request) => new URL(request.url, context.baseUrl));
+    if (requests.some(requestUsesMultipart)) {
+      throw new UnsupportedMultipartError(
+        '当前 network 执行器没有可验证的 multipart 字段或文件载体，已在请求发出前中止。',
+      );
+    }
   } catch (error) {
     return notSent(step.id, startedAt, String(error));
   }
@@ -58,6 +70,7 @@ export async function executeNetworkStep(
     requests = requests.map((request) =>
       materializeRuntimeHeaders(request, context, liveAuthorization),
     );
+    requests.forEach((request) => assertNoUnresolvedValue(request, `network step ${step.id}`));
   } catch (error) {
     return notSent(step.id, startedAt, String(error));
   }
@@ -241,28 +254,6 @@ function expandRequests(
       params,
     ),
   );
-}
-
-function validateParams(
-  definitions: readonly ParamDefinition[],
-  values: Record<string, unknown>,
-): void {
-  for (const definition of definitions) {
-    const value = values[definition.name];
-    if (definition.required && value === undefined) {
-      throw new Error(`缺少必填参数: ${definition.name}`);
-    }
-    if (value === undefined) continue;
-    if (definition.type === 'number' && typeof value !== 'number') {
-      throw new Error(`参数类型错误: ${definition.name}`);
-    }
-    if (definition.type === 'boolean' && typeof value !== 'boolean') {
-      throw new Error(`参数类型错误: ${definition.name}`);
-    }
-    if (definition.type === 'enum' && !definition.values?.some((item) => item.label === value)) {
-      throw new Error(`枚举参数值无效: ${definition.name}`);
-    }
-  }
 }
 
 function extractResponse(

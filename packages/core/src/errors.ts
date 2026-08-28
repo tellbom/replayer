@@ -88,3 +88,43 @@ export class SchemaViolationError extends DSHError {
 export class BearerUnavailableError extends DSHError {
   readonly code = 'BEARER_UNAVAILABLE';
 }
+
+export class UnresolvedValueError extends DSHError {
+  readonly code = 'UNRESOLVED_VALUE';
+  readonly outcome = 'not_sent' as const;
+}
+
+export class UnknownParameterError extends DSHError {
+  readonly code = 'UNKNOWN_PARAMETER';
+  readonly outcome = 'not_sent' as const;
+}
+
+export class MissingParameterError extends DSHError {
+  readonly code = 'MISSING_PARAMETER';
+  readonly outcome = 'not_sent' as const;
+}
+
+export class EnumMappingError extends DSHError {
+  readonly code = 'ENUM_MAPPING_FAILED';
+  readonly outcome = 'not_sent' as const;
+}
+
+export class ChannelCarrierMissingError extends DSHError {
+  readonly code = 'CHANNEL_CARRIER_MISSING';
+  readonly outcome = 'not_sent' as const;
+}
+
+export class UiCarrierIncompleteError extends DSHError {
+  readonly code = 'UI_CARRIER_INCOMPLETE';
+  readonly outcome = 'not_sent' as const;
+}
+
+export class UnsupportedMultipartError extends DSHError {
+  readonly code = 'UNSUPPORTED_MULTIPART';
+  readonly outcome = 'not_sent' as const;
+}
+
+export class InvalidParameterTypeError extends DSHError {
+  readonly code = 'INVALID_PARAMETER_TYPE';
+  readonly outcome = 'not_sent' as const;
+}

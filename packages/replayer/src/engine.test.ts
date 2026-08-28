@@ -1,12 +1,33 @@
-import { FirstRunVerificationRequiredError, parseSkill } from '@dsh/core';
+import {
+  ChannelCarrierMissingError,
+  FirstRunVerificationRequiredError,
+  SkillSchema,
+  UnresolvedValueError,
+  parseSkill,
+} from '@dsh/core';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { replay } from './engine.js';
+import { assertUiFallbackCarrier, matchesWhere, replay } from './engine.js';
 import { testEntry } from './test-entry.js';
 
 describe('replay dry-run', () => {
+  it('Phase 0 rejects a parser-bypassing Skill object before browser acquisition', async () => {
+    const skill = SkillSchema.parse({
+      skill: { id: 'unsafe', name: 'unsafe', system: 'fixture', baseUrl: 'http://fixture', entry: 'oa' },
+      params: [],
+      steps: [{
+        id: 'write', desc: 'write', channel: 'network', riskLevel: 'write', hasSideEffect: true,
+        network: { method: 'POST', url: '/submit', contentType: 'json', body: { value: 'TODO_UNRESOLVED' } },
+      }],
+    });
+
+    await expect(replay(skill, {
+      params: {}, profileDir: 'tmp/phase0-browser-must-not-start', entry: testEntry(), noLLM: true,
+    })).rejects.toBeInstanceOf(UnresolvedValueError);
+  });
+
   it('prints the complete plan without launching a browser or creating a profile', async () => {
     const profileDir = join(process.cwd(), 'profiles', 'dry-run-must-not-exist');
     const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
@@ -82,5 +103,65 @@ verification: { status: draft, requiresFirstRunVerification: true }
     await expect(replay(skill, {
       params: {}, profileDir: 'tmp/t81-browser-must-not-start', entry: testEntry(),
     })).rejects.toBeInstanceOf(FirstRunVerificationRequiredError);
+  });
+});
+
+describe('V-110 matchesWhere', () => {
+  it.each([
+    [{ values: ['A', 'B'] }, { values: ['B', 'A'] }, true],
+    [{ values: ['A', 'B'] }, { values: 'A' }, true],
+    [{ values: ['A'] }, { values: 'A' }, true],
+    [{ values: ['A'] }, { values: 'B' }, false],
+    [{ values: 'A' }, { values: ['A'] }, true],
+    [{ values: 'A' }, { values: ['A', 'B'] }, false],
+    [{ values: 1 }, { values: ' 1 ' }, true],
+    [{ values: true }, { values: 'true' }, true],
+    [{ values: 'SCREEN' }, { values: 'screen' }, false],
+    [{ values: 0 }, { values: false }, false],
+  ] as const)('compares candidate %j with expected %j as %s', (candidate, where, matched) => {
+    expect(matchesWhere(candidate, where)).toBe(matched);
+  });
+});
+
+describe('Phase 0 channel carrier gate', () => {
+  it('blocks UI fallback when the network body consumes a merged step', () => {
+    const skill = parseSkill(`
+skill: { id: carrier, name: carrier, system: fixture, baseUrl: http://fixture, entry: oa }
+params: [{ name: applicant, type: string, required: true }]
+steps:
+  - id: applicant-value
+    desc: collect
+    channel: merged
+    ui: { action: fill, value: "{{applicant}}" }
+  - id: submit
+    desc: submit
+    channel: auto
+    riskLevel: write
+    hasSideEffect: true
+    network: { method: POST, url: /submit, body: { applicant: "{{applicant-value}}" } }
+    ui: { action: click, target: { strategy: text, text: Submit } }
+`, () => testEntry());
+
+    expect(() => assertUiFallbackCarrier(skill, skill.steps[1]!)).toThrow(ChannelCarrierMissingError);
+  });
+
+  it('blocks multipart UI fallback because the current runtime cannot reconstruct its carriers', () => {
+    const skill = parseSkill(`
+skill: { id: multipart, name: multipart, system: fixture, baseUrl: http://fixture, entry: oa }
+params: []
+steps:
+  - id: submit
+    desc: submit
+    channel: auto
+    riskLevel: write
+    hasSideEffect: true
+    network:
+      method: POST
+      url: /submit
+      headers: { Content-Type: multipart/form-data; boundary=recorded }
+    ui: { action: click, target: { strategy: text, text: Submit } }
+`, () => testEntry());
+
+    expect(() => assertUiFallbackCarrier(skill, skill.steps[0]!)).toThrow(/multipart.*无载体/);
   });
 });

@@ -1,5 +1,6 @@
 import type { ParamDefinition } from './schema.js';
 import type { ExecContext } from './types.js';
+import { EnumMappingError } from './errors.js';
 
 const TEMPLATE_PATTERN = /\{\{\s*([^{}]+?)\s*\}\}/g;
 const EXACT_TEMPLATE_PATTERN = /^\{\{\s*([^{}]+?)\s*\}\}$/;
@@ -111,16 +112,30 @@ function resolveEnumValue(
   path: string,
   currentValue: unknown,
   paramDefinitions: readonly ParamDefinition[],
-): string {
+): string | string[] {
   const paramName = parsePath(path)[0];
   const definition = paramDefinitions.find((param) => param.name === paramName);
   if (!definition || definition.type !== 'enum') {
     throw new Error(`枚举参数缺少 label/value 映射: ${paramName ?? path}`);
   }
-  const mapped = definition.enumMap?.[String(currentValue)];
+  if (Array.isArray(currentValue)) {
+    return currentValue.map((value) => mapEnumLabel(definition, paramName ?? path, value));
+  }
+  return mapEnumLabel(definition, paramName ?? path, currentValue);
+}
+
+function mapEnumLabel(
+  definition: ParamDefinition,
+  paramName: string,
+  currentValue: unknown,
+): string {
+  const label = String(currentValue);
+  const mapped = definition.enumMap?.[label];
   if (mapped !== undefined) return mapped;
-  const mapping = definition.values?.find((item) => item.label === String(currentValue));
-  if (!mapping) throw new Error(`枚举参数不存在 label: ${String(currentValue)}`);
+  const mapping = definition.values?.find((item) => item.label === label);
+  if (!mapping) {
+    throw new EnumMappingError(`参数 ${paramName} 的值 ${label} 无法映射为提交值，postcondition 无法验证`);
+  }
   return mapping.value;
 }
 

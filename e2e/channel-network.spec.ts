@@ -17,6 +17,7 @@ const params: ParamDefinition[] = [
     required: true,
   },
   { name: 'reason', type: 'string', required: true },
+  { name: 'items', type: 'string', required: true },
 ];
 
 test('channel-network: 联动提交、模板缺失与响应丢失机械分类', async ({ page }) => {

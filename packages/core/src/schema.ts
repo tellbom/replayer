@@ -2,7 +2,8 @@ import { parse } from 'yaml';
 import { z } from 'zod';
 
 import { assertNoPlainCredentials } from './sanitize.js';
-import { SchemaViolationError } from './errors.js';
+import { SchemaViolationError, UnresolvedValueError } from './errors.js';
+import { assertNoUnresolvedExecutableValues, unresolvedSchemaError } from './safety.js';
 import type { ControlKind, LocatorStrategy, RecordedHint } from './types.js';
 
 export const ControlKindSchema: z.ZodType<ControlKind> = z.enum([
@@ -437,12 +438,14 @@ export function stepIsIdempotent(step: Step): boolean {
 }
 
 export function parseSkill(yamlText: string, entryResolver: (id: string) => Entry): Skill {
-  const skill = SkillSchema.parse(parse(yamlText));
-  if (containsUnresolvedValue(skill)) {
-    throw new SchemaViolationError(
-      'Skill 含 TODO_UNRESOLVED，必须人工确认参数来源后才能加载。',
-    );
+  const raw: unknown = parse(yamlText);
+  try {
+    assertNoUnresolvedExecutableValues(raw);
+  } catch (error) {
+    if (error instanceof UnresolvedValueError) throw unresolvedSchemaError(error);
+    throw error;
   }
+  const skill = SkillSchema.parse(raw);
   const entry = entryResolver(skill.skill.entry);
 
   const redirectWithoutPostcondition = skill.steps.find(
@@ -491,13 +494,6 @@ export function parseSkill(yamlText: string, entryResolver: (id: string) => Entr
     }
   }
   return skill;
-}
-
-function containsUnresolvedValue(value: unknown): boolean {
-  if (typeof value === 'string') return value.includes('TODO_UNRESOLVED');
-  if (Array.isArray(value)) return value.some(containsUnresolvedValue);
-  if (typeof value !== 'object' || value === null) return false;
-  return Object.values(value).some(containsUnresolvedValue);
 }
 
 /** 技能可共享性门禁：Authorization 只允许运行时占位，不允许真实凭证落盘。 */

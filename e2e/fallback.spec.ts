@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { ForbiddenError, SkillVerificationSchema } from '@dsh/core';
+import { ChannelCarrierMissingError, ForbiddenError, SkillVerificationSchema } from '@dsh/core';
 import type { Skill, Step, StepResult } from '@dsh/core';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -15,7 +15,7 @@ const runParams = {
   reason: '安全降级验收',
 };
 
-test('fallback: not_sent permits one confirmed UI fallback', async ({ browserName }, testInfo) => {
+test('Phase 0: UI fallback stops when a pre-submit carrier did not retain its value', async ({ browserName }, testInfo) => {
   const profileDir = testInfo.outputPath(`not-sent-${browserName}-profile`);
   await seedProfile(profileDir);
   let confirmations = 0;
@@ -43,11 +43,38 @@ test('fallback: not_sent permits one confirmed UI fallback', async ({ browserNam
     },
   });
 
-  expect(result.ok).toBe(true);
+  expect(result.ok, JSON.stringify(result)).toBe(false);
   expect(result.extracted['merged-reason']).toBe(runParams.reason);
-  expect(result.steps.find((step) => step.stepId === 'submit')?.channelUsed).toBe('ui');
+  expect(result.steps.find((step) => step.stepId === 'submit')).toMatchObject({
+    channelUsed: 'ui',
+    outcome: 'not_sent',
+    error: expect.stringContaining('UiCarrierIncompleteError'),
+  });
   expect(confirmations).toBe(2);
-  expect(debugCount(result.steps.at(-1))).toBe(1);
+  expect(result.steps.some((step) => step.stepId === 'debug')).toBe(false);
+});
+
+test('Phase 0: merged dependency blocks a not_sent network step from falling back to UI', async ({ browserName }, testInfo) => {
+  const profileDir = testInfo.outputPath(`carrier-${browserName}-profile`);
+  await seedProfile(profileDir);
+  const submit = fallbackSubmitStep('http://[');
+  submit.network!.body = { reason: '{{merged-reason}}' };
+  const skill = makeSkill('phase0-carrier-gate', [
+    ...loginAndOpenSteps(),
+    {
+      id: 'merged-reason', desc: 'merge reason', channel: 'merged',
+      riskLevel: 'read', hasSideEffect: false,
+      ui: { action: 'fill', value: '{{reason}}' },
+    },
+    submit,
+  ]);
+  let confirmations = 0;
+
+  await expect(replay(skill, {
+    params: runParams, profileDir, entry: oaEntry, noLLM: true,
+    onConfirm: async () => { confirmations += 1; return true; },
+  })).rejects.toBeInstanceOf(ChannelCarrierMissingError);
+  expect(confirmations).toBe(1);
 });
 
 test('fallback: drop_response resolves by postcondition without replay', async ({ browserName }, testInfo) => {
