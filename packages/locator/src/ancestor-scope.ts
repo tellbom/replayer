@@ -37,18 +37,6 @@ function selectorForAncestor(ancestor: Element): string | null {
     if (title) return `${ancestor.tagName.toLowerCase()}:has-text(${JSON.stringify(title)})`;
   }
 
-  if (ancestor.matches('.el-card, .el-collapse-item, .el-tab-pane')) {
-    const title = accessibleName(ancestor) || normalized(
-      ancestor.querySelector(
-        '.el-card__header, .el-collapse-item__header, [role="tab"], h1, h2, h3, h4, h5, h6',
-      )?.textContent,
-    );
-    const className = ['el-card', 'el-collapse-item', 'el-tab-pane'].find((name) =>
-      ancestor.classList.contains(name),
-    );
-    if (title && className) return `.${className}:has-text(${JSON.stringify(title)})`;
-  }
-
   return null;
 }
 

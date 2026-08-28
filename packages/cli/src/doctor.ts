@@ -8,7 +8,7 @@ import { parseEntry } from '@dsh/core';
 
 export interface FrontendProbeResult {
   vue: number | null;
-  ui: 'element-plus' | 'element-ui' | null;
+  ui: null;
   evidence: string[];
 }
 
@@ -141,21 +141,13 @@ export async function probeFrontend(page: import('playwright').Page, url: string
       result.evidence.push('[data-v-app]');
     }
 
-    if (document.querySelector('.el-config-provider, .el-overlay')) {
-      result.ui = 'element-plus';
-      result.evidence.push('.el-overlay / .el-config-provider');
-    } else if (document.querySelector('.el-dialog__wrapper, .v-modal')) {
-      result.ui = 'element-ui';
-      result.evidence.push('.el-dialog__wrapper / .v-modal');
-    }
     return result;
   });
 }
 
 export function frontendConclusion(result: FrontendProbeResult): string {
-  return result.vue === 2 && result.ui === 'element-ui'
-    ? '需启用 T-09-vue2 / T-13 / A8'
-    : '无需启用 Vue2 条件任务';
+  void result;
+  return '使用通用 DOM/ARIA 录制与回放路径';
 }
 
 function printFrontendProbe(url: string, result: FrontendProbeResult): void {

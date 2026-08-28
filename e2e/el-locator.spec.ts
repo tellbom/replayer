@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import { login } from './helpers';
 
-const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
+const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript({ content: locatorScript });
@@ -17,7 +17,7 @@ test('el-locator: version 与 byFormItem', async ({ page }) => {
     version: window.__DSH_LOCATOR__.version(),
     textarea: window.__DSH_LOCATOR__.byFormItem('事由：*', 'textarea').tagName,
   }));
-  expect(result).toEqual({ version: 'element-plus', textarea: 'TEXTAREA' });
+  expect(result).toEqual({ version: 'generic', textarea: 'TEXTAREA' });
 });
 
 test('el-locator: selectOption 处理 append-to-body', async ({ page }) => {

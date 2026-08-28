@@ -191,7 +191,7 @@ function generateTarget(element: Element, root: Element | Document = element.own
   const result = generateSelector(script as never, element, {
     ...GENERATE_SELECTOR_OPTIONS,
     root,
-    // 组件库运行时 id（el-collapse-2f8c-… 每次渲染变化）不能当锚点：
+    // 运行时生成的随机 id 每次渲染变化，不能作为稳定锚点：
     // vendor 的 id 优先档会直接采用它——渲染即断。noCSSId 关闭 id 档，
     // 迫使算法退到 role/text 语义档（业务文案，rebuild 稳定）。
     // 代价：稳定手写 id 也一并放弃（内网页面手写 id 罕见，取舍可接受）。

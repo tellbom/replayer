@@ -27,11 +27,15 @@ interface Observation {
   observer: MutationObserver;
   startedAt: number;
   roots: TrackedRoot[];
+  baseline: Map<Element, Record<string, unknown>>;
 }
 
 const DEFAULT_SETTLE_MS = 800;
 const observations = new Map<number, Observation>();
 const completedRoots = new Map<number, AppearedRoot[]>();
+const completedEffects = new Map<number, Array<{
+  locator: unknown; before?: Record<string, unknown>; after?: Record<string, unknown>;
+}>>();
 let activeActionIdx: number | undefined;
 
 function begin(actionIdx: number): void {
@@ -42,6 +46,7 @@ function begin(actionIdx: number): void {
     observer: undefined as unknown as MutationObserver,
     startedAt: performance.now(),
     roots: [],
+    baseline: captureObservableElements(),
   };
   observation.observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
@@ -82,6 +87,14 @@ async function end(actionIdx: number, settleMs = DEFAULT_SETTLE_MS): Promise<App
   return completedRoots.get(actionIdx) ?? finish(actionIdx);
 }
 
+async function endWithStates(
+  actionIdx: number,
+  settleMs = DEFAULT_SETTLE_MS,
+): Promise<Array<{ locator: unknown; before?: Record<string, unknown>; after?: Record<string, unknown> }>> {
+  await end(actionIdx, settleMs);
+  return completedEffects.get(actionIdx) ?? [];
+}
+
 function finish(actionIdx: number): AppearedRoot[] {
   const observation = observations.get(actionIdx);
   if (!observation) throw new Error(`动作 ${actionIdx} 未开始 DOM 观测`);
@@ -98,7 +111,51 @@ function finish(actionIdx: number): AppearedRoot[] {
       portaled: isPortaled(node),
     }));
   completedRoots.set(actionIdx, roots);
+  const current = captureObservableElements();
+  const effects: Array<{ locator: unknown; before?: Record<string, unknown>; after?: Record<string, unknown> }> = [];
+  for (const element of new Set([...observation.baseline.keys(), ...current.keys()])) {
+    if (!element.isConnected) continue;
+    const before = observation.baseline.get(element);
+    const after = current.get(element);
+    if (JSON.stringify(before) === JSON.stringify(after)) continue;
+    effects.push({ locator: generateDescriptor(element), ...(before ? { before } : {}), ...(after ? { after } : {}) });
+  }
+  completedEffects.set(actionIdx, effects);
   return roots;
+}
+
+function captureObservableElements(): Map<Element, Record<string, unknown>> {
+  const output = new Map<Element, Record<string, unknown>>();
+  const selector = [
+    'input', 'textarea', 'select', 'option', '[contenteditable]',
+    '[aria-checked]', '[aria-selected]', '[aria-expanded]', '[aria-valuenow]',
+    '[aria-valuetext]', '[aria-pressed]', '[aria-disabled]', '[aria-invalid]',
+  ].join(',');
+  for (const element of document.querySelectorAll(selector)) output.set(element, observableElementState(element));
+  return output;
+}
+
+function observableElementState(element: Element): Record<string, unknown> {
+  const state: Record<string, unknown> = {};
+  if (element instanceof HTMLSelectElement) {
+    state.value = element.multiple ? [...element.selectedOptions].map((option) => option.value) : element.value;
+  } else if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) state.value = element.value;
+  if (element instanceof HTMLInputElement) state.checked = element.checked;
+  if (element instanceof HTMLOptionElement) state.selected = element.selected;
+  if (element instanceof HTMLElement && element.isContentEditable) {
+    const maximum = Number(Reflect.get(window, '__DSH_CANONICAL_MAX_INNER_HTML__')) || 8_192;
+    state.innerHTML = element.innerHTML.slice(0, maximum);
+    if (element.innerHTML.length > maximum) state.innerHTMLTruncated = true;
+  }
+  const aria = Object.fromEntries(
+    ['checked', 'selected', 'expanded', 'valuenow', 'valuetext', 'pressed', 'disabled', 'invalid']
+      .map((name) => [name, element.getAttribute(`aria-${name}`)])
+      .filter((item): item is [string, string] => item[1] !== null),
+  );
+  if (Object.keys(aria).length > 0) state.aria = aria;
+  if ('disabled' in element) state.disabled = Boolean(Reflect.get(element, 'disabled'));
+  if ('readOnly' in element) state.readonly = Boolean(Reflect.get(element, 'readOnly'));
+  return state;
 }
 
 function deriveScope(
@@ -112,10 +169,10 @@ function deriveScope(
 
   const generate = Reflect.get(window, '__DSH_PWGEN__');
   if (typeof generate !== 'function') throw new Error('Playwright locator generator 未注入');
-  const option = target.closest('[role="option"], .el-select-dropdown__item');
+  const option = target.closest('[role="option"], option');
   const optionText = option?.textContent?.replace(/\s+/g, ' ').trim();
   const optionMatches = optionText
-    ? [...containing.node.querySelectorAll('[role="option"], .el-select-dropdown__item')].filter(
+    ? [...containing.node.querySelectorAll('[role="option"], option')].filter(
         (candidate) => candidate.textContent?.replace(/\s+/g, ' ').trim() === optionText,
       )
     : [];
@@ -158,24 +215,20 @@ function recordRoot(observation: Observation, node: Element): void {
 function classify(root: Element): AppearedKind {
   const ownKind = classifySelf(root);
   if (ownKind !== 'unknown') return ownKind;
-  if (contains(root, '.el-drawer')) return 'drawer';
-  if (contains(root, '[role="dialog"], .el-dialog')) return 'dialog';
-  if (contains(root, '[role="listbox"], .el-select-dropdown')) return 'listbox';
-  if (contains(root, '.el-picker-panel')) return 'datepicker';
-  if (contains(root, '[role="menu"], .el-menu--popup')) return 'menu';
-  if (contains(root, '.el-table__row')) return 'table-row';
-  if (contains(root, '[role="region"], .el-form-item, .el-collapse-item')) return 'panel';
+  if (contains(root, '[role="dialog"], dialog')) return 'dialog';
+  if (contains(root, '[role="listbox"]')) return 'listbox';
+  if (contains(root, '[role="menu"]')) return 'menu';
+  if (contains(root, '[role="row"], tr')) return 'table-row';
+  if (contains(root, '[role="region"], fieldset')) return 'panel';
   return 'unknown';
 }
 
 function classifySelf(element: Element): AppearedKind {
-  if (element.matches('.el-drawer')) return 'drawer';
-  if (element.matches('[role="dialog"], .el-dialog')) return 'dialog';
-  if (element.matches('[role="listbox"], .el-select-dropdown')) return 'listbox';
-  if (element.matches('.el-picker-panel')) return 'datepicker';
-  if (element.matches('[role="menu"], .el-menu--popup')) return 'menu';
-  if (element.matches('.el-table__row')) return 'table-row';
-  if (element.matches('[role="region"], .el-form-item, .el-collapse-item')) return 'panel';
+  if (element.matches('[role="dialog"], dialog')) return 'dialog';
+  if (element.matches('[role="listbox"]')) return 'listbox';
+  if (element.matches('[role="menu"]')) return 'menu';
+  if (element.matches('[role="row"], tr')) return 'table-row';
+  if (element.matches('[role="region"], fieldset')) return 'panel';
   return 'unknown';
 }
 
@@ -185,24 +238,16 @@ function contains(root: Element, selector: string): boolean {
 
 function isPortaled(root: Element): boolean {
   if (root.parentElement === document.body || root.parentElement?.parentElement === document.body) return true;
-  const portalContainer = root.closest('.el-overlay, .el-popper, [data-popper-placement]');
-  return portalContainer !== null && !portalContainer.closest('#app');
+  if (root.matches('[role="listbox"], [role="menu"]')
+    && !root.closest('main, form, [role="dialog"], dialog')) return true;
+  const portalContainer = root.closest('[data-popper-placement], [role="dialog"], [role="listbox"], [role="menu"]');
+  return portalContainer !== null && portalContainer.parentElement === document.body;
 }
 
 function semanticAncestor(node: Element): Element | null {
   for (const selector of [
-    '.el-drawer',
-    '.el-dialog',
-    '.el-select-dropdown',
-    '.el-picker-panel',
-    '.el-menu--popup',
-    '.el-table__row',
-    '.el-form-item',
-    '.el-collapse-item',
-    '[role="dialog"]',
-    '[role="listbox"]',
-    '[role="menu"]',
-    '[role="region"]',
+    '[role="dialog"]', 'dialog', '[role="listbox"]', '[role="menu"]',
+    '[role="region"]', '[role="row"]', 'tr', 'fieldset',
   ]) {
     const ancestor = node.closest(selector);
     if (ancestor) return ancestor;
@@ -214,14 +259,12 @@ function semanticRoot(node: Element): Element | null {
   const ancestor = semanticAncestor(node);
   if (ancestor) return ancestor;
   return node.querySelector(
-    '.el-drawer, .el-dialog, .el-select-dropdown, .el-picker-panel, .el-menu--popup, ' +
-      '.el-table__row, .el-form-item, .el-collapse-item, [role="dialog"], [role="listbox"], ' +
-      '[role="menu"], [role="region"]',
+    '[role="dialog"], dialog, [role="listbox"], [role="menu"], [role="region"], [role="row"], tr, fieldset',
   );
 }
 
 function isPortalContainer(element: Element): boolean {
-  return element.matches('.el-overlay, .el-popper, [data-popper-placement]');
+  return element.matches('[data-popper-placement], [role="dialog"], [role="listbox"], [role="menu"]');
 }
 
 function visible(element: Element): boolean {
@@ -242,5 +285,5 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 Object.assign(window, {
-  __DSH_MUTATION__: { begin, end, deriveScope },
+  __DSH_MUTATION__: { begin, end, endWithStates, deriveScope },
 });

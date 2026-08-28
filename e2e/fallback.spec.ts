@@ -15,7 +15,7 @@ const runParams = {
   reason: '安全降级验收',
 };
 
-test('Phase 0: UI fallback stops when a pre-submit carrier did not retain its value', async ({ browserName }, testInfo) => {
+test('Phase 0: UI fallback accepts values retained in live IDL properties', async ({ browserName }, testInfo) => {
   const profileDir = testInfo.outputPath(`not-sent-${browserName}-profile`);
   await seedProfile(profileDir);
   let confirmations = 0;
@@ -43,18 +43,17 @@ test('Phase 0: UI fallback stops when a pre-submit carrier did not retain its va
     },
   });
 
-  expect(result.ok, JSON.stringify(result)).toBe(false);
+  expect(result.ok, JSON.stringify(result)).toBe(true);
   expect(result.extracted['merged-reason']).toBe(runParams.reason);
   expect(result.steps.find((step) => step.stepId === 'submit')).toMatchObject({
     channelUsed: 'ui',
-    outcome: 'not_sent',
-    error: expect.stringContaining('UiCarrierIncompleteError'),
+    outcome: 'confirmed_success',
   });
   expect(confirmations).toBe(2);
-  expect(result.steps.some((step) => step.stepId === 'debug')).toBe(false);
+  expect(result.steps.some((step) => step.stepId === 'debug')).toBe(true);
 });
 
-test('Phase 0: merged dependency blocks a not_sent network step from falling back to UI', async ({ browserName }, testInfo) => {
+test('Phase 0 [long-term]: merged dependency blocks a not_sent network step from falling back to UI', async ({ browserName }, testInfo) => {
   const profileDir = testInfo.outputPath(`carrier-${browserName}-profile`);
   await seedProfile(profileDir);
   const submit = fallbackSubmitStep('http://[');

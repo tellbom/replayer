@@ -137,9 +137,6 @@ function normalizedActionTarget(action: RecordedAction): unknown {
 }
 
 function normalizedTarget(target: NonNullable<RecordedAction['target']>): unknown {
-  if (target.strategy === 'el-option') {
-    return { strategy: target.strategy, ownerLabel: target.ownerLabel };
-  }
   return target;
 }
 

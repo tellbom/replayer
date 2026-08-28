@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import { login } from './helpers';
 
-const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
+const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 
 test('manual-overtime: 手写 locator 脚本完成加班流程', async ({ page }) => {
   await page.addInitScript({ content: locatorScript });

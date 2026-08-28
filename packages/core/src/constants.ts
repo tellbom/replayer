@@ -48,6 +48,12 @@ export const ENUM_CAPTURE = {
   maxOptions: 200,
 } as const;
 
+export const CANONICAL_CAPTURE = {
+  maxAffected: 20,
+  maxInnerHTMLLength: 8_192,
+  mutationSettleMs: 800,
+} as const;
+
 export const NOISE_PATTERNS: RegExp[] = [
   /\.(js|css|png|jpe?g|gif|svg|woff2?|ttf|ico|map)(\?|$)/i,
   /\/(heartbeat|ping|track|collect|analytics|log|sockjs|__vite)/i,

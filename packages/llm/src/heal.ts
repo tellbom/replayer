@@ -43,7 +43,7 @@ export async function proposeHeal(ctx: ProposeHealContext): Promise<HealCandidat
         {
           role: 'system',
           content:
-            '修复失败的页面定位器。target 只能使用 el-form-item、el-option、el-dialog-scoped、el-table-cell、text、role、css strategy。evidence 必须逐字引用快照中能证明目标语义的一整段文本。只返回 JSON，禁止建议或执行页面动作。',
+            '修复失败的页面定位器。target 只能使用 label、text、role、css 或 playwright strategy。evidence 必须逐字引用快照中能证明目标语义的一整段文本。只返回 JSON，禁止建议或执行页面动作。',
         },
         {
           role: 'user',
@@ -116,7 +116,7 @@ export async function executeHeal(ctx: ExecuteHealContext): Promise<HealCandidat
 function stepTarget(step: Step): LocatorStrategy | null {
   if (step.ui?.target) return step.ui.target;
   if (step.ui?.label && step.ui.kind) {
-    return { strategy: 'el-form-item', label: step.ui.label, kind: step.ui.kind };
+    return { strategy: 'label', label: step.ui.label, kind: step.ui.kind };
   }
   return null;
 }
@@ -130,15 +130,14 @@ function semanticEvidenceMatches(target: LocatorStrategy, evidence: string): boo
 
 function targetTerms(target: LocatorStrategy): string[] {
   switch (target.strategy) {
-    case 'el-form-item': return [target.label];
-    case 'el-option': return [target.ownerLabel, target.text];
-    case 'el-dialog-scoped': return [target.dialogTitle, ...targetTerms(target.inner)];
-    case 'el-table-cell': return [target.rowAnchorText, target.buttonText];
+    case 'label': return [target.label];
     case 'text': return [target.text];
     case 'role': return [target.name];
     case 'css': return [target.selector];
     case 'playwright': return [target.selector];
     case 'frame-playwright': return [target.frame, target.selector];
+    default:
+      return Object.values(target).flatMap((value) => typeof value === 'string' ? [value] : []);
   }
 }
 
@@ -151,72 +150,15 @@ async function resolveOnly(
   target: LocatorStrategy,
   action: NonNullable<Step['ui']>['action'],
 ): Promise<boolean> {
-  return page.evaluate(({ strategy, actionName }) => {
-    const visible = (element: Element): element is HTMLElement => {
-      if (!(element instanceof HTMLElement)) return false;
-      const style = getComputedStyle(element);
-      return element.offsetParent !== null && style.display !== 'none' && style.visibility !== 'hidden';
-    };
-    const text = (value: string | null | undefined) => (value ?? '').replace(/\s+/g, ' ').trim();
-    const controls = (item: Element, kind: string): HTMLElement[] => {
-      const selector = kind === 'textarea' ? 'textarea'
-        : kind === 'button' ? 'button, [role="button"]'
-          : kind === 'select' ? '.el-select'
-            : kind === 'radio' ? 'input[type="radio"], .el-radio'
-              : kind === 'checkbox' ? 'input[type="checkbox"], .el-checkbox'
-                : kind === 'text' ? 'input[readonly], span, p'
-                  : 'input';
-      return [...item.querySelectorAll(selector)].filter(visible);
-    };
-    const find = (current: LocatorStrategy, root: ParentNode): HTMLElement[] => {
-      switch (current.strategy) {
-        case 'el-form-item':
-          return [...root.querySelectorAll('.el-form-item')]
-            .filter(visible)
-            .filter((item) => text(item.querySelector('.el-form-item__label')?.textContent) === text(current.label))
-            .flatMap((item) => controls(item, current.kind));
-        case 'el-option':
-          return [...document.querySelectorAll('.el-select-dropdown__item')]
-            .filter(visible)
-            .filter((item) => text(item.textContent) === text(current.text));
-        case 'el-dialog-scoped': {
-          const dialogs = [...root.querySelectorAll('.el-dialog')]
-            .filter(visible)
-            .filter((dialog) => text(dialog.querySelector('.el-dialog__title')?.textContent) === text(current.dialogTitle));
-          return dialogs.flatMap((dialog) => find(current.inner, dialog));
-        }
-        case 'el-table-cell': {
-          const rows = [...root.querySelectorAll('.el-table__row')]
-            .filter(visible)
-            .filter((row) => text(row.textContent).includes(text(current.rowAnchorText)));
-          return rows.flatMap((row) => [...row.querySelectorAll('button, [role="button"]')]
-            .filter(visible)
-            .filter((button) => text(button.textContent) === text(current.buttonText)));
-        }
-        case 'text':
-          return [...root.querySelectorAll('button, a, label, span, p, h1, h2, h3, td')]
-            .filter(visible)
-            .filter((element) => current.exact === false
-              ? text(element.textContent).includes(text(current.text))
-              : text(element.textContent) === text(current.text));
-        case 'role':
-          return [...root.querySelectorAll(`[role="${CSS.escape(current.role)}"]`)]
-            .filter(visible)
-            .filter((element) => text(element.textContent) === text(current.name));
-        case 'css':
-          return [...root.querySelectorAll(current.selector)].filter(visible);
-        case 'playwright':
-        case 'frame-playwright':
-          return [];
-      }
-    };
-    const matches = find(strategy, document);
-    if (matches.length !== 1) return false;
-    const element = matches[0]!;
+  return page.evaluate(async ({ strategy, actionName }) => {
+    if (strategy.strategy === 'playwright' || strategy.strategy === 'frame-playwright') return false;
+    const element = await window.__DSH_LOCATOR__.resolve(strategy);
     if (element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true') return false;
     if (actionName === 'fill') return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
     if (actionName === 'setDateTime') return element instanceof HTMLInputElement;
-    if (actionName === 'selectOption') return strategy.strategy === 'el-option' || element.classList.contains('el-select');
+    if (actionName === 'selectOption') {
+      return element instanceof HTMLSelectElement || element.getAttribute('role') === 'combobox';
+    }
     if (actionName === 'click') {
       return element.matches('button, a, [role="button"], input[type="button"], input[type="submit"]');
     }

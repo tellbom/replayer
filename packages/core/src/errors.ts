@@ -94,6 +94,11 @@ export class UnresolvedValueError extends DSHError {
   readonly outcome = 'not_sent' as const;
 }
 
+export class ExecutableValueTraversalError extends DSHError {
+  readonly code = 'EXECUTABLE_VALUE_TRAVERSAL';
+  readonly outcome = 'not_sent' as const;
+}
+
 export class UnknownParameterError extends DSHError {
   readonly code = 'UNKNOWN_PARAMETER';
   readonly outcome = 'not_sent' as const;

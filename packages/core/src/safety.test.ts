@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { InvalidParameterTypeError } from './errors.js';
+import { ExecutableValueTraversalError, InvalidParameterTypeError, SchemaViolationError } from './errors.js';
 import { parseSkill } from './schema.js';
 import { assertNoUnresolvedExecutableValues, validateExecutionParams } from './safety.js';
 
@@ -70,5 +70,41 @@ _healHistory:
     verified: false
     model: fixture
 `), entryResolver)).not.toThrow();
+  });
+
+  it('rejects a cyclic executable value with a named safety error', () => {
+    const body: Record<string, unknown> = {};
+    body.self = body;
+    expect(() => assertNoUnresolvedExecutableValues({ steps: [{ network: { body } }] }))
+      .toThrow(ExecutableValueTraversalError);
+  });
+
+  it('rejects executable nesting beyond the bounded traversal depth', () => {
+    let body: unknown = 'leaf';
+    for (let index = 0; index < 300; index += 1) body = { child: body };
+    expect(() => assertNoUnresolvedExecutableValues({ steps: [{ network: { body } }] }))
+      .toThrow(ExecutableValueTraversalError);
+  });
+
+  it('rejects unusual executable container types instead of silently skipping them', () => {
+    expect(() => assertNoUnresolvedExecutableValues({
+      steps: [{ network: { body: new Set(['value']) } }],
+    })).toThrow(ExecutableValueTraversalError);
+  });
+
+  it('wraps a cyclic YAML alias as an explicit schema violation', () => {
+    expect(() => parseSkill(`
+skill: { id: safety, name: safety, system: fixture, baseUrl: http://fixture, entry: fixture }
+params: []
+steps:
+  - id: write
+    desc: write
+    channel: network
+    network:
+      method: POST
+      url: /submit
+      body: &body
+        self: *body
+`, entryResolver)).toThrow(SchemaViolationError);
   });
 });

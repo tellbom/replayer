@@ -1,5 +1,6 @@
 import {
   EnumMappingError,
+  ExecutableValueTraversalError,
   InvalidParameterTypeError,
   MissingParameterError,
   SchemaViolationError,
@@ -10,6 +11,7 @@ import { createSanitizer } from './sanitize.js';
 import type { ParamDefinition } from './schema.js';
 
 const UNRESOLVED = 'TODO_UNRESOLVED';
+const EXECUTABLE_VALUE_MAX_DEPTH = 256;
 
 /** Scan one executable value recursively. Both load-time and runtime gates use this implementation. */
 export function assertNoUnresolvedValue(value: unknown, location: string): void {
@@ -90,6 +92,21 @@ export function requestUsesMultipart(value: unknown): boolean {
   );
 }
 
+export type MultipartCarrier = 'none' | 'text' | 'unsupported';
+
+/** Classify only browser-reconstructable multipart bodies; file/binary carriers remain fail-closed. */
+export function classifyMultipartCarrier(value: unknown): MultipartCarrier {
+  if (!requestUsesMultipart(value)) return 'none';
+  if (!isRecord(value) || !isPlainObject(value.body) || Object.keys(value.body).length === 0) {
+    return 'unsupported';
+  }
+  return Object.values(value.body).every((field) =>
+    isMultipartTextScalar(field)
+    || (Array.isArray(field) && field.every(isMultipartTextScalar)))
+    ? 'text'
+    : 'unsupported';
+}
+
 function scanStep(value: unknown, location: string): void {
   if (!isRecord(value)) return;
   scanRequestOwner(value, location);
@@ -125,18 +142,43 @@ function scanPostcondition(value: unknown, location: string): void {
 }
 
 function unresolvedPath(value: unknown, path: string): string | undefined {
-  if (typeof value === 'string') return value.includes(UNRESOLVED) ? path : undefined;
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      const found = unresolvedPath(value[index], `${path}[${index}]`);
-      if (found) return found;
+  const pending: Array<{ value: unknown; path: string; depth: number }> = [{ value, path, depth: 0 }];
+  const visited = new WeakSet<object>();
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.depth > EXECUTABLE_VALUE_MAX_DEPTH) {
+      throw new ExecutableValueTraversalError(
+        `${current.path} 超过可执行值最大嵌套深度 ${EXECUTABLE_VALUE_MAX_DEPTH}，已在产生副作用前中止。`,
+      );
     }
-    return undefined;
-  }
-  if (!isRecord(value)) return undefined;
-  for (const [key, child] of Object.entries(value)) {
-    const found = unresolvedPath(child, `${path}.${key}`);
-    if (found) return found;
+    if (typeof current.value === 'string') {
+      if (current.value.includes(UNRESOLVED)) return current.path;
+      continue;
+    }
+    if (current.value === null || ['undefined', 'number', 'boolean'].includes(typeof current.value)) continue;
+    if (typeof current.value !== 'object') {
+      throw new ExecutableValueTraversalError(`${current.path} 含不可执行的 ${typeof current.value} 值，已中止。`);
+    }
+    if (visited.has(current.value)) {
+      throw new ExecutableValueTraversalError(`${current.path} 含循环或重复对象引用，已中止。`);
+    }
+    visited.add(current.value);
+    if (Array.isArray(current.value)) {
+      for (let index = current.value.length - 1; index >= 0; index -= 1) {
+        pending.push({ value: current.value[index], path: `${current.path}[${index}]`, depth: current.depth + 1 });
+      }
+      continue;
+    }
+    if (!isPlainObject(current.value)) {
+      throw new ExecutableValueTraversalError(
+        `${current.path} 含不支持的对象类型 ${Object.prototype.toString.call(current.value)}，已中止。`,
+      );
+    }
+    const entries = Object.entries(current.value);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const [key, child] = entries[index]!;
+      pending.push({ value: child, path: `${current.path}.${key}`, depth: current.depth + 1 });
+    }
   }
   return undefined;
 }
@@ -151,6 +193,16 @@ function safeList(values: readonly unknown[]): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isMultipartTextScalar(value: unknown): value is string | number | boolean | null {
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value);
 }
 
 export function unresolvedSchemaError(error: UnresolvedValueError): SchemaViolationError {

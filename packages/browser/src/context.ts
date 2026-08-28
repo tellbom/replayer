@@ -22,7 +22,7 @@ export interface BrowserLease {
 }
 
 const INIT_SCRIPT_PATHS = [
-  '../../locator/dist/el-locator.iife.js',
+  '../../locator/dist/dom-locator.iife.js',
   '../../locator/dist/snapshot.iife.js',
   '../../locator/dist/pw-selector-generator.iife.js',
   '../../locator/dist/mutation-tracker.iife.js',

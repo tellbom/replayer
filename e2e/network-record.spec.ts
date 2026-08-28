@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { startNetworkRecording } from '../packages/recorder/src/network';
 import { login } from './helpers';
 
-const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
+const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 
 test('network-record: 加班请求按发出时间录入并结构化脱敏', async ({ page }) => {
   await page.addInitScript({ content: locatorScript });

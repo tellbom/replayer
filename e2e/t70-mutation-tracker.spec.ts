@@ -53,6 +53,8 @@ test('T-70 动作后只记录动态子树根并识别业务容器', async ({ pag
     harness.querySelector('#linked-select')!.addEventListener('change', () => {
       setTimeout(() => {
         const field = document.createElement('div');
+        field.setAttribute('role', 'region');
+        field.setAttribute('aria-label', '联动字段');
         field.className = 'el-form-item';
         field.innerHTML = '<label class="el-form-item__label">联动字段</label><input>';
         harness.querySelector('#linked-fields')!.append(field);

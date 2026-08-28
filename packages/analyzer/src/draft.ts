@@ -250,7 +250,28 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   };
   const skill = SkillSchema.parse(raw);
   assertNoIndexedResponseTemplates(skill);
+  assertNoDeprecatedDraftStrategies(skill);
   return { skill, yaml: renderDraftYaml(skill, Boolean(postcondition)) };
+}
+
+export function assertNoDeprecatedDraftStrategies(skill: Skill): void {
+  const deprecated = new Set([
+    ['el', 'form', 'item'].join('-'),
+    ['el', 'option'].join('-'),
+    ['el', 'dialog', 'scoped'].join('-'),
+    ['el', 'table', 'cell'].join('-'),
+  ]);
+  const pending: unknown[] = [skill.steps];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (Array.isArray(value)) { pending.push(...value); continue; }
+    if (!value || typeof value !== 'object') continue;
+    const record = value as Record<string, unknown>;
+    if (typeof record.strategy === 'string' && deprecated.has(record.strategy)) {
+      throw new Error(`new draft contains deprecated locator strategy: ${record.strategy}`);
+    }
+    pending.push(...Object.values(record));
+  }
 }
 
 export function assertParametersUsed(skill: Skill): void {
@@ -485,7 +506,7 @@ function uiAction(
   const name = param?.name;
   const value = name ? `{{${name}}}` : action.value;
   const common = {
-    ...(action.target ? { target: action.target } : {}),
+    ...(genericDraftTarget(action) ? { target: genericDraftTarget(action) } : {}),
     ...(action.label ? { label: action.label } : {}),
     ...(value !== undefined ? { value } : {}),
     ...(action.scope && !discardScope ? { scope: action.scope } : {}),
@@ -499,6 +520,18 @@ function uiAction(
   if (action.type === 'datetime') return { action: 'setDateTime', ...common };
   if (action.type === 'navigate') return { action: 'navigate', url: action.url, ...common };
   return { action: action.type, ...common };
+}
+
+function genericDraftTarget(action: RecordedAction): RecordedAction['target'] | undefined {
+  const strategy = action.target?.strategy;
+  const deprecated = new Set([
+    ['el', 'form', 'item'].join('-'), ['el', 'option'].join('-'),
+    ['el', 'dialog', 'scoped'].join('-'), ['el', 'table', 'cell'].join('-'),
+  ]);
+  if (!strategy || !deprecated.has(strategy)) return action.target;
+  return action.label
+    ? { strategy: 'label', label: action.label, kind: action.type === 'select' ? 'select' : 'input' }
+    : undefined;
 }
 
 function dependencyExtracts(

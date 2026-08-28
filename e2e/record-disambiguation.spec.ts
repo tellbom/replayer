@@ -18,6 +18,7 @@ test('真 LOW 场景（双同名按钮）触发回调并替换为 scoped HIGH', 
   let stop!: () => void;
   const stopSignal = new Promise<void>((r) => { stop = r; });
   const session = await record({
+    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('rec-low'),
@@ -69,6 +70,7 @@ test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browser
   let stop!: () => void;
   const stopSignal = new Promise<void>((r) => { stop = r; });
   const session = await record({
+    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('rec'),
@@ -119,6 +121,7 @@ test('快速连续点击的两个 LOW 动作分别持有自己的 oracle', async
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
   await record({
+    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('rec-race'),

@@ -155,12 +155,13 @@ function targetWithHint(
 }
 
 function labelFor(element: Element): string | undefined {
-  return element
-    .closest('.el-form-item')
-    ?.querySelector('.el-form-item__label')
-    ?.textContent?.replace(/[：:*＊]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement) {
+    const direct = [...(element.labels ?? [])].map((label) => label.textContent?.trim()).find(Boolean);
+    if (direct) return direct;
+  }
+  const labelledBy = element.getAttribute('aria-labelledby')?.split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? '').join(' ').trim();
+  return element.getAttribute('aria-label')?.trim() || labelledBy || undefined;
 }
 
 function semanticFieldLabel(element: Element): string | undefined {
@@ -250,24 +251,10 @@ document.addEventListener(
       return;
     }
 
-    const option = target.closest('.el-select-dropdown__item');
-    if (option) {
-      const text = option.textContent?.trim() ?? '';
-      emit({
-        type: 'select',
-        label: openSelectLabel,
-        value: text,
-        text,
-        ...targetWithHint('select', option),
-      }, option, 'select');
-      openSelectLabel = null;
-      return;
-    }
-
-    const select = target.closest('.el-select');
+    const select = nearbyCombobox(target);
     if (select) {
-      openSelectLabel = labelFor(select) ?? null;
-      const combobox = select.querySelector('[role="combobox"]') ?? select;
+      const combobox = select.matches('[role="combobox"]') ? select : select.querySelector('[role="combobox"]') ?? select;
+      openSelectLabel = labelFor(combobox) ?? null;
       emit({
         type: 'click',
         label: openSelectLabel ?? undefined,
@@ -290,6 +277,18 @@ document.addEventListener(
   true,
 );
 
+function nearbyCombobox(target: Element): Element | null {
+  const direct = target.closest('[role="combobox"], [aria-haspopup="listbox"]');
+  if (direct) return direct;
+  let ancestor: Element | null = target;
+  for (let depth = 0; ancestor && depth < 4; depth += 1, ancestor = ancestor.parentElement) {
+    if (ancestor.matches('form, main, body')) break;
+    const candidate = ancestor.querySelector('[role="combobox"]');
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
 function isTextInput(element: EventTarget | null): element is HTMLInputElement | HTMLTextAreaElement {
   if (element instanceof HTMLTextAreaElement) return true;
   if (!(element instanceof HTMLInputElement)) return false;
@@ -302,13 +301,12 @@ document.addEventListener(
     if (Reflect.get(window, '__DSH_RECORDING__') !== true) return;
     const target = event.target;
     if (!isTextInput(target)) return;
-    const dateEditor = target.closest('.el-date-editor');
-    const actionType = dateEditor ? 'datetime' : 'fill';
+    const actionType = isDateValue(target.value) ? 'datetime' : 'fill';
     const details = {
       type: actionType,
       label: labelFor(target),
       value: target.value,
-      ...targetWithHint(dateEditor ? 'datetime' : 'fill', target),
+      ...targetWithHint(actionType === 'datetime' ? 'datetime' : 'fill', target),
     };
     const active = beginActiveAction(target, 'input', target.value, details.target, true);
     recordWithActionIdx(active.actionIdx, details, active.startedAt);
@@ -372,7 +370,7 @@ document.addEventListener(
       return;
     }
     if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) return;
-    const dateEditor = target.closest('.el-date-editor');
+    const dateEditor = isDateValue(target.value);
     const action = {
       type: dateEditor ? 'datetime' : 'fill',
       label: labelFor(target),
@@ -424,6 +422,10 @@ function scanInitialFormState(): void {
 Reflect.set(window, '__DSH_INITIAL_FORM_STATE__', scanInitialFormState);
 new MutationObserver(scanInitialFormState).observe(document.documentElement, { childList: true, subtree: true });
 queueMicrotask(scanInitialFormState);
+
+function isDateValue(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$/.test(value);
+}
 
 let initialNavigationEmitted = false;
 const emitInitialNavigation = (): void => {

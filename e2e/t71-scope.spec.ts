@@ -16,6 +16,7 @@ test('T-71 录制后处理把动态 dialog、table-row、listbox 转成 scoped H
   let llmCalls = 0;
 
   const session = await record({
+    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir,
     outDir: testInfo.outputPath('record'),

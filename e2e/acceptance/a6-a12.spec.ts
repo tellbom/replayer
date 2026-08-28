@@ -13,7 +13,7 @@ import { stringify } from 'yaml';
 import { login } from '../helpers';
 import { oaEntry, seedProfile } from '../fixture';
 
-const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
+const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 const snapshotScript = await readFile('packages/locator/dist/snapshot.iife.js', 'utf8');
 const auth = {
   probeUrl: '/home', sessionApi: '/api/session?_nodelay=1', loggedInJsonPath: '$.loggedIn',

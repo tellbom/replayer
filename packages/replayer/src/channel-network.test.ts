@@ -1,6 +1,6 @@
 import type { Entry, ExecContext, ParamDefinition, Step } from '@dsh/core';
 import type { Page } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { executeNetworkStep, readJsonPath } from './channel-network.js';
 
@@ -23,6 +23,7 @@ const testEntry: Entry = {
 };
 
 describe('executeNetworkStep', () => {
+  afterEach(() => vi.unstubAllGlobals());
   it.each([
     [{ known: 'ok', extra: false }, [{ name: 'known', type: 'string', required: true }], 'UnknownParameterError'],
     [{}, [{ name: 'known', type: 'string', required: true }], 'MissingParameterError'],
@@ -78,6 +79,58 @@ describe('executeNetworkStep', () => {
     }, []);
 
     expect(result).toMatchObject({ outcome: 'not_sent', channelUsed: 'network' });
+    expect(result.error).toContain('UnsupportedMultipartError');
+  });
+
+  it('sends reconstructable text-only multipart through browser FormData', async () => {
+    let sentBody: BodyInit | null | undefined;
+    let sentHeaders: Headers | undefined;
+    vi.stubGlobal('fetch', async (_url: URL, init: RequestInit) => {
+      sentBody = init.body;
+      sentHeaders = init.headers as Headers;
+      return new Response('{}', { status: 200 });
+    });
+    const page = {
+      evaluate: async (fn: (arg: never) => unknown, arg: never) => fn(arg),
+    } as unknown as Page;
+    const step: Step = {
+      id: 'text-multipart', desc: 'text multipart', channel: 'network', riskLevel: 'write', hasSideEffect: true,
+      requires: [],
+      network: {
+        method: 'POST', url: '/submit', contentType: 'json',
+        headers: { 'Content-Type': 'multipart/form-data; boundary=recorded-boundary' },
+        body: { title: 'alpha', count: 2, enabled: true },
+      },
+    };
+
+    const result = await executeNetworkStep(page, step, {
+      params: {}, vars: {}, stepResults: {}, baseUrl: 'http://oa', entry: testEntry,
+      identityDigest: '', scopes: {},
+    }, []);
+
+    expect(result.outcome).toBe('confirmed_success');
+    expect(sentBody).toBeInstanceOf(FormData);
+    expect(Object.fromEntries((sentBody as FormData).entries())).toEqual({
+      title: 'alpha', count: '2', enabled: 'true',
+    });
+    expect(sentHeaders?.has('content-type')).toBe(false);
+  });
+
+  it('keeps file-like multipart carriers not_sent', async () => {
+    const step: Step = {
+      id: 'file-multipart', desc: 'file multipart', channel: 'network', riskLevel: 'write', hasSideEffect: true,
+      requires: [],
+      network: {
+        method: 'POST', url: '/submit', contentType: 'json',
+        headers: { 'Content-Type': 'multipart/form-data' },
+        body: { file: { name: 'document.bin', size: 10, type: 'application/octet-stream' } },
+      },
+    };
+    const result = await executeNetworkStep({} as Page, step, {
+      params: {}, vars: {}, stepResults: {}, baseUrl: 'http://oa', entry: testEntry,
+      identityDigest: '', scopes: {},
+    }, []);
+    expect(result.outcome).toBe('not_sent');
     expect(result.error).toContain('UnsupportedMultipartError');
   });
 

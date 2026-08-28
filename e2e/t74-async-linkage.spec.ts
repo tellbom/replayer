@@ -8,7 +8,7 @@ import { executeUiStep } from '../packages/replayer/src/channel-ui.js';
 import { oaEntry } from './fixture.js';
 import { login } from './helpers.js';
 
-const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
+const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 
 test('T-74 录制选择联动时推导请求与审批人非空等待', async ({ browserName }, testInfo) => {
   test.setTimeout(120_000);

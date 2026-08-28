@@ -6,8 +6,10 @@ import { readFile } from 'node:fs/promises';
 import { login } from './helpers';
 
 const snapshotScript = await readFile('packages/locator/dist/snapshot.iife.js', 'utf8');
+const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript({ content: locatorScript });
   await page.addInitScript({ content: snapshotScript });
   await login(page);
   await page.goto('/overtime/apply');

@@ -16,6 +16,7 @@ test('T-72 同名 section 按钮由规则化祖先提升为 HIGH，且不调用 
   let llmCalls = 0;
 
   const session = await record({
+    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir,
     outDir: testInfo.outputPath('record'),
@@ -63,12 +64,12 @@ test('T-72 同名 section 按钮由规则化祖先提升为 HIGH，且不调用 
   console.log(JSON.stringify({ originalConfidence, promoted: action?.target, llmCalls }));
 });
 
-test('T-72 支持具名 role、fieldset 与 Element 容器规则', async ({ page }) => {
+test('T-72 支持具名 role 与 fieldset 通用容器规则', async ({ page }) => {
   await page.setContent(`
     <button>搜索</button>
     <div role="region" aria-label="订单管理"><button id="role-target">搜索</button></div>
     <fieldset><legend>客户资料</legend><button id="fieldset-target">搜索</button></fieldset>
-    <div class="el-card"><div class="el-card__header">风险信息</div><button id="card-target">搜索</button></div>`);
+    <div role="region" aria-label="风险信息"><button id="card-target">搜索</button></div>`);
   await page.addScriptTag({ content: await readFile('packages/locator/dist/pw-selector-generator.iife.js', 'utf8') });
   await page.addScriptTag({ content: await readFile('packages/locator/dist/ancestor-scope.iife.js', 'utf8') });
 
@@ -80,6 +81,6 @@ test('T-72 支持具名 role、fieldset 与 Element 容器规则', async ({ page
   expect(selectors).toEqual([
     'internal:role=region[name="订单管理"i]',
     'fieldset:has-text("客户资料")',
-    '.el-card:has-text("风险信息")',
+    'internal:role=region[name="风险信息"i]',
   ]);
 });

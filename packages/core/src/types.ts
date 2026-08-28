@@ -1,7 +1,14 @@
+import type { CanonicalAction } from './ir.js';
+
 export type LocatorStrategy =
+  | { strategy: 'label'; label: string; kind: ControlKind }
+  /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
   | { strategy: 'el-form-item'; label: string; kind: ControlKind }
+  /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
   | { strategy: 'el-option'; text: string; ownerLabel: string }
+  /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
   | { strategy: 'el-dialog-scoped'; dialogTitle: string; inner: LocatorStrategy }
+  /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
   | { strategy: 'el-table-cell'; rowAnchorText: string; buttonText: string }
   | { strategy: 'text'; text: string; exact?: boolean; nth?: number }
   | { strategy: 'role'; role: string; name: string }
@@ -69,6 +76,12 @@ export interface RecordSession {
     identityChanged?: boolean;
   };
   actions: RecordedAction[];
+  /** Canonical capture truth source. Present only for recorderPath=canonical. */
+  canonicalActions?: CanonicalAction[];
+  /** Legacy actions are one-way derived shadow data when this is canonical. */
+  recorderPath?: 'legacy' | 'canonical';
+  /** Loss ledger for the temporary canonical-to-legacy shadow derivation. */
+  _notes?: string[];
   network: RecordedRequest[];
   pages: { ts: number; url: string; title: string }[];
   interruptions?: SessionInterrupt[];
@@ -257,7 +270,7 @@ declare global {
       robustClick(element: HTMLElement): void;
       setInputValue(element: HTMLElement, value: string): void;
       waitFor<T>(fn: () => T, timeout?: number): Promise<T>;
-      version(): 'element-plus' | 'element-ui';
+      version(): 'generic';
     };
     __DSH_SNAPSHOT__: () => string;
     __DSH_PWGEN__: (element: Element) => {
@@ -277,6 +290,11 @@ declare global {
     __DSH_MUTATION__: {
       begin(actionIdx: number): void;
       end(actionIdx: number, settleMs?: number): Promise<AppearedRoot[]>;
+      endWithStates(actionIdx: number, settleMs?: number): Promise<Array<{
+        locator: LocatorStrategy;
+        before?: import('./ir.js').ElementState;
+        after?: import('./ir.js').ElementState;
+      }>>;
       deriveScope(
         producerActionIdx: number,
         target: Element,

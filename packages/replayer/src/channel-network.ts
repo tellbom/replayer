@@ -2,7 +2,7 @@ import {
   TIMEOUTS,
   UnsupportedMultipartError,
   assertNoUnresolvedValue,
-  requestUsesMultipart,
+  classifyMultipartCarrier,
   resolveTemplate,
   validateExecutionParams,
 } from '@dsh/core';
@@ -33,7 +33,7 @@ export async function executeNetworkStep(
     validateExecutionParams(params, context.params);
     requests = expandRequests(step.network, context, params);
     requests.forEach((request) => new URL(request.url, context.baseUrl));
-    if (requests.some(requestUsesMultipart)) {
+    if (requests.some((request) => classifyMultipartCarrier(request) === 'unsupported')) {
       throw new UnsupportedMultipartError(
         '当前 network 执行器没有可验证的 multipart 字段或文件载体，已在请求发出前中止。',
       );
@@ -191,9 +191,18 @@ async function browserFetch(
         if (authorization && !headers.has('authorization')) {
           headers.set('authorization', authorization);
         }
-        let body: string | undefined;
+        let body: BodyInit | undefined;
         if (spec.body) {
-          if (spec.contentType === 'form') {
+          const multipart = /^multipart\/form-data(?:;|$)/i.test(headers.get('content-type')?.trim() ?? '');
+          if (multipart) {
+            headers.delete('content-type');
+            const form = new FormData();
+            for (const [key, value] of Object.entries(spec.body)) {
+              const values = Array.isArray(value) ? value : [value];
+              for (const item of values) form.append(key, item === null ? '' : String(item));
+            }
+            body = form;
+          } else if (spec.contentType === 'form') {
             headers.set('content-type', 'application/x-www-form-urlencoded');
             body = new URLSearchParams(
               Object.entries(spec.body).map(([key, value]) => [key, String(value)]),

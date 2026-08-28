@@ -57,12 +57,15 @@ test('record e2e: 脚本化加班流程产出完整录制', async () => {
     'navigate',
     'click',
     'select',
-    'datetime',
-    'datetime',
+    'fill',
+    'fill',
     'fill',
     'click',
     'click',
   ]);
+  expect(stored.recorderPath).toBe('canonical');
+  expect(stored.canonicalActions?.length).toBeGreaterThanOrEqual(stored.actions.length);
+  expect(stored.canonicalActions?.every((action) => action.raw.eventTypes.length > 0)).toBe(true);
   const approver = stored.network.find((request) => request.url.includes('/overtime/approver'));
   const submit = stored.network.find((request) => request.url.includes('/overtime/submit'));
   expect(approver?.sanitizeMode).toBe('structured');

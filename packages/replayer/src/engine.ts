@@ -10,7 +10,7 @@ import {
   resolveTemplate,
   assertNoUnresolvedExecutableValues,
   validateExecutionParams,
-  requestUsesMultipart,
+  classifyMultipartCarrier,
   SemanticDriftError,
   SkillNeedsRerecordError,
   ScopeNotReadyError,
@@ -436,7 +436,7 @@ async function executeUiFallback(
 
 export function assertUiFallbackCarrier(skill: Skill, step: Step): void {
   if (!step.network) return;
-  if (requestUsesMultipart(step.network)) {
+  if (classifyMultipartCarrier(step.network) === 'unsupported') {
     throw new ChannelCarrierMissingError(
       `步骤 ${step.id} 的 multipart 字段或文件在 UI 降级后无载体。` +
       '已中止以避免提交空请求体。',

@@ -10,7 +10,7 @@ import { stringify } from 'yaml';
 import { login } from './helpers';
 import { oaEntry } from './fixture';
 
-const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
+const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript({ content: locatorScript });

@@ -2,7 +2,9 @@ import { parse } from 'yaml';
 import { z } from 'zod';
 
 import { assertNoPlainCredentials } from './sanitize.js';
-import { SchemaViolationError, UnresolvedValueError } from './errors.js';
+import {
+  ExecutableValueTraversalError, SchemaViolationError, UnresolvedValueError,
+} from './errors.js';
 import { assertNoUnresolvedExecutableValues, unresolvedSchemaError } from './safety.js';
 import type { ControlKind, LocatorStrategy, RecordedHint } from './types.js';
 
@@ -19,17 +21,22 @@ export const ControlKindSchema: z.ZodType<ControlKind> = z.enum([
 
 export const LocatorStrategySchema: z.ZodType<LocatorStrategy> = z.lazy(() =>
   z.discriminatedUnion('strategy', [
+    z.object({ strategy: z.literal('label'), label: z.string(), kind: ControlKindSchema }),
+    /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
     z.object({ strategy: z.literal('el-form-item'), label: z.string(), kind: ControlKindSchema }),
+    /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
     z.object({
       strategy: z.literal('el-option'),
       text: z.string(),
       ownerLabel: z.string(),
     }),
+    /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
     z.object({
       strategy: z.literal('el-dialog-scoped'),
       dialogTitle: z.string(),
       inner: LocatorStrategySchema,
     }),
+    /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
     z.object({
       strategy: z.literal('el-table-cell'),
       rowAnchorText: z.string(),
@@ -443,6 +450,9 @@ export function parseSkill(yamlText: string, entryResolver: (id: string) => Entr
     assertNoUnresolvedExecutableValues(raw);
   } catch (error) {
     if (error instanceof UnresolvedValueError) throw unresolvedSchemaError(error);
+    if (error instanceof ExecutableValueTraversalError) {
+      throw new SchemaViolationError(error.message, { cause: error });
+    }
     throw error;
   }
   const skill = SkillSchema.parse(raw);

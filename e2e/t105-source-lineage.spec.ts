@@ -19,7 +19,7 @@ entry:
   identityProbe: { url: /identity, jsonPath: $.principal, requiresAuth: true }
   sessionHolding: { strategy: daemon, probeIntervalMs: 30000, stateTtlMs: 1800000 }
 `);
-const locatorScript = await readFile('packages/locator/dist/el-locator.iife.js', 'utf8');
+const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 
 test('T-105 keeps two source lineages separate through UI, network, and stored record', async ({ page }) => {
   await page.addInitScript({ content: locatorScript });
@@ -67,6 +67,31 @@ test('T-105 keeps two source lineages separate through UI, network, and stored r
   expect(await page.locator('#first').inputValue()).toBe('runtime-first');
   expect(await page.locator('#second').inputValue()).toBe('runtime-second');
   expect(stored).toEqual([{ first: 'runtime-first', second: 'runtime-second' }]);
+
+  // Reproduce the pre-fix failure shape: two distinct source lineages were
+  // collapsed onto one parameter. The write is still executable and accepted,
+  // which makes the defect a silent wrong-data path rather than a safe failure.
+  const incorrectlyMergedStep = {
+    id: 's-merged-write',
+    name: 'reproduce incorrectly merged write',
+    network: {
+      method: 'POST' as const,
+      url: '/records',
+      headers: { 'content-type': 'application/json' },
+      body: { first: '{{shared}}', second: '{{shared}}' },
+    },
+  };
+  const mergedContext: ExecContext = {
+    ...context,
+    params: { shared: 'runtime-merged' },
+  };
+  const mergedResult = await executeNetworkStep(page, incorrectlyMergedStep, mergedContext, [{
+    name: 'shared',
+    type: 'string',
+    required: true,
+  }]);
+  expect(mergedResult.ok).toBe(true);
+  expect(stored[1]).toEqual({ first: 'runtime-merged', second: 'runtime-merged' });
 });
 
 function recording(): RecordSession {

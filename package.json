@@ -15,7 +15,7 @@
     "lint": "eslint . --ext .ts,.mts,.js,.mjs",
     "e2e": "playwright test",
     "dsh": "node packages/cli/dist/index.js",
-    "check:constraints": "node scripts/check-constraints.mjs",
+    "check:constraints": "node scripts/check-constraints.mjs && node scripts/check-no-framework-specifics.mjs && node scripts/check-package-boundaries.mjs",
     "audit:network": "node scripts/audit/network-health.mjs",
     "audit:channels": "node scripts/audit/channel-distribution.mjs",
     "audit:dependency": "node scripts/audit/dependency-trap.mjs"

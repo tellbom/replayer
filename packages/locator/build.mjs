@@ -8,8 +8,9 @@ const VENDOR_TSCONFIG = '../../vendor/playwright-injected/1.62.1/tsconfig.json';
 await rm('dist/selector-generator.iife.js', { force: true });
 
 const entries = [
-  ['el-locator', 'src/el-locator.ts'],
+  ['dom-locator', 'src/dom-locator.ts'],
   ['recorder-probe', 'src/recorder-probe.ts'],
+  ['canonical-recorder-probe', 'src/canonical-recorder-probe.ts'],
   ['snapshot', 'src/snapshot.ts'],
   ['mutation-tracker', 'src/mutation-tracker.ts'],
   ['ancestor-scope', 'src/ancestor-scope.ts'],

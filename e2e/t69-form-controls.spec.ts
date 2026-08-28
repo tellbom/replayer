@@ -12,6 +12,7 @@ test('T-69 G1-G5: no-id 表单控件走正式录制链路', async ({ browserName
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
   const session = await record({
+    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('record'),

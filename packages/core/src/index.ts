@@ -1,5 +1,6 @@
 export * from './constants.js';
 export * from './errors.js';
+export * from './ir.js';
 export * from './sanitize.js';
 export * from './schema.js';
 export * from './safety.js';

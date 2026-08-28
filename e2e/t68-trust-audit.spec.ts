@@ -13,6 +13,7 @@ test('T-68 A2/A3: 正式录制链路重跑 no-id 六场景并输出完整 option
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
   const session = await record({
+    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('record'),

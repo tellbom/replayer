@@ -6,6 +6,7 @@
   "exports": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
+    "@dsh/analyzer": "0.0.0",
     "@dsh/browser": "0.0.0",
     "@dsh/core": "0.0.0",
     "playwright": "^1.50.0"

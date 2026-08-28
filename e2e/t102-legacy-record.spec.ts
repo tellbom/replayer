@@ -71,6 +71,7 @@ test('T-102 records a native form redirect and produces a guarded page-scoped dr
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
   await record({
+    recorderPath: 'legacy',
     entry, profileDir, outDir, headless: true, stopSignal,
     onReady: async (page) => {
       await page.goto('http://localhost:4100/form/apply');

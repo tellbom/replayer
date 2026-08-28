@@ -167,7 +167,7 @@ async function readUiCarrier(page: Page, action: UiAction, context: ExecContext)
         : spec.action === 'setDateTime' ? 'datepicker'
           : undefined);
     const target = spec.target ?? (spec.label && inferredKind
-      ? { strategy: 'el-form-item' as const, label: spec.label, kind: inferredKind }
+      ? { strategy: 'label' as const, label: spec.label, kind: inferredKind }
       : undefined);
     if (!target) return undefined;
     const element = await window.__DSH_LOCATOR__.resolve(target);
@@ -275,21 +275,24 @@ async function runAction(
     if (!action.url) throw new Error('navigate action requires url');
     await page.goto(new URL(action.url, page.url()).href);
   } else if (action.action === 'click' && action.target?.strategy === 'playwright') {
-    await (await resolvePlaywrightTarget(page, action, context)).click();
+    await activatePlaywrightTarget(await resolvePlaywrightTarget(page, action, context));
   } else if (action.action === 'fill' && action.target?.strategy === 'playwright') {
     if (action.value === undefined) throw new Error('fill requires value');
-    await (await resolvePlaywrightTarget(page, action, context)).fill(action.value);
+    await fillWithStandardIdlFallback(await resolvePlaywrightTarget(page, action, context), action.value);
   } else if (action.action === 'click' && action.target?.strategy === 'frame-playwright') {
     await (await resolvePlaywrightTarget(page, action, context)).click();
   } else if (action.action === 'fill' && action.target?.strategy === 'frame-playwright') {
     if (action.value === undefined) throw new Error('fill requires value');
-    await (await resolvePlaywrightTarget(page, action, context)).fill(action.value);
+    await fillWithStandardIdlFallback(await resolvePlaywrightTarget(page, action, context), action.value);
   } else if (action.action === 'selectOption' && action.target?.strategy === 'playwright') {
     if (action.value === undefined) throw new Error('selectOption requires value');
     const locator = await resolvePlaywrightTarget(page, action, context);
     const nativeSelect = await locator.evaluate((element) => element instanceof HTMLSelectElement);
     if (nativeSelect) await locator.selectOption(action.value);
-    else await locator.click();
+    else {
+      await activatePlaywrightTarget(locator);
+      await page.getByRole('option', { name: action.value, exact: true }).click();
+    }
   } else if (action.action === 'check' && action.target?.strategy === 'playwright') {
     const locator = await resolvePlaywrightTarget(page, action, context);
     if (action.checked === false) await locator.uncheck();
@@ -303,20 +306,17 @@ async function runAction(
         name: action.target.name,
         exact: true,
       })
-      .first()
       .click();
   } else if (action.action === 'click' && action.target?.strategy === 'text') {
-    await page
-      .getByText(action.target.text, { exact: action.target.exact !== false })
-      .nth(action.target.nth ?? 0)
-      .click();
+    const locator = page.getByText(action.target.text, { exact: action.target.exact !== false });
+    await (action.target.nth === undefined ? locator : locator.nth(action.target.nth)).click();
   } else {
     await page.evaluate(async (spec) => {
       const locator = window.__DSH_LOCATOR__;
       const target =
         spec.target ??
         (spec.label && spec.kind
-          ? { strategy: 'el-form-item' as const, label: spec.label, kind: spec.kind }
+          ? { strategy: 'label' as const, label: spec.label, kind: spec.kind }
           : undefined);
 
       if (spec.action === 'selectOption') {
@@ -369,7 +369,7 @@ async function runAction(
   }
   return page.evaluate(async (spec) => {
     const target =
-      spec.target ?? ({ strategy: 'el-form-item', label: spec.label!, kind: spec.kind! } as const);
+      spec.target ?? ({ strategy: 'label', label: spec.label!, kind: spec.kind! } as const);
     const element = await window.__DSH_LOCATOR__.resolve(target);
     const value =
       element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
@@ -387,6 +387,42 @@ async function runAction(
       }),
     );
   }, action);
+}
+
+async function activatePlaywrightTarget(locator: Locator): Promise<void> {
+  const customCombobox = await locator.evaluate((element) =>
+    !(element instanceof HTMLSelectElement)
+    && (element.getAttribute('role') === 'combobox' || element.getAttribute('aria-haspopup') === 'listbox'));
+  if (customCombobox) {
+    await locator.press('ArrowDown');
+    return;
+  }
+  await locator.click();
+}
+
+async function fillWithStandardIdlFallback(locator: Locator, value: string): Promise<void> {
+  const readonly = await locator.evaluate((element) =>
+    (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) && element.readOnly);
+  if (!readonly) { await locator.fill(value); return; }
+  await locator.waitFor({ state: 'visible' });
+  if (!(await locator.isEnabled())) throw new Error('readonly IDL target is disabled');
+  const firstBox = await locator.boundingBox();
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  const secondBox = await locator.boundingBox();
+  if (!firstBox || !secondBox || JSON.stringify(firstBox) !== JSON.stringify(secondBox)) {
+    throw new Error('readonly IDL target is not stable');
+  }
+  await locator.evaluate((element, nextValue) => {
+    if (!(element instanceof HTMLInputElement) && !(element instanceof HTMLTextAreaElement)) {
+      throw new Error('IDL value target must be input or textarea');
+    }
+    const prototype = element instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+    if (!setter) throw new Error('browser value setter unavailable');
+    setter.call(element, nextValue);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
 }
 
 async function resolvePlaywrightTarget(
@@ -408,10 +444,6 @@ async function resolvePlaywrightTarget(
             action.target.selector,
           )
         : page.locator(action.target.selector);
-  const count = await locator.count();
-  if (count !== 1) {
-    throw new LocatorNotFoundError(`目标必须唯一命中，实际 ${count}: ${action.target.selector}`);
-  }
   return locator;
 }
 
@@ -426,8 +458,6 @@ async function registerScope(page: Page, step: Step, context: ExecContext): Prom
   } catch (error) {
     throw new ScopeNotReadyError(`${produces.scopeId}: ${String(error)}`, { cause: error });
   }
-  const count = await locator.count();
-  if (count !== 1) throw new ScopeNotReadyError(`${produces.scopeId} 命中 ${count} 个容器`);
   context.scopes[produces.scopeId] = produces;
   if (step.waitAfter?.settleMs) await page.waitForTimeout(step.waitAfter.settleMs);
 }
@@ -442,9 +472,8 @@ function rootLocator(page: Page, strategy: LocatorStrategy | undefined, scopeId:
     });
   }
   if (strategy.strategy === 'text') {
-    return page
-      .getByText(strategy.text, { exact: strategy.exact !== false })
-      .nth(strategy.nth ?? 0);
+    const locator = page.getByText(strategy.text, { exact: strategy.exact !== false });
+    return strategy.nth === undefined ? locator : locator.nth(strategy.nth);
   }
   if (strategy.strategy === 'css') return page.locator(strategy.selector);
   throw new ScopeNotReadyError(`${scopeId} 不支持 root strategy=${strategy.strategy}`);
@@ -452,7 +481,7 @@ function rootLocator(page: Page, strategy: LocatorStrategy | undefined, scopeId:
 
 function shortcutTarget(action: UiAction): LocatorStrategy | undefined {
   return action.label && action.kind
-    ? { strategy: 'el-form-item', label: action.label, kind: action.kind }
+    ? { strategy: 'label', label: action.label, kind: action.kind }
     : undefined;
 }
 

@@ -1,6 +1,7 @@
 import { acquireDSHContext, ensureEntry, probeSession, settleNavigation } from '@dsh/browser';
-import { ENUM_CAPTURE, createSanitizer } from '@dsh/core';
-import type { ActiveAction, Entry } from '@dsh/core';
+import { downgradeToLegacyActions } from '@dsh/analyzer';
+import { CANONICAL_CAPTURE, ENUM_CAPTURE, createSanitizer } from '@dsh/core';
+import type { ActiveAction, CanonicalAction, Entry } from '@dsh/core';
 import type {
   PageSnapshot, RecordSession, RecordedAction, RecordedFormState, RecordedRequest, SessionInterrupt,
 } from '@dsh/core';
@@ -11,6 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { BrowserContext, Page } from 'playwright';
 
 import { startNetworkRecording } from './network.js';
+import { finalizeCanonicalActions } from './canonical.js';
 
 export interface RecordOptions {
   /** 【v2.0】entry 配置：录制起点恒为已建立的子系统会话（C16） */
@@ -24,6 +26,7 @@ export interface RecordOptions {
   onReady?: (page: Page) => Promise<void>;
   /** 从 CLI 已确认的 partial 快照继续；登录与身份仍重新校验。 */
   resumeSession?: RecordSession;
+  recorderPath?: 'legacy' | 'canonical';
   /**
    * 【T-67b】录制期消歧回调。playwright 引擎产物为 LOW（位置依赖）时触发，
    * 传入页面、原元素句柄与局部上下文；回调返回经 Playwright 再验证的
@@ -81,7 +84,12 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const entrySession = await ensureEntry(page, opts.entry);
   const baseUrl = new URL(page.url()).origin;
 
-  const actions: RecordedAction[] = [...(opts.resumeSession?.actions ?? [])];
+  const recorderPath = opts.recorderPath ?? 'canonical';
+  const actions: RecordedAction[] = recorderPath === 'legacy' ? [...(opts.resumeSession?.actions ?? [])] : [];
+  const canonicalActions: CanonicalAction[] = recorderPath === 'canonical'
+    ? [...(opts.resumeSession?.canonicalActions ?? [])]
+    : [];
+  const canonicalActionByIdx = new Map(canonicalActions.map((action) => [action.actionIdx, action]));
   const initialFormState: RecordedFormState[] = [...(opts.resumeSession?.initialFormState ?? [])];
   const pageSnapshots: PageSnapshot[] = [...(opts.resumeSession?.pageSnapshots ?? [])];
   const interruptions: SessionInterrupt[] = [...(opts.resumeSession?.interruptions ?? [])];
@@ -255,10 +263,30 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
           };
     },
   );
+  await page.exposeBinding(
+    '__DSH_CANONICAL_RECORD__',
+    (_source, emitted: CanonicalAction) => {
+      if (!recordingEnabled || recorderPath !== 'canonical') return;
+      if (emitted.kind === 'navigate') {
+        browserActionKeys.clear();
+        latestBrowserActions.clear();
+      }
+      const actionIdx = resolveCanonicalActionIndex(emitted.actionIdx, emitted.timestamp);
+      const normalized = { ...emitted, actionIdx, id: `a${actionIdx}-${emitted.timestamp}` };
+      const existing = canonicalActionByIdx.get(actionIdx);
+      if (existing) Object.assign(existing, normalized);
+      else {
+        canonicalActions.push(normalized);
+        canonicalActionByIdx.set(actionIdx, normalized);
+      }
+      const derived = downgradeToLegacyActions(canonicalActions);
+      actions.splice(0, actions.length, ...derived);
+    },
+  );
   await page.exposeBinding('__DSH_RECORD_INITIAL_STATE__', (_source, state: RecordedFormState) => {
     initialFormState.push(state);
   });
-  const reinjectRecorderProbe = await installRecorderProbe(page);
+  const reinjectRecorderProbe = await installRecorderProbe(page, recorderPath);
   const startedAt = opts.resumeSession?.meta.startedAt ?? new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
   const pageCandidatePools: PageSnapshot[] = [];
@@ -302,6 +330,8 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       userAgent,
       entryId: opts.entry.entry.id,
       actions,
+      canonicalActions,
+      recorderPath,
       initialFormState,
       network: [...previousNetwork, ...networkRecording.records],
       pages,
@@ -371,12 +401,30 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     throw error;
   }
   clearInterval(partialTimer);
+  if (recorderPath === 'canonical') {
+    await tolerateNavigation(page, () => page.evaluate(async () => {
+      const flush = Reflect.get(window, '__DSH_CANONICAL_FLUSH__');
+      if (typeof flush === 'function') await flush();
+    }));
+  }
   await partialWrite;
   page.off('domcontentloaded', onDomContentLoaded);
   await Promise.all([...pageTasks]);
   await Promise.all([...mutationTasks.values()]);
   await Promise.all(postProcessTasks);
   const network = [...previousNetwork, ...await networkRecording.stop()];
+  let derivedNotes: string[] | undefined;
+  if (recorderPath === 'canonical') {
+    const finalized = finalizeCanonicalActions(
+      canonicalActions,
+      network,
+      opts.entry.entry.additionalSensitivePatterns ?? [],
+    );
+    canonicalActions.splice(0, canonicalActions.length, ...finalized);
+    const derived = downgradeToLegacyActions(canonicalActions);
+    actions.splice(0, actions.length, ...derived);
+    derivedNotes = [...derived._notes];
+  }
   await inferAsyncWaits(page, actions, network);
   const session: RecordSession = {
     meta: {
@@ -388,6 +436,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       ...(identityChanged ? { identityChanged: true } : {}),
     },
     actions,
+    recorderPath,
+    ...(recorderPath === 'canonical' ? { canonicalActions } : {}),
+    ...(derivedNotes && derivedNotes.length > 0 ? { _notes: derivedNotes } : {}),
     ...(initialFormState.length > 0 ? { initialFormState } : {}),
     network,
     pages,
@@ -727,6 +778,8 @@ interface PartialSnapshotInput {
   userAgent: string;
   entryId: string;
   actions: RecordedAction[];
+  canonicalActions: CanonicalAction[];
+  recorderPath: 'legacy' | 'canonical';
   initialFormState: RecordedFormState[];
   network: RecordSession['network'];
   pages: RecordSession['pages'];
@@ -746,7 +799,11 @@ async function writePartialSnapshot(input: PartialSnapshotInput): Promise<void> 
       entryId: input.entryId,
       ...(input.identityChanged ? { identityChanged: true } : {}),
     },
-    actions: input.actions,
+    actions: input.recorderPath === 'canonical'
+      ? downgradeToLegacyActions(input.canonicalActions)
+      : input.actions,
+    recorderPath: input.recorderPath,
+    ...(input.recorderPath === 'canonical' ? { canonicalActions: input.canonicalActions } : {}),
     ...(input.initialFormState.length > 0 ? { initialFormState: input.initialFormState } : {}),
     network: input.network,
     pages: input.pages,
@@ -801,9 +858,15 @@ async function showSessionNotice(page: Page, text: string): Promise<void> {
 
 async function installRecorderProbe(
   page: Page,
+  recorderPath: 'legacy' | 'canonical',
 ): Promise<() => Promise<void>> {
   const probePath = fileURLToPath(
-    new URL('../../locator/dist/recorder-probe.iife.js', import.meta.url),
+    new URL(
+      recorderPath === 'canonical'
+        ? '../../locator/dist/canonical-recorder-probe.iife.js'
+        : '../../locator/dist/recorder-probe.iife.js',
+      import.meta.url,
+    ),
   );
   const probe = await readFile(probePath, 'utf8');
   const pwgenPath = fileURLToPath(
@@ -830,6 +893,21 @@ async function installRecorderProbe(
     (maxOptions) => Reflect.set(window, '__DSH_ENUM_MAX_OPTIONS__', maxOptions),
     ENUM_CAPTURE.maxOptions,
   );
+  await page.addInitScript(
+    (milliseconds) => Reflect.set(window, '__DSH_CANONICAL_SETTLE_MS__', milliseconds),
+    CANONICAL_CAPTURE.mutationSettleMs,
+  );
+  await page.evaluate(
+    (milliseconds) => Reflect.set(window, '__DSH_CANONICAL_SETTLE_MS__', milliseconds),
+    CANONICAL_CAPTURE.mutationSettleMs,
+  );
+  for (const [name, value] of [
+    ['__DSH_CANONICAL_MAX_AFFECTED__', CANONICAL_CAPTURE.maxAffected],
+    ['__DSH_CANONICAL_MAX_INNER_HTML__', CANONICAL_CAPTURE.maxInnerHTMLLength],
+  ] as const) {
+    await page.addInitScript(({ key, limit }) => Reflect.set(window, key, limit), { key: name, limit: value });
+    await page.evaluate(({ key, limit }) => Reflect.set(window, key, limit), { key: name, limit: value });
+  }
   // 注意：闭包捕获外层变量的 addInitScript 实测不生效（变量不随函数序列化），
   // 必须用参数形式传递
   const installBar = (marker: string): void => {

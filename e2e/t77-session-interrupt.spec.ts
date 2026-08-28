@@ -78,6 +78,7 @@ test('T-77: 同身份登录后续录，登录动作不入库且断点后 scope �
     });
     let scenario!: Promise<void>;
     const session = await record({
+      recorderPath: 'legacy',
       entry: entry(),
       profileDir: fixture.profile,
       outDir: fixture.out,
@@ -175,6 +176,7 @@ test('T-77: 换身份登录立即中止并保留 partial 录制', async () => {
   try {
     let scenario!: Promise<void>;
     const session = await record({
+      recorderPath: 'legacy',
       entry: entry(),
       profileDir: fixture.profile,
       outDir: fixture.out,
