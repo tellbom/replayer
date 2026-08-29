@@ -120,21 +120,21 @@ Record the pre-click accessible name, split reproduction condition, classificati
 - Consumes: `RecordSession.canonicalActions` for canonical sessions and `RecordSession.actions` only for legacy sessions.
 - Produces: Analyzer steps directly from `CanonicalAction`; canonical session `actions` remains empty.
 
-- [ ] **Step 1: Add failing direct-IR naming and binding tests**
+- [x] **Step 1: Add failing direct-IR naming and binding tests**
 
 Use literal CanonicalAction fixtures with accessibleName, labelText, name, before/after, affected, enumOptions, raw events, and requestIds. Assert human names and request leaf templates; never construct expected output with Analyzer helpers.
 
-- [ ] **Step 2: Add five malformed-input tests for C27/C5**
+- [x] **Step 2: Add five malformed-input tests for C27/C5**
 
 Cover missing target, null-like accessible name from untyped input, missing before/after, empty value, and malformed enum evidence. Each must return a draft, retain the action as a step or diagnostic note, and throw no ZodError.
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 Run: `npx vitest run packages/analyzer/src/draft.test.ts packages/analyzer/src/params.test.ts packages/analyzer/src/correlate.test.ts`
 
 Expected: Canonical actions are ignored or produce fallback names; malformed C5 input throws.
 
-- [ ] **Step 4: Introduce an internal normalized Analyzer view without recreating RecordedAction**
+- [x] **Step 4: Introduce an internal normalized Analyzer view without recreating RecordedAction**
 
 ```ts
 interface AnalyzedAction {
@@ -151,19 +151,19 @@ interface AnalyzedAction {
 
 This is an Analyzer view over IR evidence, not a public compatibility contract and not a legacy downgrade.
 
-- [ ] **Step 5: Generate steps for key and unknown actions**
+- [x] **Step 5: Generate steps for key and unknown actions**
 
 `key` emits a keyboard UI action using recorded semantic key evidence. `unknown` emits a replayable click/edit only when raw evidence and target make the operation unambiguous; otherwise it emits a non-executable diagnostic step plus `_notes` containing `TODO_UNRESOLVED`.
 
-- [ ] **Step 6: Remove the bridge and canonical action derivation**
+- [x] **Step 6: Remove the bridge and canonical action derivation**
 
 Delete bridge files/exports/imports. In recorder, canonical callbacks update only `canonicalActions`; `actions` is populated only when `recorderPath === 'legacy'`. Remove recorder→analyzer package dependency.
 
-- [ ] **Step 7: Replace shadow compare with independent count evidence**
+- [x] **Step 7: Replace shadow compare with independent count evidence**
 
 Remove the Phase 1 structural shadow test. Add/report a harness that records the same matrix cells once with legacy and once with canonical and prints independent action counts without aligning structures.
 
-- [ ] **Step 8: Verify Task 2 and enforce the second stop point**
+- [x] **Step 8: Verify Task 2 and enforce the second stop point**
 
 Run Analyzer unit tests, build, constraints, Phase 0/1 focused E2E, and the 19-cell matrix replay. Report replayable count and a concrete cause for every unrecovered cell. If count is below 8, stop before ValueLineage.
 

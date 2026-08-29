@@ -1,5 +1,4 @@
 import { expect, test, type Page } from '@playwright/test';
-import { downgradeToLegacyActions } from '@dsh/analyzer';
 import type { CanonicalAction, RecordedAction } from '@dsh/core';
 import { readFile } from 'node:fs/promises';
 
@@ -9,27 +8,19 @@ const visibleHintScript = await readFile('packages/locator/dist/visible-hint.iif
 const legacyScript = await readFile('packages/locator/dist/recorder-probe.iife.js', 'utf8');
 const canonicalScript = await readFile('packages/locator/dist/canonical-recorder-probe.iife.js', 'utf8');
 
-test('Phase 1 shadow compare preserves every legacy action and records additional standard interactions', async ({ browser }) => {
+test('Phase 2 reports independent legacy and canonical capture counts', async ({ browser }) => {
   const legacyPage = await browser.newPage();
   const canonicalPage = await browser.newPage();
   try {
     const legacy = await captureLegacy(legacyPage);
     const canonical = await captureCanonical(canonicalPage);
-    const derived = downgradeToLegacyActions(canonical);
-    const legacySignatures = new Set(legacy.filter(actionable).map(signature));
-    const canonicalSignatures = new Set(derived.filter(actionable).map(signature));
-    const missingFromCanonical = [...legacySignatures].filter((item) => !canonicalSignatures.has(item));
-    const additionalDerived = [...canonicalSignatures].filter((item) => !legacySignatures.has(item));
-
-    console.log(`PHASE1_SHADOW=${JSON.stringify({
-      legacyActions: legacySignatures.size,
+    console.log(`PHASE2_CAPTURE_COUNTS=${JSON.stringify({
+      legacyActions: legacy.filter((action) => action.type !== 'navigate').length,
       canonicalActions: canonical.length,
-      canonicalDerivedActions: canonicalSignatures.size,
-      missingFromCanonical: missingFromCanonical.length,
-      additionalDerived: additionalDerived.length,
       unknownActions: canonical.filter((action) => action.kind === 'unknown').length,
     })}`);
-    expect(missingFromCanonical).toEqual([]);
+    expect(legacy.length).toBeGreaterThan(0);
+    expect(canonical.length).toBeGreaterThan(0);
     expect(canonical.some((action) => action.kind === 'edit' && action.target?.role === 'textbox')).toBe(true);
     expect(canonical.some((action) => action.kind === 'unknown' && action.raw.eventTypes.includes('drop'))).toBe(true);
     expect(canonical.every((action) => action.raw.eventTypes.length > 0)).toBe(true);
@@ -48,7 +39,6 @@ async function captureLegacy(page: Page): Promise<RecordedAction[]> {
   await exercise(page);
   return actions;
 }
-
 async function captureCanonical(page: Page): Promise<CanonicalAction[]> {
   const actions: CanonicalAction[] = [];
   await page.exposeBinding('__DSH_CANONICAL_RECORD__', (_source, emitted: CanonicalAction) => {
@@ -91,14 +81,4 @@ async function exercise(page: Page): Promise<void> {
   await page.getByRole('textbox', { name: 'Rich editor' }).fill('rich value');
   await page.locator('#drop-zone').dispatchEvent('drop');
   await page.waitForTimeout(200);
-}
-
-function actionable(action: RecordedAction): boolean {
-  return action.type !== 'navigate';
-}
-
-function signature(action: RecordedAction): string {
-  const target = action.target;
-  const selector = target && 'selector' in target ? target.selector : '';
-  return `${action.type}|${selector}`;
 }

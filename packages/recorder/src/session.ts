@@ -1,5 +1,4 @@
 import { acquireDSHContext, ensureEntry, probeSession, settleNavigation } from '@dsh/browser';
-import { downgradeToLegacyActions } from '@dsh/analyzer';
 import { CANONICAL_CAPTURE, ENUM_CAPTURE, createSanitizer } from '@dsh/core';
 import type { ActiveAction, CanonicalAction, Entry } from '@dsh/core';
 import type {
@@ -279,8 +278,6 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
         canonicalActions.push(normalized);
         canonicalActionByIdx.set(actionIdx, normalized);
       }
-      const derived = downgradeToLegacyActions(canonicalActions);
-      actions.splice(0, actions.length, ...derived);
     },
   );
   await page.exposeBinding('__DSH_RECORD_INITIAL_STATE__', (_source, state: RecordedFormState) => {
@@ -413,7 +410,6 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   await Promise.all([...mutationTasks.values()]);
   await Promise.all(postProcessTasks);
   const network = [...previousNetwork, ...await networkRecording.stop()];
-  let derivedNotes: string[] | undefined;
   if (recorderPath === 'canonical') {
     const finalized = finalizeCanonicalActions(
       canonicalActions,
@@ -421,9 +417,6 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       opts.entry.entry.additionalSensitivePatterns ?? [],
     );
     canonicalActions.splice(0, canonicalActions.length, ...finalized);
-    const derived = downgradeToLegacyActions(canonicalActions);
-    actions.splice(0, actions.length, ...derived);
-    derivedNotes = [...derived._notes];
   }
   await inferAsyncWaits(page, actions, network);
   const session: RecordSession = {
@@ -438,7 +431,6 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     actions,
     recorderPath,
     ...(recorderPath === 'canonical' ? { canonicalActions } : {}),
-    ...(derivedNotes && derivedNotes.length > 0 ? { _notes: derivedNotes } : {}),
     ...(initialFormState.length > 0 ? { initialFormState } : {}),
     network,
     pages,
@@ -799,9 +791,7 @@ async function writePartialSnapshot(input: PartialSnapshotInput): Promise<void> 
       entryId: input.entryId,
       ...(input.identityChanged ? { identityChanged: true } : {}),
     },
-    actions: input.recorderPath === 'canonical'
-      ? downgradeToLegacyActions(input.canonicalActions)
-      : input.actions,
+    actions: input.recorderPath === 'canonical' ? [] : input.actions,
     recorderPath: input.recorderPath,
     ...(input.recorderPath === 'canonical' ? { canonicalActions: input.canonicalActions } : {}),
     ...(input.initialFormState.length > 0 ? { initialFormState: input.initialFormState } : {}),

@@ -1,9 +1,30 @@
 import { CAUSALITY, DEPENDENCY, IDENTIFIER_STABILITY } from '@dsh/core';
 import type { ParamDefinition } from '@dsh/core';
-import type { RecordedAction, RecordSession } from '@dsh/core';
+import type { RecordSession } from '@dsh/core';
+
+import { analysisSession, type AnalyzedAction, type AnalysisSession } from './action-view.js';
 
 const SENSITIVE_PARAM = /token|csrf|session|timestamp/i;
 const DATE_VALUE = /^\d{4}-\d{2}-\d{2}/;
+
+function initialStateAction(
+  state: NonNullable<RecordSession['initialFormState']>[number],
+  actionIdx: number,
+): AnalyzedAction {
+  return {
+    actionIdx,
+    timestamp: state.ts,
+    kind: state.type === 'select' ? 'select' : 'check',
+    locator: state.target,
+    ...(state.label ? { label: state.label } : {}),
+    ...(state.name ? { name: state.name } : {}),
+    value: state.value,
+    ...(state.checked !== undefined ? { checked: state.checked } : {}),
+    ...(state.text ? { text: state.text } : {}),
+    requestIds: [],
+    rawEventTypes: [],
+  };
+}
 
 export interface ParamCandidate {
   definition: ParamDefinition;
@@ -24,30 +45,33 @@ export function detectParams(
   session: RecordSession,
   secondSession?: RecordSession,
 ): ParamCandidate[] {
+  const analyzed = analysisSession(session);
+  const secondAnalyzed = secondSession ? analysisSession(secondSession) : undefined;
   const candidates = new Map<string, ParamCandidate>();
-  const sourceActions: RecordedAction[] = [
-    ...session.actions,
-    ...(session.initialFormState ?? []).map((state) => ({ ...state })),
+  const sourceActions: AnalyzedAction[] = [
+    ...analyzed.actions,
+    ...(session.initialFormState ?? []).map((state, offset) => initialStateAction(state, analyzed.actions.length + offset)),
   ];
-  const secondActions: RecordedAction[] = [
-    ...(secondSession?.actions ?? []),
-    ...(secondSession?.initialFormState ?? []).map((state) => ({ ...state })),
+  const secondActions: AnalyzedAction[] = [
+    ...(secondAnalyzed?.actions ?? []),
+    ...(secondSession?.initialFormState ?? []).map((state, offset) =>
+      initialStateAction(state, (secondAnalyzed?.actions.length ?? 0) + offset)),
   ];
   const stability = analyzeIdentifierStability(session, secondSession);
   sourceActions.forEach((action, index) => {
     if (!isInputAction(action) || action.value === undefined || action.value === '') return;
-    const baseName = paramName(action, session, stability.confirmed.has(index));
+    const baseName = paramName(action, analyzed, stability.confirmed.has(index));
     if (SENSITIVE_PARAM.test(baseName) || SENSITIVE_PARAM.test(action.label ?? '')) return;
     const lineage = sourceLineage(action, index);
     const secondAction = matchingSecondAction(action, secondActions);
     const changed =
-      secondAction?.type === action.type &&
+      secondAction?.kind === action.kind &&
       secondAction.value !== undefined &&
       secondAction.value !== action.value;
     const existing = candidates.get(lineage);
     const enumEvidence =
-      action.type === 'select' || action.type === 'radio'
-        ? enumValues(action, secondAction, session, secondSession, baseName)
+      action.kind === 'select' || action.kind === 'check' && action.semanticTarget?.inputType === 'radio'
+        ? enumValues(action, secondAction, analyzed, secondAnalyzed, baseName)
         : undefined;
     const values = enumEvidence?.values;
     if (existing) {
@@ -91,15 +115,17 @@ export function analyzeIdentifierStability(
   session: RecordSession,
   secondSession?: RecordSession,
 ): IdentifierStability {
+  const first = analysisSession(session);
+  const second = secondSession ? analysisSession(secondSession) : undefined;
   const confirmed = new Set<number>();
   const suspected = new Set<number>();
-  session.actions.forEach((action, index) => {
+  first.actions.forEach((action, index) => {
     if (action.name && hasHighEntropySegment(action.name)) suspected.add(index);
-    const peer = secondSession?.actions[index];
-    if (!action.name || !peer?.name || peer.type !== action.type || peer.name === action.name) return;
-    const sameSemantics = action.recordedHint?.tagName === peer.recordedHint?.tagName
-      && action.recordedHint?.role === peer.recordedHint?.role;
-    if (sameSemantics || (!action.recordedHint && !peer.recordedHint)) confirmed.add(index);
+    const peer = second?.actions[index];
+    if (!action.name || !peer?.name || peer.kind !== action.kind || peer.name === action.name) return;
+    const sameSemantics = action.semanticTarget?.tag === peer.semanticTarget?.tag
+      && action.semanticTarget?.role === peer.semanticTarget?.role;
+    if (sameSemantics || (!action.semanticTarget && !peer.semanticTarget)) confirmed.add(index);
   });
   return { confirmed, suspected };
 }
@@ -113,49 +139,47 @@ function hasHighEntropySegment(value: string): boolean {
   });
 }
 
-function sourceLineage(action: RecordedAction, index: number): string {
-  if (!action.target) return `unresolved:${index}`;
+function sourceLineage(action: AnalyzedAction, index: number): string {
+  if (!action.locator && !action.semanticTarget) return `unresolved:${index}`;
   return JSON.stringify({
     target: normalizedActionTarget(action),
-    control: action.recordedHint?.controlSemantics
-      ? {
-          tagName: action.recordedHint.controlSemantics.tagName,
-          type: action.recordedHint.controlSemantics.type,
-          name: action.recordedHint.controlSemantics.name,
-        }
-      : null,
-    role: action.recordedHint?.role ?? null,
-    kind: action.type,
+    control: action.semanticTarget ? {
+      tagName: action.semanticTarget.tag,
+      type: action.semanticTarget.inputType,
+      name: action.semanticTarget.name,
+    } : null,
+    role: action.semanticTarget?.role ?? null,
+    kind: action.kind,
   });
 }
 
-function normalizedActionTarget(action: RecordedAction): unknown {
-  if (action.type === 'select' && action.recordedHint?.role === 'option' && action.label) {
+function normalizedActionTarget(action: AnalyzedAction): unknown {
+  if (action.kind === 'select' && action.semanticTarget?.role === 'option' && action.label) {
     return { standardOptionOwnerLabel: action.label };
   }
-  return action.target ? normalizedTarget(action.target) : undefined;
+  return action.locator ? normalizedTarget(action.locator) : action.semanticTarget;
 }
 
-function normalizedTarget(target: NonNullable<RecordedAction['target']>): unknown {
+function normalizedTarget(target: NonNullable<AnalyzedAction['locator']>): unknown {
   return target;
 }
 
 function matchingSecondAction(
-  action: RecordedAction,
-  secondActions: RecordedAction[],
-): RecordedAction | undefined {
-  if (action.target) {
+  action: AnalyzedAction,
+  secondActions: AnalyzedAction[],
+): AnalyzedAction | undefined {
+  if (action.locator || action.semanticTarget) {
     const target = JSON.stringify(normalizedActionTarget(action));
     const matches = secondActions.filter((candidate) =>
-      candidate.type === action.type
-      && candidate.target !== undefined
+      candidate.kind === action.kind
+      && (candidate.locator !== undefined || candidate.semanticTarget !== undefined)
       && JSON.stringify(normalizedActionTarget(candidate)) === target,
     );
     return matches.length === 1 ? matches[0] : undefined;
   }
   const matches = secondActions.filter((candidate) =>
-    candidate.type === action.type
-    && candidate.target === undefined
+    candidate.kind === action.kind
+    && candidate.locator === undefined
     && candidate.name === action.name
     && candidate.label === action.label,
   );
@@ -169,23 +193,22 @@ function uniqueParamName(base: string, used: string[]): string {
   return `${base}_${suffix}`;
 }
 
-function isInputAction(action: RecordedAction): boolean {
-  return action.type === 'fill' || action.type === 'select' || action.type === 'radio'
-    || action.type === 'checkbox' || action.type === 'datetime';
+function isInputAction(action: AnalyzedAction): boolean {
+  return action.kind === 'edit' || action.kind === 'select' || action.kind === 'check';
 }
 
-function paramType(action: RecordedAction): ParamDefinition['type'] {
-  if (action.type === 'select' || action.type === 'radio') return 'enum';
-  if (action.type === 'checkbox') return 'boolean';
-  if (action.type === 'datetime' || DATE_VALUE.test(action.value ?? '')) return 'datetime';
+function paramType(action: AnalyzedAction): ParamDefinition['type'] {
+  if (action.kind === 'select' || action.semanticTarget?.inputType === 'radio') return 'enum';
+  if (action.kind === 'check') return 'boolean';
+  if (DATE_VALUE.test(action.value ?? '')) return 'datetime';
   return 'string';
 }
 
 function enumValues(
-  action: RecordedAction,
-  secondAction: RecordedAction | undefined,
-  session: RecordSession,
-  secondSession: RecordSession | undefined,
+  action: AnalyzedAction,
+  secondAction: AnalyzedAction | undefined,
+  session: AnalysisSession,
+  secondSession: AnalysisSession | undefined,
   name: string,
 ): {
   values?: Array<{ label: string; value: string }>;
@@ -237,10 +260,10 @@ function enumValues(
 
 function staticDomValues(
   items: Array<{ label: string; value: string }>,
-  firstAction: RecordedAction,
-  secondAction: RecordedAction,
-  firstSession: RecordSession,
-  secondSession: RecordSession,
+  firstAction: AnalyzedAction,
+  secondAction: AnalyzedAction,
+  firstSession: AnalysisSession,
+  secondSession: AnalysisSession,
   name: string,
 ): Array<{ label: string; value: string }> {
   const observed = new Map<string, string>();
@@ -265,10 +288,11 @@ function staticDomValues(
 }
 
 function completeDomOptions(
-  action: RecordedAction,
+  action: AnalyzedAction,
 ): Array<{ label: string; value: string }> | undefined {
-  return action.enumOptions?.complete && action.enumOptions.items.length > 0
-    ? mergeEnumValues([], action.enumOptions.items)
+  const evidence = action.legacy?.enumOptions;
+  return evidence?.complete && evidence.items.length > 0
+    ? mergeEnumValues([], evidence.items)
     : undefined;
 }
 
@@ -278,23 +302,23 @@ function optionSignature(items: Array<{ label: string; value: string }>): string
     .sort((left, right) => `${left[0]}\u0000${left[1]}`.localeCompare(`${right[0]}\u0000${right[1]}`)));
 }
 
-function recordingsVary(first: RecordSession, second: RecordSession): boolean {
+function recordingsVary(first: AnalysisSession, second: AnalysisSession): boolean {
   return first.actions.some((action, index) => {
     const peer = second.actions[index];
-    return peer?.type === action.type && action.value !== undefined && peer.value !== action.value;
+    return peer?.kind === action.kind && action.value !== undefined && peer.value !== action.value;
   });
 }
 
 function staticResponseOptions(
-  session: RecordSession,
-  action: RecordedAction,
+  session: AnalysisSession,
+  action: AnalyzedAction,
 ): Array<{ label: string; value: string }> {
-  if (!action.target || action.value === undefined) return [];
+  if (!action.locator || action.value === undefined) return [];
   for (const request of session.network) {
     if (!request.responseBody || request.actionIdx === null || request.actionIdx === undefined) continue;
     const owner = session.actions[request.actionIdx];
-    if (!owner?.waitAfter?.notEmpty || request.causality !== 'active-action') continue;
-    if (JSON.stringify(owner.waitAfter.notEmpty) !== JSON.stringify(action.target)) continue;
+    if (!owner?.legacy?.waitAfter?.notEmpty || request.causality !== 'active-action') continue;
+    if (JSON.stringify(owner.legacy.waitAfter.notEmpty) !== JSON.stringify(action.locator)) continue;
     if (requestHasVariableContext(request, session.actions)) continue;
     try {
       const body: unknown = JSON.parse(request.responseBody);
@@ -308,9 +332,9 @@ function staticResponseOptions(
   return [];
 }
 
-function requestHasVariableContext(request: RecordSession['network'][number], actions: RecordedAction[]): boolean {
+function requestHasVariableContext(request: RecordSession['network'][number], actions: AnalyzedAction[]): boolean {
   const values = new Set(actions
-    .filter((action) => action.ts <= request.requestTs && action.value !== undefined)
+    .filter((action) => action.timestamp <= request.requestTs && action.value !== undefined)
     .map((action) => action.value!));
   try {
     const url = new URL(request.url);
@@ -333,17 +357,17 @@ function mergeEnumValues(
   return [...new Map([...left, ...right].map((item) => [item.value, item])).values()];
 }
 
-function paramName(action: RecordedAction, session: RecordSession, ignoreDomName = false): string {
+function paramName(action: AnalyzedAction, session: AnalysisSession, ignoreDomName = false): string {
   return (!ignoreDomName ? action.name : undefined)
     || networkFieldForAction(session, action)
     || uniqueWriteFieldForAction(session, action)
     || normalizeIdentifier(action.label)
-    || action.type;
+    || `${action.kind}_${action.actionIdx + 1}`;
 }
 
 function uniqueWriteFieldForAction(
-  session: RecordSession,
-  action: RecordedAction,
+  session: AnalysisSession,
+  action: AnalyzedAction,
 ): string | undefined {
   if (action.value === undefined || !isDiscriminativeValue(action.value)) return undefined;
   const matches = requestLeaves(session.network.filter((request) => request.mutating))
@@ -362,34 +386,34 @@ function isDiscriminativeValue(value: string): boolean {
 }
 
 function networkFieldForAction(
-  session: RecordSession,
-  action: RecordedAction,
+  session: AnalysisSession,
+  action: AnalyzedAction,
 ): string | undefined {
   const matches = requestLeavesAfterAction(session, action)
     .filter((leaf) => String(leaf.value) === action.value)
     .map((leaf) => leaf.key);
   const exact = [...new Set(matches)];
   if (exact.length === 1) return exact[0];
-  if (action.type !== 'select' && action.type !== 'radio') return undefined;
+  if (action.kind !== 'select' && action.semanticTarget?.inputType !== 'radio') return undefined;
   const nearby = [...new Set(requestLeavesNearAction(session, action).map((leaf) => leaf.key))];
   return nearby.length === 1 ? nearby[0] : undefined;
 }
 
 function requestLeavesAfterAction(
-  session: RecordSession,
-  action: RecordedAction,
+  session: AnalysisSession,
+  action: AnalyzedAction,
 ): Array<{ key: string; value: unknown }> {
   const actionIdx = session.actions.indexOf(action);
   return requestLeaves(session.network.filter((request) =>
     request.actionIdx === actionIdx
     || (request.actionIdx === undefined
-      && Math.abs(request.requestTs - action.ts) <= CAUSALITY.activeWindowMs),
+      && Math.abs(request.requestTs - action.timestamp) <= CAUSALITY.activeWindowMs),
   ));
 }
 
 function networkValueForAction(
-  session: RecordSession,
-  action: RecordedAction,
+  session: AnalysisSession,
+  action: AnalyzedAction,
   name: string,
 ): string | undefined {
   const direct = requestLeavesNearAction(session, action).find((leaf) => leaf.key === name)?.value;
@@ -397,18 +421,18 @@ function networkValueForAction(
 }
 
 function requestLeavesNearAction(
-  session: RecordSession,
-  action: RecordedAction,
+  session: AnalysisSession,
+  action: AnalyzedAction,
 ): Array<{ key: string; value: unknown }> {
   const actionIndex = session.actions.indexOf(action);
   const windowEnd = Math.min(
-    (actionIndex >= 0 ? session.actions[actionIndex + 1]?.ts : undefined) ?? Number.POSITIVE_INFINITY,
-    action.ts + 2_000,
+    (actionIndex >= 0 ? session.actions[actionIndex + 1]?.timestamp : undefined) ?? Number.POSITIVE_INFINITY,
+    action.timestamp + 2_000,
   );
   return requestLeaves(session.network.filter(
     (request) => request.actionIdx === actionIndex
       || (request.actionIdx === undefined
-        && request.requestTs >= action.ts && request.requestTs < windowEnd),
+        && request.requestTs >= action.timestamp && request.requestTs < windowEnd),
   ));
 }
 

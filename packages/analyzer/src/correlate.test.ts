@@ -27,7 +27,7 @@ describe('correlate', () => {
     session.network = [request('approver', 2_100, 2_700)];
 
     const result = correlate(session);
-    expect(result[1]?.action?.type).toBe('select');
+    expect(result[1]?.action?.kind).toBe('select');
     expect(result[1]?.requests[0]?.url).toContain('/overtime/approver');
   });
 
@@ -59,7 +59,7 @@ describe('correlate', () => {
 
     const owners = correlate(session).filter((step) => step.requests.length > 0);
     expect(owners).toHaveLength(1);
-    expect(owners[0]?.action?.type).toBe('fill');
+    expect(owners[0]?.action?.kind).toBe('edit');
   });
 
   it('detects approverId and approvalToken dependencies and the final submit', () => {
@@ -166,7 +166,7 @@ describe('correlate', () => {
     ];
 
     const owner = correlate(session).find((step) => step.requests.some((item) => item.requestId === 'approver'));
-    expect(owner?.action?.type).toBe('select');
+    expect(owner?.action?.kind).toBe('select');
     expect(owner?.requests[0]?.correlation).toMatchObject({
       method: 'response-value-match', confidence: 'high', ownerActionIndex: 0,
     });
@@ -188,7 +188,7 @@ describe('correlate', () => {
     ];
 
     const owner = correlate(session).find((step) => step.requests.some((item) => item.requestId === 'approver'));
-    expect(owner?.action?.type).toBe('select');
+    expect(owner?.action?.kind).toBe('select');
     expect(owner?.requests[0]?.correlation).toMatchObject({
       method: 'response-value-match', confidence: 'high', ownerActionIndex: 0,
     });
@@ -239,7 +239,7 @@ describe('correlate', () => {
     }];
 
     const owner = correlate(session).find((step) => step.requests.length > 0);
-    expect(owner?.action?.type).toBe('fill');
+    expect(owner?.action?.kind).toBe('edit');
     expect(owner?.requests[0]?.correlation).toMatchObject({
       method: 'action-causality', confidence: 'high', ownerActionIndex: 0,
     });

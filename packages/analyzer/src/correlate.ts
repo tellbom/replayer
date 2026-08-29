@@ -1,11 +1,13 @@
 import { CAUSALITY, DEPENDENCY } from '@dsh/core';
-import type { RecordedAction, RecordedRequest, RecordSession } from '@dsh/core';
+import type { RecordedRequest, RecordSession } from '@dsh/core';
+
+import { analysisSession, type AnalyzedAction, type AnalysisSession } from './action-view.js';
 
 const ACTION_REQUEST_WINDOW_MS = 2_000;
 
 export interface CorrelatedStep {
   id: string;
-  action: RecordedAction | null;
+  action: AnalyzedAction | null;
   requests: CorrelatedRequest[];
   orphan: boolean;
   hasSideEffect: boolean;
@@ -36,8 +38,9 @@ export interface RequestCorrelation {
  * 按请求发起时间将网络请求归给最近的前置动作。
  */
 export function correlate(session: RecordSession): CorrelatedStep[] {
-  const requests = analyzeDependencies(session.network, session.actions);
-  const steps: CorrelatedStep[] = session.actions.map((action, index) => ({
+  const analyzed = analysisSession(session);
+  const requests = analyzeDependencies(analyzed.network, analyzed.actions);
+  const steps: CorrelatedStep[] = analyzed.actions.map((action, index) => ({
     id: `action-${index + 1}`,
     action,
     requests: [],
@@ -47,7 +50,7 @@ export function correlate(session: RecordSession): CorrelatedStep[] {
   const orphanRequests: CorrelatedRequest[] = [];
 
   for (const request of requests) {
-    const correlation = correlateRequest(session, request, requests);
+    const correlation = correlateRequest(analyzed, request, requests);
     const actionIndex = correlation?.ownerActionIndex ?? -1;
     request.correlation = correlation;
     const owner = actionIndex === -1 ? undefined : steps[actionIndex];
@@ -68,8 +71,8 @@ export function correlate(session: RecordSession): CorrelatedStep[] {
       orphan: true,
       hasSideEffect: orphanRequests.some((request) => request.mutating),
     };
-    const insertBefore = session.actions.findIndex(
-      (action) => action.ts > orphanRequests[0]!.requestTs,
+    const insertBefore = analyzed.actions.findIndex(
+      (action) => action.timestamp > orphanRequests[0]!.requestTs,
     );
     steps.splice(insertBefore === -1 ? steps.length : insertBefore, 0, orphanStep);
   }
@@ -77,7 +80,7 @@ export function correlate(session: RecordSession): CorrelatedStep[] {
 }
 
 function correlateRequest(
-  session: RecordSession,
+  session: AnalysisSession,
   request: CorrelatedRequest,
   correlatedRequests: CorrelatedRequest[],
 ): RequestCorrelation | undefined {
@@ -125,7 +128,7 @@ function correlateRequest(
 
   const eligible = session.actions
     .map((action, index) => ({ action, index }))
-    .filter(({ action }) => action.ts <= request.requestTs);
+    .filter(({ action }) => action.timestamp <= request.requestTs);
 
   const responseDependencies = request.mutating
     ? request.dependsOn.flatMap((dependency) => {
@@ -143,7 +146,7 @@ function correlateRequest(
       (left, right) => right.source.requestTs - left.source.requestTs,
     )[0]!;
     const immediateOwner = ownerActionIndex(session.actions, request.requestTs);
-    const owner = immediateOwner !== -1 && session.actions[immediateOwner]?.type === 'click'
+    const owner = immediateOwner !== -1 && session.actions[immediateOwner]?.kind === 'activate'
       ? immediateOwner
       : latestSource.dependency.discriminator?.actionIndex
         ?? firstSuccessorAction(
@@ -172,12 +175,12 @@ function correlateRequest(
     )
     .map(String);
   const domOwner = [...eligible].reverse().find(({ action }) => {
-    if (!action.produces) return false;
-    const mutation = JSON.stringify(action.produces);
+    if (!action.after?.affected && !action.after?.self) return false;
+    const mutation = JSON.stringify(action.after);
     return responseValues.some((value) => value.length > 0 && mutation.includes(value));
   });
   if (domOwner) {
-    const mutation = JSON.stringify(domOwner.action.produces);
+    const mutation = JSON.stringify(domOwner.action.after);
     const value = responseValues.find((candidate) => mutation.includes(candidate));
     return {
       method: 'dom-causality',
@@ -190,7 +193,7 @@ function correlateRequest(
   // Legacy recordings may emit change after HTTP; keep this fallback bounded.
   const valueOwners = session.actions.map((action, index) => ({ action, index })).filter(({ action }) =>
     action.value !== undefined
-    && Math.abs(request.requestTs - action.ts) <= CAUSALITY.activeWindowMs
+    && Math.abs(request.requestTs - action.timestamp) <= CAUSALITY.activeWindowMs
     && isDiscriminativeActionValue(action.value)
     && actionValues(action.value, aliases).some((value) => requestValues.has(value)),
   );
@@ -207,7 +210,7 @@ function correlateRequest(
 
   const timeOwner = ownerActionIndex(session.actions, request.requestTs);
   if (timeOwner === -1) return undefined;
-  const distance = request.requestTs - session.actions[timeOwner]!.ts;
+  const distance = request.requestTs - session.actions[timeOwner]!.timestamp;
   return {
     method: 'time-window',
     confidence: 'low',
@@ -217,21 +220,21 @@ function correlateRequest(
 }
 
 function firstSuccessorAction(
-  actions: RecordedAction[],
+  actions: AnalyzedAction[],
   sourceOwner: number,
   sourceStartedAt: number,
   targetRequestAt: number,
 ): number {
   const valueAction = actions.findIndex((action, index) =>
     index > sourceOwner
-    && action.ts >= sourceStartedAt
-    && action.ts <= targetRequestAt
+    && action.timestamp >= sourceStartedAt
+    && action.timestamp <= targetRequestAt
     && action.value !== undefined,
   );
   if (valueAction !== -1) return valueAction;
   for (let index = sourceOwner + 1; index < actions.length; index += 1) {
     const action = actions[index];
-    if (action && action.ts >= sourceStartedAt && action.ts <= targetRequestAt) return index;
+    if (action && action.timestamp >= sourceStartedAt && action.timestamp <= targetRequestAt) return index;
   }
   return sourceOwner;
 }
@@ -276,7 +279,7 @@ function isDiscriminativeActionValue(value: string): boolean {
 
 function analyzeDependencies(
   requests: RecordedRequest[],
-  actions: RecordedAction[],
+  actions: AnalyzedAction[],
 ): CorrelatedRequest[] {
   const lastMutating = [...requests]
     .filter((request) => request.mutating)
@@ -340,7 +343,7 @@ function isUniqueSameFieldValue(
 function indexedSelection(
   source: RecordedRequest,
   leaf: ValueLeaf,
-  actions: RecordedAction[],
+  actions: AnalyzedAction[],
 ): Pick<RequestDependency, 'ambiguous' | 'discriminator'> {
   const indexed = /^(.*)\[(\d+)\](.*)$/.exec(leaf.path);
   if (!indexed || !source.responseBody) return {};
@@ -469,12 +472,12 @@ function collectLeaves(value: unknown, path: string): ValueLeaf[] {
   return [];
 }
 
-function ownerActionIndex(actions: RecordedAction[], requestTs: number): number {
+function ownerActionIndex(actions: AnalyzedAction[], requestTs: number): number {
   for (let index = actions.length - 1; index >= 0; index -= 1) {
     const action = actions[index];
-    if (!action || action.ts > requestTs) continue;
-    const nextActionTs = actions[index + 1]?.ts ?? Number.POSITIVE_INFINITY;
-    const windowEnd = Math.min(nextActionTs, action.ts + ACTION_REQUEST_WINDOW_MS);
+    if (!action || action.timestamp > requestTs) continue;
+    const nextActionTs = actions[index + 1]?.timestamp ?? Number.POSITIVE_INFINITY;
+    const windowEnd = Math.min(nextActionTs, action.timestamp + ACTION_REQUEST_WINDOW_MS);
     return requestTs < windowEnd ? index : -1;
   }
   return -1;

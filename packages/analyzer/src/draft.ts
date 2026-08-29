@@ -1,14 +1,15 @@
 import { SkillSchema, UnusedParameterError } from '@dsh/core';
-import type { RecordedAction, RecordedRequest, RecordSession, Skill } from '@dsh/core';
+import type { RecordedRequest, RecordSession, Skill } from '@dsh/core';
 import { Document, isMap, isNode, isSeq } from 'yaml';
 
 import { correlate, type CorrelatedRequest } from './correlate.js';
+import { analysisSession, analyzedInputs, type AnalyzedAction } from './action-view.js';
 import { analyzeIdentifierStability, detectParams } from './params.js';
 import { detectPreflight } from './preflight.js';
 
 interface DraftItem {
   id: string;
-  action: RecordedAction | null;
+  action: AnalyzedAction | null;
   request: CorrelatedRequest | null;
   hasSideEffect: boolean;
   afterSessionInterrupt: boolean;
@@ -81,8 +82,8 @@ export function collapseIntermediateRequests(
 /** 将一次录制转为可校验、待人工复核的技能草稿。 */
 export function generateDraft(session: RecordSession, secondSession?: RecordSession): DraftResult {
   assertRecordSession(session);
-  const analysisSession = { ...session, network: collapseIntermediateRequests(session.network) };
-  const correlated = correlate(analysisSession);
+  const collapsedSession = { ...session, network: collapseIntermediateRequests(session.network) };
+  const correlated = correlate(collapsedSession);
   const identifierStability = analyzeIdentifierStability(session, secondSession);
   const paramCandidates = detectParams(session, secondSession);
   const params = paramCandidates.map((candidate) => candidate.definition);
@@ -103,25 +104,25 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   const interruptionIndexes = new Set(session.interruptions?.map((item) => item.atActionIdx) ?? []);
   const networkOwnedScopes = new Set(
     correlated.flatMap((producer, producerIndex) => {
-      const scopeId = producer.action?.produces?.scopeId;
+      const scopeId = producer.action?.legacy?.produces?.scopeId;
       if (!scopeId || producer.requests.length > 0) return [];
       const consumer = correlated
         .slice(producerIndex + 1)
-        .find((candidate) => candidate.action?.scope === scopeId);
+        .find((candidate) => candidate.action?.legacy?.scope === scopeId);
       return consumer?.requests.some((request) => request.mutating) ? [scopeId] : [];
     }),
   );
   for (const step of correlated) {
     const recordedAction = step.action;
-    const actionIndex = recordedAction ? session.actions.indexOf(recordedAction) : -1;
-    if (recordedAction?.produces && networkOwnedScopes.has(recordedAction.produces.scopeId)) {
+    const actionIndex = recordedAction?.actionIdx ?? -1;
+    if (recordedAction?.legacy?.produces && networkOwnedScopes.has(recordedAction.legacy.produces.scopeId)) {
       continue;
     }
     const stableAction = recordedAction
       ? withIdentifierConfidence(recordedAction, actionIndex, identifierStability)
       : null;
-    const action = stableAction?.scope && networkOwnedScopes.has(stableAction.scope)
-      ? { ...stableAction, scope: undefined }
+    const action = stableAction?.legacy?.scope && networkOwnedScopes.has(stableAction.legacy.scope)
+      ? { ...stableAction, legacy: { ...stableAction.legacy, scope: undefined } }
       : stableAction;
     const afterSessionInterrupt = interruptionIndexes.has(actionIndex);
     if (step.requests.length === 0 && action) {
@@ -162,13 +163,10 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       stepByActionIndex.set(item.sourceActionIndex, item.id);
     }
   }
-  const recordedInputs: RecordedAction[] = [
-    ...session.actions,
-    ...(session.initialFormState ?? []).map((state) => ({ ...state })),
-  ];
+  const recordedInputs = analyzedInputs(session);
   const pageScoped = pageScopedAnalysis(session, params.map((param) => param.name));
   const extracts = dependencyExtracts(items, params, recordedInputs, paramBindings);
-  const preflight = detectPreflight(analysisSession);
+  const preflight = detectPreflight(collapsedSession);
   const steps: Skill['steps'] = items.map(
     (item) =>
       draftStep(
@@ -302,15 +300,15 @@ function assertRecordSession(session: RecordSession): void {
 }
 
 function withIdentifierConfidence(
-  action: RecordedAction,
+  action: AnalyzedAction,
   index: number,
   stability: ReturnType<typeof analyzeIdentifierStability>,
-): RecordedAction {
+): AnalyzedAction {
   if (!stability.confirmed.has(index) && !stability.suspected.has(index)) return action;
-  if (action.target?.strategy !== 'playwright' && action.target?.strategy !== 'frame-playwright') {
+  if (action.locator?.strategy !== 'playwright' && action.locator?.strategy !== 'frame-playwright') {
     return action;
   }
-  return { ...action, target: { ...action.target, confidence: 'LOW' } };
+  return { ...action, locator: { ...action.locator, confidence: 'LOW' } };
 }
 
 function identifierStabilityNotes(
@@ -331,8 +329,8 @@ function identifierStabilityNotes(
 function unrecognizedActionNotes(items: DraftItem[]): string[] {
   return items.flatMap((item) => {
     const action = item.action;
-    if (!action || action.type === 'navigate') return [];
-    const visible = action.label ?? action.text ?? action.recordedHint?.visibleText;
+    if (!action || action.kind === 'navigate') return [];
+    const visible = action.label ?? action.text ?? action.semanticTarget?.accessibleName;
     return visible?.trim()
       ? []
       : [`步骤 ${item.id} 无可识别文本，无法可靠标注语义；若涉及可变输入请人工补充。`];
@@ -384,7 +382,7 @@ function draftStep(
   extracts: Map<string, Record<string, string>>,
   baseUrl: string,
   stepByActionIndex: Map<number, string>,
-  recordedInputs: RecordedAction[],
+  recordedInputs: AnalyzedAction[],
   paramBindings: ParamBindings,
   pageScoped: PageScopedAnalysis,
 ): unknown {
@@ -403,7 +401,7 @@ function draftStep(
         paramBindings,
         pageScoped.bodyBindings,
       )
-    : item.action?.type === 'navigate'
+    : item.action?.kind === 'navigate'
       ? {
           method: 'GET',
           url: relativeUrl(item.action.url ?? baseUrl, baseUrl),
@@ -414,11 +412,11 @@ function draftStep(
     id: item.id,
     desc: stepDescription(item),
     channel:
-      item.action?.type === 'navigate'
+      item.action?.kind === 'navigate'
         ? 'ui'
         : request?.mutating || (request && !ui)
         ? 'network'
-        : item.action?.type === 'fill' || item.action?.type === 'datetime'
+        : item.action?.kind === 'edit'
           ? 'merged'
           : 'ui',
     riskLevel: request?.mutating ? 'write' : 'read',
@@ -426,9 +424,9 @@ function draftStep(
     ...(item.expectsRedirect ? { expectsRedirect: true } : {}),
     ...(network ? { network } : {}),
     ...(ui ? { ui } : {}),
-    ...(item.action?.scope && !item.afterSessionInterrupt ? { requires: [item.action.scope] } : {}),
-    ...(item.action?.produces ? { produces: item.action.produces } : {}),
-    ...(item.action?.waitAfter ? { waitAfter: item.action.waitAfter } : {}),
+    ...(item.action?.legacy?.scope && !item.afterSessionInterrupt ? { requires: [item.action.legacy.scope] } : {}),
+    ...(item.action?.legacy?.produces ? { produces: item.action.legacy.produces } : {}),
+    ...(item.action?.legacy?.waitAfter ? { waitAfter: item.action.legacy.waitAfter } : {}),
     ...(request?.correlation
       ? {
           _correlation: {
@@ -461,7 +459,7 @@ function networkAction(
   stepByRequest: Map<string, string>,
   extract: Record<string, string> | undefined,
   baseUrl: string,
-  recordedInputs: RecordedAction[],
+  recordedInputs: AnalyzedAction[],
   paramBindings: ParamBindings,
   pageBindings: PageScopedAnalysis['bodyBindings'],
 ): unknown {
@@ -498,7 +496,7 @@ function networkAction(
 }
 
 function uiAction(
-  action: RecordedAction,
+  action: AnalyzedAction,
   param: Skill['params'][number] | undefined,
   extracts: Record<string, string> | undefined,
   discardScope = false,
@@ -509,35 +507,44 @@ function uiAction(
     ...(genericDraftTarget(action) ? { target: genericDraftTarget(action) } : {}),
     ...(action.label ? { label: action.label } : {}),
     ...(value !== undefined ? { value } : {}),
-    ...(action.scope && !discardScope ? { scope: action.scope } : {}),
-    ...(action.recordedHint ? { recordedHint: action.recordedHint } : {}),
+    ...(action.legacy?.scope && !discardScope ? { scope: action.legacy.scope } : {}),
+    ...(action.legacy?.recordedHint ? { recordedHint: action.legacy.recordedHint } : {}),
     ...(extracts && Object.keys(extracts).length > 0 ? { extract: extracts } : {}),
   };
-  if (action.type === 'select') return { action: 'selectOption', ...common };
-  if (action.type === 'radio' || action.type === 'checkbox') {
+  if (action.kind === 'select') return { action: 'selectOption', ...common };
+  if (action.kind === 'check') {
     return { action: 'check', ...common, checked: action.checked ?? true };
   }
-  if (action.type === 'datetime') return { action: 'setDateTime', ...common };
-  if (action.type === 'navigate') return { action: 'navigate', url: action.url, ...common };
-  return { action: action.type, ...common };
+  if (action.kind === 'edit' && /^\d{4}-\d{2}-\d{2}/.test(action.value ?? '')) {
+    return { action: 'setDateTime', ...common };
+  }
+  if (action.kind === 'navigate') return { action: 'navigate', url: action.url, ...common };
+  if (action.kind === 'activate') return { action: 'click', ...common };
+  if (action.kind === 'edit') return { action: 'fill', ...common };
+  if (action.kind === 'key' || action.kind === 'upload' || action.kind === 'unknown') {
+    return action.rawEventTypes.some((event) => event === 'click' || event === 'pointerup')
+      ? { action: 'click', ...common }
+      : undefined;
+  }
+  return undefined;
 }
 
-function genericDraftTarget(action: RecordedAction): RecordedAction['target'] | undefined {
-  const strategy = action.target?.strategy;
+function genericDraftTarget(action: AnalyzedAction): AnalyzedAction['locator'] | undefined {
+  const strategy = action.locator?.strategy;
   const deprecated = new Set([
     ['el', 'form', 'item'].join('-'), ['el', 'option'].join('-'),
     ['el', 'dialog', 'scoped'].join('-'), ['el', 'table', 'cell'].join('-'),
   ]);
-  if (!strategy || !deprecated.has(strategy)) return action.target;
+  if (!strategy || !deprecated.has(strategy)) return action.locator;
   return action.label
-    ? { strategy: 'label', label: action.label, kind: action.type === 'select' ? 'select' : 'input' }
+    ? { strategy: 'label', label: action.label, kind: action.kind === 'select' ? 'select' : 'input' }
     : undefined;
 }
 
 function dependencyExtracts(
   items: DraftItem[],
   params: Skill['params'],
-  recordedInputs: RecordedAction[],
+  recordedInputs: AnalyzedAction[],
   paramBindings: ParamBindings,
 ): Map<string, Record<string, string>> {
   const extracts = new Map<string, Record<string, string>>();
@@ -557,7 +564,7 @@ function dependencyExtracts(
 function resolvedDependencyPath(
   dependency: CorrelatedRequest['dependsOn'][number],
   params: Skill['params'],
-  recordedInputs: RecordedAction[],
+  recordedInputs: AnalyzedAction[],
   paramBindings: ParamBindings,
 ): string | undefined {
   if (dependency.ambiguous) return undefined;
@@ -582,7 +589,7 @@ function parameterizeUrl(
   request: CorrelatedRequest,
   url: string,
   params: Skill['params'],
-  recordedInputs: RecordedAction[],
+  recordedInputs: AnalyzedAction[],
   paramBindings: ParamBindings,
 ): string {
   if (request.correlation?.method !== 'action-causality'
@@ -611,7 +618,7 @@ function parameterizeUrl(
 }
 
 function parameterValues(
-  action: RecordedAction,
+  action: AnalyzedAction,
   param: Skill['params'][number],
 ): string[] {
   const direct = action.value === undefined ? [] : [action.value];
@@ -626,9 +633,9 @@ function canRenderParam(param: Skill['params'][number]): boolean {
 }
 
 function parameterForAction(
-  action: RecordedAction,
+  action: AnalyzedAction,
   params: Skill['params'],
-  recordedInputs: RecordedAction[],
+  recordedInputs: AnalyzedAction[],
   paramBindings: ParamBindings,
 ): Skill['params'][number] | undefined {
   const index = recordedInputs.indexOf(action);
@@ -654,7 +661,7 @@ function requestBody(
 function parameterizeBody(
   body: Record<string, unknown>,
   params: Skill['params'],
-  recordedInputs: RecordedAction[],
+  recordedInputs: AnalyzedAction[],
   paramBindings: ParamBindings,
   pageBindings: PageScopedAnalysis['bodyBindings'],
   requestId: string,
@@ -690,6 +697,7 @@ function parameterizeBody(
 }
 
 function pageScopedAnalysis(session: RecordSession, reservedNames: string[]): PageScopedAnalysis {
+  const actions = analysisSession(session).actions;
   const bodyBindings = new Map<string, string>();
   const extractsByAction = new Map<number, Record<string, string>>();
   const variablesBySource = new Map<string, string>();
@@ -700,8 +708,8 @@ function pageScopedAnalysis(session: RecordSession, reservedNames: string[]): Pa
       .sort((left, right) => right.ts - left.ts)[0];
     if (!snapshot || snapshot.actionIdx === null) continue;
     const actionIdx = snapshot.actionIdx;
-    const navigation = session.actions[actionIdx];
-    if (navigation?.type !== 'navigate') continue;
+    const navigation = actions[actionIdx];
+    if (navigation?.kind !== 'navigate') continue;
     const body = safeObjectBody(request);
     visitBodyLeaves(body, [], (path, value) => {
       if (typeof value !== 'string' && typeof value !== 'number') return;
@@ -918,7 +926,8 @@ function inferPostcondition(
 
 function isRedirectingSubmission(session: RecordSession, request: RecordedRequest): boolean {
   if (!request.mutating || request.resourceType !== 'document') return false;
-  const nextActionTs = session.actions.find((action) => action.ts > request.requestTs)?.ts;
+  const nextActionTs = analysisSession(session).actions
+    .find((action) => action.timestamp > request.requestTs)?.timestamp;
   const before = [...session.pages]
     .filter((page) => page.ts <= request.requestTs)
     .sort((left, right) => right.ts - left.ts)[0];
@@ -1028,11 +1037,11 @@ function relativeUrl(url: string, baseUrl: string): string {
 }
 
 function stepDescription(item: DraftItem): string {
-  if (item.action && item.action.type !== 'navigate') {
-    const visible = item.action.label ?? item.action.text ?? item.action.recordedHint?.visibleText;
+  if (item.action && item.action.kind !== 'navigate') {
+    const visible = item.action.label ?? item.action.text ?? item.action.semanticTarget?.accessibleName;
     if (!visible?.trim()) return 'TODO_UNRESOLVED';
   }
-  return item.action?.label ?? item.action?.text ?? item.action?.type ?? item.request?.url ?? item.id;
+  return item.action?.label ?? item.action?.text ?? item.action?.kind ?? item.request?.url ?? item.id;
 }
 
 function skillId(items: DraftItem[]): string {

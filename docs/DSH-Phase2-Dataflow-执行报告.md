@@ -4,7 +4,7 @@
 
 分支：`codex/phase2-dataflow`
 
-状态：**停点 ①（2-0 前置小修完成）；任务 A/B/C 尚未开始。**
+状态：**停点 ②（任务 A 已完成；19 格仅 2 格可回放，按裁决停止，任务 B/C 未开始）。**
 
 ## 2-0 前置小修
 
@@ -41,40 +41,50 @@
 
 ## 三项强制回答（当前停点状态）
 
+## 停点 ② · 任务 A 验证
+
+- Analyzer 通过内部 `AnalyzedAction` 证据视图直接消费 `canonicalActions`；字段为 `kind/timestamp/semanticTarget/before/after/requestIds/rawEventTypes`，没有重建 `RecordedAction` 公共兼容契约。
+- `ir-downgrade.ts` 与其测试已删除，packages 中引用为 0；canonical recorder 的 `actions` 恒为空，recorder→analyzer 包依赖已删除。
+- unknown/key/upload 不再因降级桥消失：证据保留；只有 raw 交互与 target 足够明确时生成 UI 动作，否则生成步骤及人工诊断说明。upload 的执行 carrier 留给任务 C。
+- Phase 1 结构 shadow compare 已停用，替换为两条路径独立计数：同一标准交互 fixture 得到 legacy=4、canonical=8、unknown=2，不做结构对齐。
+- build 全量通过；Analyzer 49/49；Safety unit 21/21；Phase0 Safety + 独立计数 + Phase2-0 共 4/4；constraints 全通过。
+- Safety Gate：Silent Wrong Success=0；17 个失败格全部在写入前因 TODO、类型或不支持 carrier 中止，服务端落库条数均为 0。成功两格的服务端落库与传参一致。没有放宽 Safety Gate。
+- 三条红线检查：未给 downgrade 打补丁；matrix fixture 四个文件与 main 原件语义 diff 为 0；Safety Gate 无退化。
+
 ### ① C5 `prompt:null` ZodError
 
-**尚未修复。** 它属于下一步任务 A 的硬性验收 V-A-6，不归为范围外问题。任务 A 必须先写 canonical malformed-input RED 用例，再修到“产出 draft、保留步骤/诊断、零未捕获异常”。
+**已修复。** Analyzer 现在清洗非字符串 `accessibleName/name/placeholder`，可选 `prompt` 不再生成 `null`。`missing target`、`accessibleName:null`、缺失 before/after、空 value、畸形 enum evidence 共 5 类 canonical 输入均产出 draft，6 个 canonical IR 测试全部通过，零 ZodError。
 
-### ② 当前 19 格未恢复归因基线
+### ② 停点 ② 的 19 格结果与逐格归因
 
-任务 A 尚未执行，因此当前仍沿用 Phase 1 Gate 的 2/19 基线；以下是进入任务 A 前的逐格具体归因，不代表 Phase 2 最终结果：
+本轮由当前代码重新录制生成，未混用历史产物。录制 19/19、分析 19/19 均完成；原参数真实回放成功 **2/19**（C9、C12），跨参数成功 **1/19**（C9）。因为低于裁决阈值 8，任务 B/C 不得开始。
 
 | 格位 | 当前状态 | 具体归因 |
 |---|---|---|
-| C1 原生多选 | 未恢复 | Canonical 多选状态经 downgrade 后与请求数组叶子的参数绑定断裂 |
-| C2 单文件 | 未恢复 | upload 在 downgrade 中被丢弃，且尚无 ui-upload carrier |
-| C3 多文件 | 未恢复 | 同 C2；还需要 multiple file 路径与控件 carrier |
-| C4 contenteditable | 未恢复 | edit 已捕获，但 accessibleName/state 未被旧 Analyzer 直接消费，body 仍 unresolved |
-| C5 级联选择 | 未恢复/崩溃 | 空 label/prompt 进入旧参数 schema，抛 `prompt:null` ZodError |
-| C6 穿梭框 | 未恢复 | 非按钮 activate 已捕获，但旧 Analyzer 不消费其累积选择状态 |
-| C7 树形选择 | 未恢复 | 原 target 取 after 文案且选择值绑定断裂；target 时机已在本停点修复，绑定待任务 A/B |
-| C8 数字步进 | 未恢复 | 值只存在于 `after.affected/domMutations`，旧 Analyzer 不消费 |
-| C9 滑块 | 已恢复 | Phase 1 Gate 已验证录制值与跨参数值均正确 |
-| C10 只读日期 | 未恢复 | activate/after.value 已捕获，旧 Analyzer 未从 Canonical state 建参数与 carrier |
-| C11 日期区间 | 未恢复 | 两个日期来源与请求叶子映射未由 IR 直连表达 |
-| C12 开关 | 已恢复（字面量） | 当前仅字面量路径可回放；参数化 false 仍待 ValueLineage |
-| C13 标签输入 | 未恢复 | 多 action/数组值未形成 cardinality 与请求数组绑定 |
-| C14 搜索型下拉 | 未恢复 | 响应值链与后续请求叶子关系在旧桥后变为 unresolved |
-| C15 表格内联编辑 | 未恢复 | 动态元素 edit 已捕获，但旧 Analyzer 未直接消费其 target/state lineage |
-| C16 动态增删行 | 未恢复 | 六个 action 可见，但数组 lineage、字段分组及 derived total 尚未建模 |
-| B1 复选多值 | 未恢复 | downgrade 把多值 enum 退化为 boolean，缺 cardinality/value 分配 |
-| V6 environment | 未恢复 | DOM 不可读的提交时生成值没有可重现来源，按 Phase 2 应明确 unresolved 并拒绝 |
-| A 组 merged | 未恢复 | enum 修复前参数校验先拦截；尚未进入完整 merged carrier 防线复验 |
+| C1 原生多选 | 未恢复 | IR 有 select 和参数 `tags`，但数组叶 `tags[0]` 未有 cardinality/element lineage，安全门以 TODO 拒绝写入 |
+| C2 单文件 | 未恢复 | upload 动作已保留；冻结 UiAction 尚无 upload 执行能力，明确报“当前任务尚未支持通道: ui” |
+| C3 多文件 | 未恢复 | 同 C2，且 multiple 文件集合尚无 carrier/cardinality |
+| C4 contenteditable | 未恢复 | edit 已捕获，但提交 HTML 与控件可见/文本表示不同，`contentHtml` 缺 representation 映射 |
+| C5 级联选择 | 未恢复 | C5 崩溃已消失；多个 select 已保留，但数组 `localRegion` 的上下文枚举与多值 lineage 未建模 |
+| C6 穿梭框 | 未恢复 | activate/check 序列可见，最终 `selected[]` 是组合派生集合，任务 A 不推断集合来源 |
+| C7 树形选择 | 未恢复 | pre-action target 已正确记录；`nodes[]` 仍缺树节点多值 cardinality，第二叶被 TODO 拒绝 |
+| C8 数字步进 | 未恢复 | 只有 activate，数值在 affected/domMutations；任务 A 未实施任务 B 的 derived lineage，`qty` unresolved |
+| C9 滑块 | 已恢复 | 参数 `level` 原值 7 落库 `{"level":7}`，跨参数 2 落库 `{"level":2}` |
+| C10 只读日期 | 未恢复 | 面板点击是 activate，提交日期是被消费的页面值；尚未建立 derived/page-value lineage |
+| C11 日期区间 | 未恢复 | 两端面板点击是 activate，`startDate/endDate` 缺成对 representation/cardinality |
+| C12 开关 | 已恢复（字面量） | 落库 `{"notify":true}`；未形成参数，false 跨参数尚不可验证 |
+| C13 标签输入 | 未恢复 | edit/activate 序列存在，但 tags 数组缺多值分配，`tags[0]` 被 TODO 拒绝 |
+| C14 搜索型下拉 | 未恢复 | 搜索参数已识别；最终 `approverId` 来自响应选项值，尚缺 response-value lineage |
+| C15 表格内联编辑 | 未恢复 | edit 参数仍为兜底名 `edit_4`，动态行 `items[0].qty` 的行/字段 lineage 未建立 |
+| C16 动态增删行 | 未恢复 | 六个 edit 可见；数组行归属与 derived `totalAmount` 未建模，安全门拒绝 |
+| B1 复选多值 | 未恢复 | 两个 check 被建成两个 boolean 参数，回放传 array 触发类型错误；需要任务 B cardinality |
+| V6 environment | 未恢复 | title 已参数化；提交时环境生成 `requestId` 无可重现来源，按安全规则保持 TODO 并拒绝 |
+| A 组 merged | 未恢复 | 基础参数已恢复；`center` 等跨表示/派生叶尚无 lineage，写请求被 TODO 安全门拒绝 |
 
 ### ③ 跨参数正确性的服务端落库原文
 
-**本停点未进行任务 A/B 的跨参数回放，因此尚无新的服务端落库记录。** 当前只确认捕获层修复不触发业务提交。任务 B 验收 V-B-5/V-B-10 必须记录“录制 A、draft 零人工修改、传 B 回放”后的服务端查询 JSON；HTTP 状态与 `ok=true` 不作为证据。
+任务 A 中唯一成功的跨参数格 C9 已取得服务端落库原文：录制/原参数传入 7，服务端 `parsed={"level":7}`；不人工修正 draft，跨参数传入 2，服务端 `parsed={"level":2}`。其余跨参数正确性仍须等任务 B；HTTP 200 未被当成成功证据。
 
 ## 后续硬门槛
 
-下一步只执行任务 A（Analyzer IR 直连、删除 downgrade、C5 容错）。完成后重跑 19 格并报告可回放数；若 `< 8`，停止并逐格分析，不进入 ValueLineage 或 Channel Planner。
+已命中 `< 8` 停止条件，当前不得进入 ValueLineage 或 Channel Planner。继续前需要评审“任务 A 直连后仍为 2/19”的根因：多数格位并非 IR 未直连，而是明确依赖任务 B 的 representation/cardinality/derived/response lineage；C2/C3 则依赖任务 C 的 upload carrier。
