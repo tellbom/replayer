@@ -904,6 +904,7 @@ async function installRecorderProbe(
   for (const [name, value] of [
     ['__DSH_CANONICAL_MAX_AFFECTED__', CANONICAL_CAPTURE.maxAffected],
     ['__DSH_CANONICAL_MAX_INNER_HTML__', CANONICAL_CAPTURE.maxInnerHTMLLength],
+    ['__DSH_CANONICAL_POINTER_MERGE_GRACE_MS__', CANONICAL_CAPTURE.pointerMergeGraceMs],
   ] as const) {
     await page.addInitScript(({ key, limit }) => Reflect.set(window, key, limit), { key: name, limit: value });
     await page.evaluate(({ key, limit }) => Reflect.set(window, key, limit), { key: name, limit: value });

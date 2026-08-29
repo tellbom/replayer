@@ -52,6 +52,7 @@ export const CANONICAL_CAPTURE = {
   maxAffected: 20,
   maxInnerHTMLLength: 8_192,
   mutationSettleMs: 800,
+  pointerMergeGraceMs: 250,
 } as const;
 
 export const NOISE_PATTERNS: RegExp[] = [

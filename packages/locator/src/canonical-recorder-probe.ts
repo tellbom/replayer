@@ -10,6 +10,7 @@ interface PendingAction {
   target: Element;
   lastEventTarget: Element;
   optionTarget?: Element;
+  semanticTargetAtStart: Record<string, unknown>;
   before: unknown;
   eventTypes: string[];
   trusted: boolean;
@@ -20,6 +21,7 @@ const SEMANTIC_KEYS = new Set(['Enter', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown',
 const settleMs = Number(Reflect.get(window, '__DSH_CANONICAL_SETTLE_MS__')) || 800;
 let nextActionIdx = 0;
 let pending: PendingAction | null = null;
+let recentlyClosed: { action: PendingAction; closedAt: number } | null = null;
 
 function targetKey(element: Element): string {
   const container = element.closest('form, fieldset, [role="group"], [role="radiogroup"]')
@@ -40,12 +42,21 @@ function onRawEvent(event: Event): void {
   const now = Date.now();
   const key = targetKey(target);
   if ((event.type === 'focus' || event.type === 'blur') && (!pending || pending.targetKey !== key)) return;
+  if (!pending && canResumePointerSequence(target, key, event.type, now)) {
+    pending = recentlyClosed!.action;
+    recentlyClosed = null;
+    const mutation = Reflect.get(window, '__DSH_MUTATION__') as { begin?: (index: number) => void };
+    mutation.begin?.(pending.actionIdx);
+  }
   if (!pending || pending.targetKey !== key) {
     void flush();
+    const optionTarget = rawTarget.closest('[role="option"]');
+    const semanticElement = optionTarget ? optionOwner(optionTarget) ?? target : target;
     pending = {
       actionIdx: nextActionIdx++, startedAt: now, touchedAt: now, targetKey: key, target,
       lastEventTarget: rawTarget,
-      ...(rawTarget.closest('[role="option"]') ? { optionTarget: rawTarget.closest('[role="option"]')! } : {}),
+      ...(optionTarget ? { optionTarget } : {}),
+      semanticTargetAtStart: semanticTarget(semanticElement),
       before: observableState(target), eventTypes: [], trusted: true,
     };
     const mutation = Reflect.get(window, '__DSH_MUTATION__') as { begin?: (index: number) => void };
@@ -66,6 +77,7 @@ async function flush(): Promise<void> {
   const action = pending;
   if (!action) return;
   pending = null;
+  recentlyClosed = { action, closedAt: Date.now() };
   if (action.timer) clearTimeout(action.timer);
   let domMutations: unknown[] = [];
   try {
@@ -81,13 +93,13 @@ async function flush(): Promise<void> {
   } catch {
     domMutations = [];
   }
+  if (pending === action) return;
   await emit(action, domMutations);
-  pushActive(null);
+  if (!pending) pushActive(null);
 }
 
 async function emit(action: PendingAction, domMutations: unknown[] = []): Promise<void> {
   const evidenceTarget = action.optionTarget ?? action.lastEventTarget;
-  const semanticElement = action.optionTarget ? optionOwner(action.optionTarget) ?? action.target : action.target;
   const after = observableState(action.target, evidenceTarget);
   const kind = classify(action.eventTypes, action.target, evidenceTarget);
   const record = Reflect.get(window, '__DSH_CANONICAL_RECORD__');
@@ -97,7 +109,7 @@ async function emit(action: PendingAction, domMutations: unknown[] = []): Promis
     actionIdx: action.actionIdx,
     timestamp: action.startedAt,
     kind,
-    target: semanticTarget(semanticElement),
+    target: action.semanticTargetAtStart,
     before: action.before,
     after: {
       ...(after as Record<string, unknown>),
@@ -209,13 +221,32 @@ function focusedLocator(): unknown {
 
 function pushActive(action: PendingAction | null): void {
   const snapshot = action ? {
-    actionIdx: action.actionIdx, targetKey: action.targetKey, target: semanticTarget(action.target),
+    actionIdx: action.actionIdx, targetKey: action.targetKey, target: action.semanticTargetAtStart,
     kind: activeKind(action.eventTypes), value: liveValue(action.target), startedAt: action.startedAt,
     touchedAt: action.touchedAt, blurAt: action.eventTypes.at(-1) === 'blur' ? Date.now() : null,
   } : null;
   Reflect.set(window, '__DSH_ACTIVE_ACTION__', snapshot);
   const update = Reflect.get(window, '__DSH_ACTIVE_ACTION_UPDATE__');
   if (typeof update === 'function') void Promise.resolve(update(snapshot)).catch(() => undefined);
+}
+
+function canResumePointerSequence(
+  target: Element,
+  key: string,
+  eventType: string,
+  now: number,
+): boolean {
+  if (!recentlyClosed) return false;
+  const mergeGraceMs = Number(Reflect.get(window, '__DSH_CANONICAL_POINTER_MERGE_GRACE_MS__')) || 250;
+  const { action, closedAt } = recentlyClosed;
+  if (now - closedAt > mergeGraceMs || action.target !== target || action.targetKey !== key) return false;
+  if (eventType === 'pointerup') {
+    return action.eventTypes.includes('pointerdown') && !action.eventTypes.includes('pointerup');
+  }
+  if (eventType === 'click') {
+    return action.eventTypes.includes('pointerdown') && !action.eventTypes.includes('click');
+  }
+  return false;
 }
 
 function activeKind(events: string[]): 'input' | 'click' | 'select' | 'check' {
