@@ -402,6 +402,15 @@ source: { kind: 'derived', dependsOn: [...] }
 若走 network 通道无法读页面 → TODO_UNRESOLVED，拒绝加载
 ```
 
+**来源判定边界（Phase 2 固化）**：
+
+- 因果链中标准表单控件的 IDL `value` / `checked` 发生变化，表示用户直接输入或选择；归为 `user-input`，不得因为该值同时出现在请求中就改判为 derived。
+- 因果链中非表单展示节点的 `textContent` / 可访问状态发生变化，且请求叶子值与之匹配，才可作为 `derived` 候选。
+- `textContent` 只说明页面展示了一个值，不单独证明其来源或依赖关系；必须同时存在动作因果归属、稳定 locator 和请求消费证据。任一证据缺失均生成 `TODO_UNRESOLVED`，不得全页搜索相同文本或猜测计算规则。
+- runtime 的读取能力与录制期定位证据是两件事：即使 runtime 能读取 `textContent`，录制中没有该展示节点的 locator，也不得生成 page-derived carrier。
+
+这一边界是 DOM/浏览器/数据流规则，不依赖控件库、业务字段或端点。
+
 **已知问题**：GLM 报告指出，合计 span 这类**纯展示元素**的值变化**未进 `after.affected`**（mutation tracker 只跟"值载体"）。
 
 **本阶段必须回答**：依赖提取时靠什么定位这类元素？

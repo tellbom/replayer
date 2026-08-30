@@ -124,6 +124,51 @@ describe('V-110 matchesWhere', () => {
 });
 
 describe('Phase 0 channel carrier gate', () => {
+  it('blocks runtime-invented UI fallback when a network parameter has no planned recovery carrier', () => {
+    const skill = parseSkill(`
+skill: { id: planned-recovery, name: planned-recovery, system: fixture, baseUrl: http://fixture, entry: oa }
+params:
+  - name: applicant
+    type: string
+    required: true
+    carrier: { via: network-body, requestStepId: submit }
+steps:
+  - id: submit
+    desc: submit
+    channel: auto
+    riskLevel: write
+    hasSideEffect: true
+    network: { method: POST, url: /submit, body: { applicant: "{{applicant}}" } }
+    ui: { action: click, target: { strategy: text, text: Submit } }
+`, () => testEntry());
+
+    expect(() => assertUiFallbackCarrier(skill, skill.steps[0]!)).toThrow(/recovery carrier/);
+  });
+
+  it('accepts UI fallback only when every consumed parameter has an explicit UI recovery carrier', () => {
+    const skill = parseSkill(`
+skill: { id: planned-recovery, name: planned-recovery, system: fixture, baseUrl: http://fixture, entry: oa }
+params:
+  - name: applicant
+    type: string
+    required: true
+    carrier: { via: network-body, requestStepId: submit }
+    recoveryCarrier:
+      via: ui-fill
+      targetLocator: { strategy: playwright, selector: "#applicant", confidence: HIGH }
+steps:
+  - id: submit
+    desc: submit
+    channel: auto
+    riskLevel: write
+    hasSideEffect: true
+    network: { method: POST, url: /submit, body: { applicant: "{{applicant}}" } }
+    ui: { action: click, target: { strategy: text, text: Submit } }
+`, () => testEntry());
+
+    expect(() => assertUiFallbackCarrier(skill, skill.steps[0]!)).not.toThrow();
+  });
+
   it('blocks UI fallback when the network body consumes a merged step', () => {
     const skill = parseSkill(`
 skill: { id: carrier, name: carrier, system: fixture, baseUrl: http://fixture, entry: oa }

@@ -30,6 +30,7 @@ import { runAssertions } from './assert.js';
 import { startDiagnosticSession, writeDiagnosticBundle } from './diagnostic.js';
 import { executeNetworkStep } from './channel-network.js';
 import { executeUiStep } from './channel-ui.js';
+import { materializePageDerived } from './carrier-runtime.js';
 import { executePreflights } from './preflight.js';
 import { decideReentry, resetContextAfterAnchor } from './reentry.js';
 
@@ -60,7 +61,18 @@ export interface ReplayOptions {
 /** 回放统一入口；各执行器按任务顺序接入此编排。 */
 export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResult> {
   assertNoUnresolvedExecutableValues(skill);
-  validateExecutionParams(skill.params, opts.params);
+  const legacyInternalValues = skill.params
+    .filter((param) => param.carrier?.via === 'page-derived')
+    .map((param) => ({
+      name: param.name,
+      type: param.type,
+      lineage: param.lineage!,
+      carrier: param.carrier!,
+    }));
+  const internalValues = [...(skill.internalValues ?? []), ...legacyInternalValues];
+  const publicParams = skill.params.filter((param) => param.carrier?.via !== 'page-derived');
+  const internalNames = internalValues.map((value) => value.name);
+  validateExecutionParams(publicParams, opts.params, internalNames);
   refreshVerification(skill);
   if (skill.verification.status === 'needs_rerecord') {
     throw new SkillNeedsRerecordError(
@@ -97,7 +109,9 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
       // 【T-35 v2.0】回放起点恒为「已通过 entry 进入目标系统、会话已建立」（C16）。
       const entrySession = await ensureEntry(page, opts.entry);
       const executionContext: ExecContext = {
-        params: opts.params,
+        params: Object.fromEntries(
+          Object.entries(opts.params).filter(([name]) => !internalNames.includes(name)),
+        ),
         vars: {},
         stepResults: {},
         baseUrl: skill.skill.baseUrl,
@@ -161,6 +175,7 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
           continue;
         }
         if ((channel === 'network' || channel === 'auto') && step.network) {
+          await materializePageDerived(page, step, executionContext, internalValues, opts.params);
           let result = await executeNetworkStep(page, step, executionContext, skill.params);
           if (result.raw?.status === 403) throw new ForbiddenError(`Step ${step.id} is forbidden`);
           if (result.raw?.status === 401) {
@@ -206,6 +221,7 @@ export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResu
               stepResults.push(cancelled(step, 'network'));
               break;
             }
+            await materializePageDerived(page, step, executionContext, internalValues, opts.params);
             result = await executeNetworkStep(page, step, executionContext, skill.params);
             if (result.raw?.status === 403) {
               throw new ForbiddenError(`Step ${step.id} is forbidden`);
@@ -436,6 +452,23 @@ async function executeUiFallback(
 
 export function assertUiFallbackCarrier(skill: Skill, step: Step): void {
   if (!step.network) return;
+  const serializedNetwork = JSON.stringify(step.network);
+  const serializedUi = JSON.stringify(step.ui ?? {});
+  const consumedParamNames = new Set<string>();
+  for (const match of `${serializedNetwork}\n${serializedUi}`.matchAll(/\{\{\s*([^.[|\s}]+)/g)) {
+    if (match[1]) consumedParamNames.add(match[1]);
+  }
+  const missingUiCarrier = skill.params.filter((param) =>
+    consumedParamNames.has(param.name)
+    && !param.carrier?.via.startsWith('ui-')
+    && !param.recoveryCarrier?.via.startsWith('ui-'),
+  );
+  if (missingUiCarrier.length > 0) {
+    throw new ChannelCarrierMissingError(
+      `步骤 ${step.id} 的 ${missingUiCarrier.length} 个参数没有预规划 UI carrier 或 recovery carrier。` +
+      '运行时不得推断或发明降级载体。',
+    );
+  }
   if (classifyMultipartCarrier(step.network) === 'unsupported') {
     throw new ChannelCarrierMissingError(
       `步骤 ${step.id} 的 multipart 字段或文件在 UI 降级后无载体。` +
@@ -446,8 +479,7 @@ export function assertUiFallbackCarrier(skill: Skill, step: Step): void {
     skill.steps.filter((candidate) => candidate.channel === 'merged').map((candidate) => candidate.id),
   );
   const dependencies = new Set<string>();
-  const serialized = JSON.stringify(step.network);
-  for (const match of serialized.matchAll(/\{\{\s*([^.[|\s}]+)/g)) {
+  for (const match of serializedNetwork.matchAll(/\{\{\s*([^.[|\s}]+)/g)) {
     const root = match[1];
     if (root && mergedIds.has(root)) dependencies.add(root);
   }

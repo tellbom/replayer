@@ -38,11 +38,18 @@ test('T-87: delayed approver request remains owned by the select action under fa
 
   const { skill } = generateDraft(session);
   const approver = skill.steps.find((step) => step.network?.url.includes('/overtime/approver'));
-  const owner = skill.steps.find((step) => step.id === approver?._correlation?.ownerAction);
+  const request = session.network.find((item) => item.url.includes('/overtime/approver'));
+  const transportOwner = session.canonicalActions?.find((action) => action.actionIdx === request?.actionIdx);
+  const type = skill.params.find((param) => param.name === 'type');
+  const sourceAction = type?.lineage?.source.kind === 'user-input'
+    ? session.canonicalActions?.find((action) => action.actionIdx === type.lineage!.source.actionIdx)
+    : undefined;
   console.log(`T87_CORRELATION=${JSON.stringify(approver?._correlation)}`);
-  expect(owner?.ui?.action).toBe('selectOption');
+  expect(transportOwner?.kind).toBe('edit');
+  expect(sourceAction?.kind).toBe('select');
+  expect(approver?.network?.body?.type).toBe('{{type|enumValue}}');
   expect(approver?._correlation).toMatchObject({
-    method: 'response-value-match',
+    method: 'action-causality',
     confidence: 'high',
   });
 });
@@ -77,9 +84,13 @@ test('T-87: request value causality remains high confidence with a slow recordin
 
   const { skill } = generateDraft(session);
   const approver = skill.steps.find((step) => step.network?.url.includes('/overtime/approver'));
-  const owner = skill.steps.find((step) => step.id === approver?._correlation?.ownerAction);
+  const request = session.network.find((item) => item.url.includes('/overtime/approver'));
+  const transportOwner = session.canonicalActions?.find((action) => action.actionIdx === request?.actionIdx);
+  const type = skill.params.find((param) => param.name === 'type');
   console.log(`T87_SLOW_CORRELATION=${JSON.stringify(approver?._correlation)}`);
-  expect(owner?.ui?.action).toBe('selectOption');
+  expect(transportOwner?.kind).toBe('select');
+  expect(type?.lineage?.source).toEqual(expect.objectContaining({ kind: 'user-input' }));
+  expect(approver?.network?.body?.type).toBe('{{type|enumValue}}');
   expect(approver?._correlation).toMatchObject({
     method: 'action-causality',
     confidence: 'high',

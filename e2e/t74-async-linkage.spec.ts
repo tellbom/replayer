@@ -18,6 +18,7 @@ test('T-74 录制选择联动时推导请求与审批人非空等待', async ({ 
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
 
   const session = await record({
+    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir,
     outDir: testInfo.outputPath('record'),

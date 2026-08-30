@@ -195,7 +195,7 @@ export const CELLS: CellSpec[] = [
   },
   {
     cell: 'c9',
-    desc: 'C9 滑块',
+    desc: 'C9 [long-term] 滑块',
     operate: async (page) => {
       await page.locator('input[type=range]').focus();
       for (let i = 0; i < 4; i += 1) {
@@ -241,7 +241,7 @@ export const CELLS: CellSpec[] = [
   },
   {
     cell: 'c14',
-    desc: 'C14 搜索型下拉（远程）',
+    desc: 'C14 [long-term] 搜索型下拉（远程）',
     operate: async (page) => {
       await page.locator('input[name=approverSearch]').click();
       await page.locator('input[name=approverSearch]').fill('王');
@@ -306,4 +306,3 @@ export const CELLS: CellSpec[] = [
     altParams: { applicant: '研发部-李四', note: '替代备注', priority: 'P1', urgent: 'normal', center: 'OPS', centerName: '运营中心' },
   },
 ];
-

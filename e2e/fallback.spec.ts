@@ -32,6 +32,24 @@ test('Phase 0: UI fallback accepts values retained in live IDL properties', asyn
     fallbackSubmitStep('http://['),
     debugStep(),
   ]);
+  const type = skill.params.find((param) => param.name === 'type')!;
+  type.carrier = {
+    via: 'ui-select', targetLocator: { strategy: 'label', label: '加班类型', kind: 'select' },
+  };
+  const startTime = skill.params.find((param) => param.name === 'startTime')!;
+  startTime.carrier = {
+    via: 'ui-fill', targetLocator: { strategy: 'label', label: '开始时间', kind: 'datepicker' },
+  };
+  const endTime = skill.params.find((param) => param.name === 'endTime')!;
+  endTime.carrier = {
+    via: 'ui-fill', targetLocator: { strategy: 'label', label: '结束时间', kind: 'datepicker' },
+  };
+  const reason = skill.params.find((param) => param.name === 'reason')!;
+  reason.carrier = { via: 'network-body', requestStepId: 'submit' };
+  reason.recoveryCarrier = {
+    via: 'ui-fill',
+    targetLocator: { strategy: 'label', label: '事由', kind: 'textarea' },
+  };
   const result = await replay(skill, {
     params: runParams,
     profileDir,

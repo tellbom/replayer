@@ -38,11 +38,15 @@ test('playwright 引擎录制产物符合正式契约且回放命中', async ({ 
   });
 
   // 1. 契约断言：click 动作的 target 是 playwright 策略
-  const clickAction = session.actions.find(
-    (a) => a.type === 'click' && a.target && typeof a.target === 'object',
+  const clickAction = session.canonicalActions?.find(
+    (action) => action.kind === 'activate' && action.target?.locatorEvidence,
   );
   expect(clickAction).toBeTruthy();
-  const target = clickAction!.target as { strategy: string; selector: string; confidence?: string };
+  const target = {
+    strategy: 'playwright',
+    selector: clickAction!.target!.locatorEvidence!.generatedSelector,
+    confidence: clickAction!.target!.locatorEvidence!.confidence,
+  };
   expect(target.strategy).toBe('playwright');
   expect(target.selector).toBeTruthy();
   expect(['HIGH', 'LOW']).toContain(target.confidence);

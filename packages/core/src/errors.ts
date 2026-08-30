@@ -104,6 +104,11 @@ export class UnknownParameterError extends DSHError {
   readonly outcome = 'not_sent' as const;
 }
 
+export class DerivedParameterOverrideError extends DSHError {
+  readonly code = 'DERIVED_PARAMETER_OVERRIDE';
+  readonly outcome = 'not_sent' as const;
+}
+
 export class MissingParameterError extends DSHError {
   readonly code = 'MISSING_PARAMETER';
   readonly outcome = 'not_sent' as const;

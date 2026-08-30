@@ -2,6 +2,7 @@ import type { RecordedRequest, RecordSession } from '@dsh/core';
 import { describe, expect, it } from 'vitest';
 
 import { detectParams } from './params.js';
+import { generateDraft } from './draft.js';
 
 const NO_CAUSALITY = {
   actionIdx: null,
@@ -169,6 +170,128 @@ describe('detectParams', () => {
       'shared',
       'shared_2',
     ]);
+  });
+
+  it('models a request value found only in a causally owned non-form DOM mutation as internal page-derived', () => {
+    const session: RecordSession = {
+      meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture', userAgent: '', entryId: 'fixture' },
+      actions: [], recorderPath: 'canonical', pages: [],
+      canonicalActions: [{
+        id: 'a0', actionIdx: 0, timestamp: 1, kind: 'activate',
+        target: {
+          tag: 'button', role: 'button', accessibleName: '增加',
+          locatorEvidence: { generatedSelector: '#add', confidence: 'HIGH' },
+        },
+        after: { self: { textContent: '增加' } },
+        effects: {
+          requestIds: ['write'],
+          domMutations: [{
+            locator: { strategy: 'playwright', selector: '#total', confidence: 'HIGH' },
+            before: { textContent: '0' }, after: { textContent: '42' },
+          }],
+        },
+        raw: { eventTypes: ['click'], trusted: true }, source: 'playwright-probe',
+      }],
+      network: [{
+        ...NO_CAUSALITY, actionIdx: 0, causality: 'active-action',
+        causalityDebug: { targetKey: 'button|add||0', kind: 'click', valueAtRequest: null, msSinceTouched: 1 },
+        requestId: 'write', requestTs: 2, responseTs: 3, method: 'POST',
+        url: 'http://fixture/write', resourceType: 'fetch', headers: { 'content-type': 'application/json' },
+        postData: '{"total":42}', status: 200, responseBody: '{}', mutating: true,
+        sanitizeMode: 'structured',
+      }],
+    };
+
+    const skill = generateDraft(session).skill as typeof generateDraft extends (...args: never[]) => { skill: infer S }
+      ? S & { internalValues?: Array<{ name: string; carrier?: { via: string } }> }
+      : never;
+    expect(skill.params).toEqual([]);
+    expect(skill.internalValues).toEqual([expect.objectContaining({
+      name: 'total', carrier: expect.objectContaining({ via: 'page-derived' }),
+    })]);
+    expect(skill.steps.find((step) => step.network?.method === 'POST')?.network?.body)
+      .toEqual({ total: '{{total}}' });
+  });
+
+  it('treats a causally changed standard form value as caller input, not page-derived', () => {
+    const session: RecordSession = {
+      meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture', userAgent: '', entryId: 'fixture' },
+      actions: [], recorderPath: 'canonical', pages: [],
+      canonicalActions: [{
+        id: 'a0', actionIdx: 0, timestamp: 1, kind: 'activate',
+        target: { tag: 'button', role: 'button', accessibleName: '18', locatorEvidence: { generatedSelector: '#day18', confidence: 'HIGH' } },
+        effects: { domMutations: [{
+          locator: { strategy: 'playwright', selector: '#end', confidence: 'HIGH' },
+          before: { value: '', readonly: true }, after: { value: '2026-09-18', readonly: true },
+        }] },
+        raw: { eventTypes: ['click'], trusted: true }, source: 'playwright-probe',
+      }],
+      network: [{
+        ...NO_CAUSALITY, actionIdx: 0, causality: 'active-action', requestId: 'write',
+        requestTs: 2, responseTs: 3, method: 'POST', url: 'http://fixture/write',
+        resourceType: 'fetch', headers: { 'content-type': 'application/json' },
+        postData: '{"endDate":"2026-09-18"}', status: 200, responseBody: '{}',
+        mutating: true, sanitizeMode: 'structured',
+      }],
+    };
+
+    expect(detectParams(session)[0]?.definition).toEqual(expect.objectContaining({
+      name: 'endDate', required: true,
+      lineage: expect.objectContaining({ source: expect.objectContaining({ kind: 'user-input' }) }),
+      carrier: expect.objectContaining({ via: 'network-body' }),
+    }));
+  });
+
+  it('maps canonical DOM option labels to a unique context-free response value set', () => {
+    const session: RecordSession = {
+      meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture', userAgent: '', entryId: 'fixture' },
+      actions: [], recorderPath: 'canonical', pages: [],
+      canonicalActions: [{
+        id: 'a0', actionIdx: 0, timestamp: 20, kind: 'select',
+        target: {
+          role: 'combobox', accessibleName: 'Choice',
+          locatorEvidence: { generatedSelector: '#choice', confidence: 'HIGH' },
+        },
+        after: {
+          self: { textContent: 'Alpha' }, affectedTruncated: false,
+          affected: [
+            { locator: { strategy: 'playwright', selector: 'internal:role=option[name="Alpha"i]', confidence: 'HIGH' }, state: { textContent: 'Alpha', aria: { selected: 'true' } } },
+            { locator: { strategy: 'playwright', selector: 'internal:role=option[name="Beta"i]', confidence: 'HIGH' }, state: { textContent: 'Beta', aria: { selected: 'false' } } },
+          ],
+        },
+        raw: { eventTypes: ['click'], trusted: true }, source: 'playwright-probe',
+      }],
+      network: [
+        {
+          ...NO_CAUSALITY, requestId: 'options', requestTs: 10, responseTs: 11, method: 'GET',
+          url: 'http://fixture/options', resourceType: 'fetch', headers: {}, postData: null,
+          status: 200, responseBody: '[{"label":"Alpha","value":"A"},{"label":"Beta","value":"B"}]',
+          mutating: false, sanitizeMode: 'structured',
+        },
+        {
+          ...NO_CAUSALITY, requestId: 'first', requestTs: 30, responseTs: 31, method: 'POST',
+          url: 'http://fixture/first', resourceType: 'fetch', headers: { 'content-type': 'application/json' },
+          postData: '{"choice":"A"}', status: 200, responseBody: '{}', mutating: true,
+          sanitizeMode: 'structured', actionIdx: 0, causality: 'active-action',
+          causalityDebug: { targetKey: 'select|choice||0', kind: 'select', valueAtRequest: 'Alpha', msSinceTouched: 1 },
+        },
+        {
+          ...NO_CAUSALITY, requestId: 'submit', requestTs: 40, responseTs: 41, method: 'POST',
+          url: 'http://fixture/submit', resourceType: 'fetch', headers: { 'content-type': 'application/json' },
+          postData: '{"choice":"A"}', status: 200, responseBody: '{}', mutating: true,
+          sanitizeMode: 'structured', actionIdx: 0, causality: 'active-action',
+          causalityDebug: { targetKey: 'button|||0', kind: 'click', valueAtRequest: null, msSinceTouched: 1 },
+        },
+      ],
+    };
+
+    const draft = generateDraft(session);
+    expect(draft.skill.params[0]).toEqual(expect.objectContaining({
+      name: 'choice', type: 'enum', values: [{ label: 'Alpha', value: 'A' }, { label: 'Beta', value: 'B' }],
+      enumMap: { Alpha: 'A', Beta: 'B' },
+    }));
+    expect(draft.skill.steps.filter((step) => step.network?.body).map((step) => step.network!.body))
+      .toEqual([{ choice: '{{choice|enumValue}}' }, { choice: '{{choice|enumValue}}' }]);
   });
 });
 

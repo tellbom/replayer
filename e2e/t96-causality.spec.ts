@@ -76,10 +76,14 @@ test('T-96a: browser action causality distinguishes equal input and unrelated re
   expect(final).toMatchObject({ causality: 'active-action' });
   expect(first?.actionIdx).not.toBeNull();
   expect(final?.actionIdx).toBe(first?.actionIdx);
-  expect(session.actions[first!.actionIdx!]).toMatchObject({ type: 'fill', value: '12' });
+  expect(session.canonicalActions?.find((action) => action.actionIdx === first!.actionIdx)).toMatchObject({
+    kind: 'edit', after: { self: { value: '12' } },
+  });
   expect(final?.causalityDebug).toMatchObject({ kind: 'input', valueAtRequest: '12' });
   expect(afterBlur).toMatchObject({ actionIdx: null, causality: 'none', causalityDebug: null });
   expect(other).toMatchObject({ causality: 'active-action' });
   expect(other?.actionIdx).not.toBe(first?.actionIdx);
-  expect(session.actions[other!.actionIdx!]).toMatchObject({ type: 'fill', value: 'B' });
+  expect(session.canonicalActions?.find((action) => action.actionIdx === other!.actionIdx)).toMatchObject({
+    kind: 'edit', after: { self: { value: 'B' } },
+  });
 });

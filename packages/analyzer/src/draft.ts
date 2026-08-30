@@ -4,7 +4,8 @@ import { Document, isMap, isNode, isSeq } from 'yaml';
 
 import { correlate, type CorrelatedRequest } from './correlate.js';
 import { analysisSession, analyzedInputs, type AnalyzedAction } from './action-view.js';
-import { analyzeIdentifierStability, detectParams } from './params.js';
+import { assertPlannedCarriers } from './channel-planner.js';
+import { analyzeIdentifierStability, detectInternalValues, detectParams } from './params.js';
 import { detectPreflight } from './preflight.js';
 
 interface DraftItem {
@@ -87,6 +88,11 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   const identifierStability = analyzeIdentifierStability(session, secondSession);
   const paramCandidates = detectParams(session, secondSession);
   const params = paramCandidates.map((candidate) => candidate.definition);
+  const internalValues = detectInternalValues(session);
+  const planningParams: Skill['params'] = [
+    ...params,
+    ...internalValues.map((value) => ({ ...value, required: false })),
+  ];
   const paramBindings = new Map<number, Skill['params'][number]>();
   for (const candidate of paramCandidates) {
     candidate.sourceIndexes.forEach((index) => paramBindings.set(index, candidate.definition));
@@ -164,14 +170,14 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
     }
   }
   const recordedInputs = analyzedInputs(session);
-  const pageScoped = pageScopedAnalysis(session, params.map((param) => param.name));
+  const pageScoped = pageScopedAnalysis(session, planningParams.map((param) => param.name));
   const extracts = dependencyExtracts(items, params, recordedInputs, paramBindings);
   const preflight = detectPreflight(collapsedSession);
   const steps: Skill['steps'] = items.map(
     (item) =>
       draftStep(
         item,
-        params,
+        planningParams,
         stepByRequest,
         extracts,
         session.meta.baseUrl,
@@ -181,9 +187,15 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
         pageScoped,
       ) as Skill['steps'][number],
   );
+  for (const param of params) {
+    const requestId = param.carrier?.requestStepId;
+    const stepId = requestId ? stepByRequest.get(requestId) : undefined;
+    if (stepId && param.carrier) param.carrier = { ...param.carrier, requestStepId: stepId };
+  }
   const usedParams = params.filter((param) => steps.some((step) => [
     step.network?.url, step.network?.headers, step.network?.body, step.ui?.value,
   ].some((value) => containsParameterTemplate(value, param.name))));
+  if (session.recorderPath === 'canonical') assertPlannedCarriers(usedParams);
   const unusedParamNotes = params
     .filter((param) => !usedParams.includes(param))
     .map((param) => `参数 ${param.name} 无可靠引用，已从 draft 参数声明中移除。`);
@@ -205,6 +217,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
       recordedAt: session.meta.endedAt,
     },
     params: usedParams,
+    internalValues,
     preflight,
     steps,
     assertions: steps.some((step) => step.expectsRedirect)
@@ -387,7 +400,16 @@ function draftStep(
   pageScoped: PageScopedAnalysis,
 ): unknown {
   const request = item.request;
-  const ui = item.action
+  const browserMultipart = Boolean(
+    request
+    && /multipart\/form-data/i.test(request.headers['content-type'] ?? '')
+    && params.some((param) => param.carrier?.via === 'ui-upload'),
+  );
+  const networkPrimary = params.some((param) => param.carrier?.via.startsWith('network-'));
+  const suppressNonPrimaryUi = networkPrimary
+    && item.action?.kind !== 'navigate'
+    && !request?.mutating;
+  const ui = item.action && !suppressNonPrimaryUi
     ? uiAction(
         item.action,
         paramBindings.get(item.sourceActionIndex),
@@ -395,7 +417,7 @@ function draftStep(
         item.afterSessionInterrupt,
       )
     : undefined;
-  const network = request
+  const network = request && !browserMultipart
     ? networkAction(
         request, params, stepByRequest, extracts.get(request.requestId), baseUrl, recordedInputs,
         paramBindings,
@@ -414,8 +436,12 @@ function draftStep(
     channel:
       item.action?.kind === 'navigate'
         ? 'ui'
+        : browserMultipart
+        ? 'ui'
         : request?.mutating || (request && !ui)
         ? 'network'
+        : item.action && !ui
+          ? 'merged'
         : item.action?.kind === 'edit'
           ? 'merged'
           : 'ui',
@@ -501,6 +527,7 @@ function uiAction(
   extracts: Record<string, string> | undefined,
   discardScope = false,
 ): unknown {
+  if (param?.carrier && param.carrier.via.startsWith('network-')) return undefined;
   const name = param?.name;
   const value = name ? `{{${name}}}` : action.value;
   const common = {
@@ -512,6 +539,7 @@ function uiAction(
     ...(extracts && Object.keys(extracts).length > 0 ? { extract: extracts } : {}),
   };
   if (action.kind === 'select') return { action: 'selectOption', ...common };
+  if (action.kind === 'upload') return { action: 'upload', ...common };
   if (action.kind === 'check') {
     return { action: 'check', ...common, checked: action.checked ?? true };
   }
@@ -521,7 +549,7 @@ function uiAction(
   if (action.kind === 'navigate') return { action: 'navigate', url: action.url, ...common };
   if (action.kind === 'activate') return { action: 'click', ...common };
   if (action.kind === 'edit') return { action: 'fill', ...common };
-  if (action.kind === 'key' || action.kind === 'upload' || action.kind === 'unknown') {
+  if (action.kind === 'key' || action.kind === 'unknown') {
     return action.rawEventTypes.some((event) => event === 'click' || event === 'pointerup')
       ? { action: 'click', ...common }
       : undefined;
@@ -621,9 +649,9 @@ function parameterValues(
   action: AnalyzedAction,
   param: Skill['params'][number],
 ): string[] {
-  const direct = action.value === undefined ? [] : [action.value];
+  const direct = [action.value, action.text].filter((value): value is string => value !== undefined);
   const aliases = param.values?.flatMap((item) =>
-    item.label === action.value || item.value === action.value ? [item.label, item.value] : [],
+    direct.includes(item.label) || direct.includes(item.value) ? [item.label, item.value] : [],
   ) ?? [];
   return [...new Set([...direct, ...aliases])];
 }
@@ -666,6 +694,16 @@ function parameterizeBody(
   pageBindings: PageScopedAnalysis['bodyBindings'],
   requestId: string,
 ): void {
+  for (const [key] of Object.entries(body)) {
+    const param = params.find((candidate) =>
+      candidate.name === key && (
+        candidate.carrier?.via === 'page-derived'
+        || (candidate.carrier?.via === 'network-body'
+          && candidate.carrier.requestStepId === requestId)
+      ),
+    );
+    if (param) body[key] = parameterTemplate(param);
+  }
   visitBodyLeaves(body, [], (path, value, replace) => {
     const leafName = path.at(-1);
     const named = leafName ? params.find((candidate) => candidate.name === leafName) : undefined;
@@ -673,8 +711,9 @@ function parameterizeBody(
       parameterForAction(action, params, recordedInputs, paramBindings)?.name === named.name
       && parameterValues(action, named).includes(String(value)),
     );
-    if (named && namedAction && canRenderParam(named)) {
-      replace(`{{${named.name}${named.type === 'enum' ? '|enumValue' : ''}}}`);
+    const namedMappedValue = named?.values?.some((item) => item.value === String(value)) ?? false;
+    if (named && (namedAction || namedMappedValue) && canRenderParam(named)) {
+      replace(parameterTemplate(named));
       return;
     }
     if (typeof value !== 'string' && typeof value !== 'number') return;
@@ -687,13 +726,19 @@ function parameterizeBody(
     const unique = [...new Map(candidates.map((param) => [param.name, param])).values()];
     if (unique.length === 1) {
       const param = unique[0]!;
-      replace(`{{${param.name}${param.type === 'enum' ? '|enumValue' : ''}}}`);
+      replace(parameterTemplate(param));
       return;
     }
     if (unique.length > 1) return;
     const pageVariable = pageBindings.get(`${requestId}:${path.join('.')}`);
     if (pageVariable) replace(`{{${pageVariable}}}`);
   });
+}
+
+function parameterTemplate(param: Skill['params'][number]): string {
+  const usesDisplayMapping = param.type === 'enum'
+    && (!param.lineage || Boolean(param.lineage.representation.enumDomain));
+  return `{{${param.name}${usesDisplayMapping ? '|enumValue' : ''}}}`;
 }
 
 function pageScopedAnalysis(session: RecordSession, reservedNames: string[]): PageScopedAnalysis {
@@ -926,16 +971,22 @@ function inferPostcondition(
 
 function isRedirectingSubmission(session: RecordSession, request: RecordedRequest): boolean {
   if (!request.mutating || request.resourceType !== 'document') return false;
-  const nextActionTs = analysisSession(session).actions
-    .find((action) => action.timestamp > request.requestTs)?.timestamp;
-  const before = [...session.pages]
-    .filter((page) => page.ts <= request.requestTs)
-    .sort((left, right) => right.ts - left.ts)[0];
-  const after = [...session.pages]
-    .filter((page) => page.ts >= request.requestTs && (nextActionTs === undefined || page.ts < nextActionTs))
-    .sort((left, right) => left.ts - right.ts)[0];
-  if (!after) return false;
-  return !before || withoutHash(before.url) !== withoutHash(after.url);
+  if (session.recorderPath !== 'canonical' && !session.canonicalActions) {
+    const nextActionTs = analysisSession(session).actions
+      .find((action) => action.timestamp > request.requestTs)?.timestamp;
+    const before = [...session.pages]
+      .filter((page) => page.ts <= request.requestTs)
+      .sort((left, right) => right.ts - left.ts)[0];
+    const after = [...session.pages]
+      .filter((page) => page.ts >= request.requestTs && (nextActionTs === undefined || page.ts < nextActionTs))
+      .sort((left, right) => left.ts - right.ts)[0];
+    if (!after) return false;
+    return !before || withoutHash(before.url) !== withoutHash(after.url);
+  }
+  const owner = session.canonicalActions?.find((action) =>
+    action.effects?.requestIds?.includes(request.requestId),
+  );
+  return owner?.effects?.navigation !== undefined;
 }
 
 function withoutHash(url: string): string {

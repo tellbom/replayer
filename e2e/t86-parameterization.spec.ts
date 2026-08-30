@@ -82,6 +82,7 @@ test('T-86: 工作日录制的直接 draft 以周末参数回放并真实提交 
   expect(type?.enumMap).toEqual({
     工作日加班: 'workday',
     周末加班: 'weekend',
+    节假日加班: 'holiday',
   });
   expect(typeBodies).not.toContain('{{s4[0].value}}');
   expect(typeBodies.every((value) => value === '{{type|enumValue}}')).toBe(true);

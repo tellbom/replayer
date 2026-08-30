@@ -1,8 +1,9 @@
 import { CAUSALITY, DEPENDENCY, IDENTIFIER_STABILITY } from '@dsh/core';
-import type { ParamDefinition } from '@dsh/core';
+import type { InternalValueDefinition, ParamDefinition } from '@dsh/core';
 import type { RecordSession } from '@dsh/core';
 
 import { analysisSession, type AnalyzedAction, type AnalysisSession } from './action-view.js';
+import { inferActionLineages } from './lineage.js';
 
 const SENSITIVE_PARAM = /token|csrf|session|timestamp/i;
 const DATE_VALUE = /^\d{4}-\d{2}-\d{2}/;
@@ -33,6 +34,7 @@ export interface ParamCandidate {
   sourceIndexes: number[];
   enumStatus?: 'static' | 'contextual' | 'incomplete';
   enumSignature?: string;
+  internal?: boolean;
 }
 
 export interface IdentifierStability {
@@ -45,6 +47,9 @@ export function detectParams(
   session: RecordSession,
   secondSession?: RecordSession,
 ): ParamCandidate[] {
+  if (session.recorderPath === 'canonical' || session.canonicalActions) {
+    return detectCanonicalParams(session).filter((candidate) => !candidate.internal);
+  }
   const analyzed = analysisSession(session);
   const secondAnalyzed = secondSession ? analysisSession(secondSession) : undefined;
   const candidates = new Map<string, ParamCandidate>();
@@ -111,6 +116,18 @@ export function detectParams(
   return [...candidates.values()];
 }
 
+export function detectInternalValues(session: RecordSession): InternalValueDefinition[] {
+  if (session.recorderPath !== 'canonical' && !session.canonicalActions) return [];
+  return detectCanonicalParams(session)
+    .filter((candidate) => candidate.internal)
+    .map((candidate) => ({
+      name: candidate.definition.name,
+      type: candidate.definition.type,
+      lineage: candidate.definition.lineage!,
+      carrier: candidate.definition.carrier!,
+    }));
+}
+
 export function analyzeIdentifierStability(
   session: RecordSession,
   secondSession?: RecordSession,
@@ -151,6 +168,242 @@ function sourceLineage(action: AnalyzedAction, index: number): string {
     role: action.semanticTarget?.role ?? null,
     kind: action.kind,
   });
+}
+
+function detectCanonicalParams(session: RecordSession): ParamCandidate[] {
+  const actions = session.canonicalActions ?? [];
+  const inferred = inferActionLineages(session);
+  const candidates: ParamCandidate[] = [];
+  for (const request of session.network.filter((item) => item.mutating && item.postData)) {
+    let body: unknown;
+    try { body = JSON.parse(request.postData!); } catch { continue; }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) continue;
+    const entries = Object.entries(body);
+    const interactive = actions.filter((action) =>
+      ['edit', 'select', 'check', 'upload'].includes(action.kind)
+      || (action.kind === 'activate' && (
+        action.target?.role !== 'button' || (action.effects?.domMutations?.length ?? 0) > 0
+      )),
+    );
+    for (const [field, wireValue] of entries) {
+      const wireLeaves = primitiveValues(wireValue);
+      let owners = interactive.filter((action) =>
+        evidenceValues(action).some((value) => wireLeaves.includes(value))
+        || responseAliasMatches(session, action, wireLeaves),
+      );
+      if (owners.length === 0 && entries.length === 1 && interactive.length > 0) owners = interactive;
+      if (owners.length === 0) continue;
+      const actionIndexes = [...new Set(owners.map((action) => action.actionIdx))];
+      const sameSource = candidates.find((candidate) =>
+        candidate.definition.name === field
+        && candidate.sourceIndexes.length === actionIndexes.length
+        && candidate.sourceIndexes.every((index) => actionIndexes.includes(index)),
+      );
+      if (sameSource) continue;
+      const derivedEffects = owners.flatMap((action) => {
+        if (directEvidenceValues(action).some((value) => wireLeaves.includes(value))) return [];
+        if (responseAliasMatches(session, action, wireLeaves)) return [];
+        return (action.effects?.domMutations ?? [])
+          .filter((effect) => primitiveValues(effect.after).some((value) => wireLeaves.includes(value)))
+          .map((effect) => ({ action, effect }));
+      });
+      const derived = derivedEffects.length > 0
+        && new Set(derivedEffects.map(({ action }) => action.actionIdx)).size === owners.length;
+      const pageDerived = derived && derivedEffects.every(
+        ({ effect }) => !effect.after || !('value' in effect.after),
+      );
+      const source = inferred.find((item) => item.actionIndexes.some((index) => actionIndexes.includes(index)));
+      const responseOptions = owners
+        .map((action) => canonicalResponseOptions(session, action))
+        .find((options) => options.some((option) => wireLeaves.includes(option.value)));
+      const representation = responseOptions ? {
+        wire: 'enum' as const,
+        hasDisplayValue: true,
+        enumDomain: {
+          map: enumMap(responseOptions), contextual: false,
+          origin: 'response' as const, complete: true,
+        },
+      } : source?.lineage.representation ?? {
+        wire: wireRepresentation(wireValue), hasDisplayValue: false,
+      };
+      const cardinality = Array.isArray(wireValue) ? 'multiple' as const : 'single' as const;
+      const sourceActionIdx = source?.lineage.source.kind === 'user-input'
+        ? source.lineage.source.actionIdx
+        : undefined;
+      const first = owners.find((action) => action.actionIdx === sourceActionIdx) ?? owners[0]!;
+      const name = uniqueParamName(field, candidates.map((item) => item.definition.name));
+      const type: ParamDefinition['type'] = responseOptions ? 'enum'
+        : Array.isArray(wireValue) || isPlainObject(wireValue)
+        ? 'json'
+        : typeof wireValue === 'number' ? 'number'
+          : typeof wireValue === 'boolean' ? 'boolean'
+            : DATE_VALUE.test(String(wireValue)) ? 'datetime' : 'string';
+      candidates.push({
+        definition: {
+          name, type, required: !pageDerived,
+          ...(responseOptions ? { values: responseOptions, enumMap: enumMap(responseOptions) } : {}),
+          ...(!pageDerived && (first.target?.accessibleName || first.target?.neighborhood?.labelText)
+            ? { prompt: first.target?.accessibleName ?? first.target?.neighborhood?.labelText }
+            : {}),
+          lineage: {
+            source: pageDerived
+              ? { kind: 'derived', dependsOn: actionIndexes.map((index) => `action:${index}`) }
+              : source?.lineage.source ?? { kind: 'user-input', actionIdx: first.actionIdx },
+            representation: {
+              ...representation,
+              wire: responseOptions ? 'enum' : wireRepresentation(wireValue),
+            },
+            cardinality,
+            identity: {
+              controlKey: pageDerived
+                ? `locator:${JSON.stringify(derivedEffects[0]!.effect.locator)}`
+                : source?.lineage.identity.controlKey
+                ?? (first.target?.name ? `name:${first.target.name}` : `action:${first.actionIdx}`),
+              displayName: pageDerived ? field : first.target?.accessibleName
+                ?? first.target?.neighborhood?.labelText ?? first.target?.name ?? field,
+              ...(source?.lineage.identity.groupKey ? { groupKey: source.lineage.identity.groupKey } : {}),
+            },
+          },
+          carrier: pageDerived
+            ? { via: 'page-derived', targetLocator: derivedEffects[0]!.effect.locator }
+            : { via: 'network-body', requestStepId: request.requestId },
+        },
+        confidence: 1,
+        sources: actionIndexes.map((index) => `action[${index}]`),
+        sourceIndexes: actionIndexes,
+        ...(pageDerived ? { internal: true } : {}),
+      });
+    }
+  }
+  for (const action of actions.filter((item) => item.kind === 'upload')) {
+    const field = action.target?.name ?? normalizeIdentifier(
+      action.target?.accessibleName ?? action.target?.neighborhood?.labelText,
+    ) ?? `upload_${action.actionIdx + 1}`;
+    const files = action.after?.self?.files ?? [];
+    candidates.push({
+      definition: {
+        name: uniqueParamName(field, candidates.map((item) => item.definition.name)),
+        type: 'file', required: true,
+        ...(action.target?.accessibleName ? { prompt: action.target.accessibleName } : {}),
+        lineage: {
+          source: { kind: 'user-input', actionIdx: action.actionIdx },
+          representation: { wire: 'file', hasDisplayValue: false },
+          cardinality: files.length > 1 ? 'multiple' : 'single',
+          identity: {
+            controlKey: action.target?.name ? `name:${action.target.name}` : `action:${action.actionIdx}`,
+            displayName: action.target?.accessibleName ?? field,
+          },
+        },
+        carrier: {
+          via: 'ui-upload',
+          ...(action.target?.locatorEvidence ? {
+            targetLocator: {
+              strategy: 'playwright', selector: action.target.locatorEvidence.generatedSelector,
+              confidence: action.target.locatorEvidence.confidence,
+            },
+          } : {}),
+        },
+      },
+      confidence: 1, sources: [`action[${action.actionIdx}]`], sourceIndexes: [action.actionIdx],
+    });
+  }
+  return candidates;
+}
+
+function primitiveValues(value: unknown): string[] {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [String(value)];
+  if (Array.isArray(value)) return value.flatMap(primitiveValues);
+  if (isPlainObject(value)) return Object.values(value).flatMap(primitiveValues);
+  return [];
+}
+
+function evidenceValues(action: NonNullable<RecordSession['canonicalActions']>[number]): string[] {
+  const states = [action.before?.self, action.after?.self,
+    ...(action.effects?.domMutations ?? []).flatMap((effect) => [effect.before, effect.after])];
+  return [...new Set([
+    ...states.flatMap((state) => primitiveValues(state?.value)),
+    ...states.flatMap((state) => primitiveValues(state?.checked)),
+    ...states.flatMap((state) => primitiveValues(state?.aria?.checked)),
+    ...states.flatMap((state) => primitiveValues(state?.innerHTML)),
+    ...states.flatMap((state) => primitiveValues(state?.textContent)),
+    ...primitiveValues(action.target?.accessibleName),
+    ...primitiveValues(action.target?.neighborhood?.labelText),
+  ])];
+}
+
+function directEvidenceValues(
+  action: NonNullable<RecordSession['canonicalActions']>[number],
+): string[] {
+  const states = [action.before?.self, action.after?.self];
+  return [...new Set([
+    ...states.flatMap((state) => primitiveValues(state)),
+    ...primitiveValues(action.target?.accessibleName),
+    ...primitiveValues(action.target?.neighborhood?.labelText),
+  ])];
+}
+
+function responseAliasMatches(session: RecordSession, action: NonNullable<RecordSession['canonicalActions']>[number], wire: string[]): boolean {
+  if (canonicalResponseOptions(session, action).some((option) => wire.includes(option.value))) return true;
+  const evidence = new Set(evidenceValues(action));
+  for (const request of session.network) {
+    if (!request.responseBody) continue;
+    let body: unknown;
+    try { body = JSON.parse(request.responseBody); } catch { continue; }
+    const records = Array.isArray(body) ? body : isPlainObject(body)
+      ? Object.values(body).filter(Array.isArray).flat() : [];
+    for (const record of records) {
+      if (!isPlainObject(record)) continue;
+      const values = primitiveValues(record);
+      if (values.some((value) => evidence.has(value)) && values.some((value) => wire.includes(value))) return true;
+    }
+  }
+  return false;
+}
+
+function canonicalResponseOptions(
+  session: RecordSession,
+  action: NonNullable<RecordSession['canonicalActions']>[number],
+): Array<{ label: string; value: string }> {
+  const labels = canonicalOptionLabels(action);
+  if (labels.length === 0 || action.after?.affectedTruncated !== false) return [];
+  const candidates: Array<Array<{ label: string; value: string }>> = [];
+  for (const request of session.network) {
+    if (!request.responseBody || requestHasVariableContext(request, analysisSession(session).actions)) continue;
+    try {
+      const body: unknown = JSON.parse(request.responseBody);
+      if (!Array.isArray(body)) continue;
+      const options = inferScalarPairs(body, labels[0]!);
+      const optionLabels = new Set(options.map((option) => option.label));
+      if (labels.every((label) => optionLabels.has(label))) candidates.push(options);
+    } catch {
+      continue;
+    }
+  }
+  if (candidates.length !== 1) return [];
+  return candidates[0]!;
+}
+
+function canonicalOptionLabels(
+  action: NonNullable<RecordSession['canonicalActions']>[number],
+): string[] {
+  const labels = (action.after?.affected ?? []).flatMap(({ locator, state }) => {
+    if (locator.strategy !== 'playwright') return [];
+    const role = /^internal:role=option\[name="([\s\S]*)"i\]$/.exec(locator.selector)?.[1];
+    const label = state.textContent?.trim() || role?.replaceAll('\\"', '"').trim();
+    return label ? [label] : [];
+  });
+  return [...new Set(labels)];
+}
+
+function wireRepresentation(value: unknown): NonNullable<ParamDefinition['lineage']>['representation']['wire'] {
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'number') return 'number';
+  if (Array.isArray(value) || isPlainObject(value)) return 'json';
+  return 'string';
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizedActionTarget(action: AnalyzedAction): unknown {

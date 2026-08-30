@@ -77,7 +77,7 @@ entry:
       onReady: async (page) => {
         await page.evaluate(() => setTimeout(() => document.querySelector('button')?.click(), 0));
         const partial = await waitForPartial(join(outDir, 'record.partial.json'));
-        expect(partial.actions.some((action) => action.type === 'click')).toBe(true);
+        expect(partial.canonicalActions.some((action) => action.kind === 'activate')).toBe(true);
         expect(partial.network.some((request) => request.method === 'POST')).toBe(true);
         expect(partial.network.find((request) => request.method === 'POST')?.status).toBeNull();
         if (!releaseSubmission) throw new Error('submission did not reach fixture');
@@ -183,18 +183,25 @@ function executionContext(marker: string, baseUrl = 'http://redirect.test'): Exe
   };
 }
 
-async function waitForPartial(path: string): Promise<{ actions: Array<{ type: string }>; network: Array<{ method: string; status: number | null }> }> {
+async function waitForPartial(path: string): Promise<{
+  canonicalActions: Array<{ kind: string }>;
+  network: Array<{ method: string; status: number | null }>;
+}> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
-      return JSON.parse(await readFile(path, 'utf8')) as {
-        actions: Array<{ type: string }>;
+      const partial = JSON.parse(await readFile(path, 'utf8')) as {
+        canonicalActions?: Array<{ kind: string }>;
         network: Array<{ method: string; status: number | null }>;
       };
+      if (partial.canonicalActions?.some((action) => action.kind === 'activate')
+        && partial.network.some((request) => request.method === 'POST')) {
+        return { canonicalActions: partial.canonicalActions, network: partial.network };
+      }
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 25));
     }
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw lastError ?? new Error('partial snapshot was not written');
 }

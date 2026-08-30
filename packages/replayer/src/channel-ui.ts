@@ -9,6 +9,7 @@ import {
 } from '@dsh/core';
 import type { ExecContext, LocatorStrategy, ParamDefinition, Step, StepResult } from '@dsh/core';
 import type { Locator, Page } from 'playwright';
+import { stat } from 'node:fs/promises';
 
 import { assertLowInspection, inspectLowTarget } from './semantic-guard.js';
 import type { LowTargetInspection } from './semantic-guard.js';
@@ -277,12 +278,12 @@ async function runAction(
   } else if (action.action === 'click' && action.target?.strategy === 'playwright') {
     await activatePlaywrightTarget(await resolvePlaywrightTarget(page, action, context));
   } else if (action.action === 'fill' && action.target?.strategy === 'playwright') {
-    if (action.value === undefined) throw new Error('fill requires value');
+    if (typeof action.value !== 'string') throw new Error('fill requires string value');
     await fillWithStandardIdlFallback(await resolvePlaywrightTarget(page, action, context), action.value);
   } else if (action.action === 'click' && action.target?.strategy === 'frame-playwright') {
     await (await resolvePlaywrightTarget(page, action, context)).click();
   } else if (action.action === 'fill' && action.target?.strategy === 'frame-playwright') {
-    if (action.value === undefined) throw new Error('fill requires value');
+    if (typeof action.value !== 'string') throw new Error('fill requires string value');
     await fillWithStandardIdlFallback(await resolvePlaywrightTarget(page, action, context), action.value);
   } else if (action.action === 'selectOption' && action.target?.strategy === 'playwright') {
     if (action.value === undefined) throw new Error('selectOption requires value');
@@ -290,9 +291,21 @@ async function runAction(
     const nativeSelect = await locator.evaluate((element) => element instanceof HTMLSelectElement);
     if (nativeSelect) await locator.selectOption(action.value);
     else {
+      if (typeof action.value !== 'string') throw new Error('custom selectOption requires string value');
       await activatePlaywrightTarget(locator);
       await page.getByRole('option', { name: action.value, exact: true }).click();
     }
+  } else if (action.action === 'upload' && (
+    action.target?.strategy === 'playwright' || action.target?.strategy === 'frame-playwright'
+  )) {
+    const paths = Array.isArray(action.value) ? action.value : action.value ? [action.value] : [];
+    if (paths.length === 0) throw notSentError('upload requires one or more file paths');
+    try {
+      await Promise.all(paths.map((path) => stat(path)));
+    } catch {
+      throw notSentError('upload file path does not exist');
+    }
+    await (await resolvePlaywrightTarget(page, action, context)).setInputFiles(paths);
   } else if (action.action === 'check' && action.target?.strategy === 'playwright') {
     const locator = await resolvePlaywrightTarget(page, action, context);
     if (action.checked === false) await locator.uncheck();
@@ -320,13 +333,13 @@ async function runAction(
           : undefined);
 
       if (spec.action === 'selectOption') {
-        if (!spec.label || spec.value === undefined) {
-          throw new Error('selectOption requires label and value');
+        if (!spec.label || typeof spec.value !== 'string') {
+          throw new Error('custom selectOption requires label and string value');
         }
         await locator.selectOption(spec.label, spec.value);
       } else if (spec.action === 'setDateTime') {
-        if (!spec.label || spec.value === undefined) {
-          throw new Error('setDateTime requires label and value');
+        if (!spec.label || typeof spec.value !== 'string') {
+          throw new Error('setDateTime requires label and string value');
         }
         await locator.setDateTime(spec.label, spec.value);
       } else if (spec.action === 'waitFor') {
@@ -343,7 +356,7 @@ async function runAction(
         const element = await locator.resolve(target);
         if (spec.action === 'click') locator.robustClick(element);
         if (spec.action === 'fill') {
-          if (spec.value === undefined) throw new Error('fill requires value');
+          if (typeof spec.value !== 'string') throw new Error('fill requires string value');
           locator.setInputValue(element, spec.value);
         }
       }
@@ -387,6 +400,10 @@ async function runAction(
       }),
     );
   }, action);
+}
+
+function notSentError(message: string): Error & { outcome: 'not_sent' } {
+  return Object.assign(new Error(message), { outcome: 'not_sent' as const });
 }
 
 async function activatePlaywrightTarget(locator: Locator): Promise<void> {

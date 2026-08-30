@@ -401,6 +401,18 @@ describe('generateDraft', () => {
     const session = recording(true);
     const submit = session.network.find((item) => item.requestId === 'submit')!;
     submit.resourceType = 'document';
+    session.recorderPath = 'canonical';
+    session.canonicalActions = session.actions.map((action, actionIdx) => ({
+      id: `a${actionIdx}`,
+      actionIdx,
+      timestamp: action.ts,
+      kind: action.type === 'click' ? 'activate' : action.type === 'select' ? 'select' : 'edit',
+      effects: actionIdx === 4
+        ? { requestIds: ['submit'], navigation: { previousUrl: 'http://oa/form', url: 'http://oa/records' } }
+        : { requestIds: actionIdx === 0 ? ['approver'] : [] },
+      raw: { eventTypes: [action.type], trusted: true },
+      source: 'playwright-probe',
+    }));
     session.pages = [
       { ts: 500, url: 'http://oa/form', title: 'Form' },
       { ts: 5_150, url: 'http://oa/records', title: 'Records' },
@@ -414,6 +426,30 @@ describe('generateDraft', () => {
       request: { method: 'GET', url: '/api/overtime/history?limit=5' },
       match: expect.objectContaining({ jsonPath: '$.list[*]' }),
     }));
+  });
+
+  it('does not infer redirect from a nearby page change without owning-action navigation evidence', () => {
+    const session = recording(true);
+    const submit = session.network.find((item) => item.requestId === 'submit')!;
+    submit.resourceType = 'document';
+    session.recorderPath = 'canonical';
+    session.canonicalActions = session.actions.map((action, actionIdx) => ({
+      id: `a${actionIdx}`,
+      actionIdx,
+      timestamp: action.ts,
+      kind: action.type === 'click' ? 'activate' : action.type === 'select' ? 'select' : 'edit',
+      effects: { requestIds: actionIdx === 4 ? ['submit'] : [] },
+      raw: { eventTypes: [action.type], trusted: true },
+      source: 'playwright-probe',
+    }));
+    session.pages = [
+      { ts: 500, url: 'http://oa/form', title: 'Form' },
+      { ts: 5_150, url: 'http://oa/records', title: 'Records' },
+    ];
+
+    const result = generateDraft(session);
+    const redirectStep = result.skill.steps.find((step) => step.network?.url.includes('/submit'));
+    expect(redirectStep?.expectsRedirect).toBeUndefined();
   });
 
   it('binds same-named controls by source lineage and parameterizes distinct leaf values', () => {

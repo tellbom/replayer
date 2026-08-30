@@ -219,7 +219,7 @@ export const SkillVerificationSchema = z.object({
 });
 
 type UiActionName =
-  'navigate' | 'click' | 'fill' | 'check' | 'selectOption' | 'setDateTime' | 'waitFor' | 'readValue';
+  'navigate' | 'click' | 'fill' | 'check' | 'selectOption' | 'setDateTime' | 'upload' | 'waitFor' | 'readValue';
 
 export interface UiAction {
   action: UiActionName;
@@ -227,7 +227,7 @@ export interface UiAction {
   target?: LocatorStrategy | undefined;
   label?: string | undefined;
   kind?: ControlKind | undefined;
-  value?: string | undefined;
+  value?: string | string[] | undefined;
   checked?: boolean | undefined;
   waitFor?:
     | {
@@ -251,6 +251,7 @@ export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
       'check',
       'selectOption',
       'setDateTime',
+      'upload',
       'waitFor',
       'readValue',
     ]),
@@ -258,7 +259,7 @@ export const UiActionSchema: z.ZodType<UiAction> = z.lazy(() =>
     target: LocatorStrategySchema.optional(),
     label: z.string().optional(),
     kind: ControlKindSchema.optional(),
-    value: z.string().optional(),
+    value: z.union([z.string(), z.array(z.string())]).optional(),
     checked: z.boolean().optional(),
     waitFor: z
       .object({
@@ -376,17 +377,66 @@ export const EnumValueSchema = z.object({
   value: z.string(),
 });
 
+const ValueSourceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('user-input'), actionIdx: z.number().int().nonnegative() }),
+  z.object({ kind: z.literal('response'), requestId: z.string(), path: z.string() }),
+  z.object({ kind: z.literal('page-instance'), pageSnapshotId: z.string(), locator: LocatorStrategySchema }),
+  z.object({ kind: z.literal('derived'), dependsOn: z.array(z.string()) }),
+  z.object({ kind: z.literal('environment') }),
+  z.object({ kind: z.literal('constant') }),
+  z.object({ kind: z.literal('unresolved'), reason: z.string() }),
+]);
+
+const ValueLineageSchema = z.object({
+  source: ValueSourceSchema,
+  representation: z.object({
+    wire: z.enum(['string', 'number', 'boolean', 'enum', 'file', 'json']),
+    enumDomain: z.object({
+      map: z.record(z.string()), contextual: z.boolean(),
+      origin: z.enum(['dom-options', 'response', 'recorded-only']), complete: z.boolean(),
+    }).optional(),
+    hasDisplayValue: z.boolean(),
+  }),
+  cardinality: z.enum(['single', 'multiple']),
+  identity: z.object({
+    controlKey: z.string().optional(), displayName: z.string().optional(), groupKey: z.string().optional(),
+  }),
+});
+
+const ValueCarrierSchema = z.object({
+  via: z.enum([
+    'network-body', 'network-header', 'network-url',
+    'ui-fill', 'ui-select', 'ui-check', 'ui-upload', 'page-derived',
+  ]),
+  requestStepId: z.string().optional(),
+  targetLocator: LocatorStrategySchema.optional(),
+});
+
 export const ParamSchema = z.object({
   name: z.string(),
-  type: z.enum(['string', 'number', 'date', 'datetime', 'enum', 'boolean']),
+  type: z.enum(['string', 'number', 'date', 'datetime', 'enum', 'boolean', 'file', 'json']),
   values: z.array(EnumValueSchema).optional(),
   enumMap: z.record(z.string()).optional(),
   required: z.boolean().default(true),
   format: z.string().optional(),
   prompt: z.string().optional(),
+  lineage: ValueLineageSchema.optional(),
+  carrier: ValueCarrierSchema.optional(),
+  recoveryCarrier: ValueCarrierSchema.optional(),
 });
 
 export type ParamDefinition = z.infer<typeof ParamSchema>;
+
+export const InternalValueSchema = z.object({
+  name: z.string(),
+  type: z.enum(['string', 'number', 'date', 'datetime', 'enum', 'boolean', 'file', 'json']),
+  lineage: ValueLineageSchema,
+  carrier: ValueCarrierSchema.refine((carrier) => carrier.via === 'page-derived', {
+    message: 'internal value carrier must be page-derived',
+  }),
+});
+
+export type InternalValueDefinition = z.infer<typeof InternalValueSchema>;
 
 export const AssertionSchema = z.object({
   type: z.enum(['httpStatus', 'jsonPath', 'textPresent', 'regexExtract']),
@@ -411,6 +461,7 @@ export const SkillSchema = z.object({
     recordedAt: z.string().optional(),
   }),
   params: z.array(ParamSchema),
+  internalValues: z.array(InternalValueSchema).optional(),
   preflight: z.array(PreflightSchema).default([]),
   steps: z.array(StepSchema),
   assertions: z.array(AssertionSchema).default([]),
@@ -457,6 +508,27 @@ export function parseSkill(yamlText: string, entryResolver: (id: string) => Entr
   }
   const skill = SkillSchema.parse(raw);
   const entry = entryResolver(skill.skill.entry);
+
+  const serializedSkill = JSON.stringify(skill);
+  const referencedStepNames = skill.steps
+    .map((step) => step.id)
+    .filter((id) => {
+      const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`\\{\\{\\s*${escaped}(?:\\.|\\[)`).test(serializedSkill);
+    });
+  const internalNames = new Set([
+    ...skill.preflight.map((item) => item.name),
+    ...referencedStepNames,
+    ...(skill.internalValues ?? []).map((value) => value.name),
+  ]);
+  const collisions = skill.params
+    .map((param) => param.name)
+    .filter((name) => internalNames.has(name));
+  if (collisions.length > 0) {
+    throw new SchemaViolationError(
+      `调用方参数不得占用内部变量命名空间：${collisions.join(', ')}。请重新录制或重命名参数。`,
+    );
+  }
 
   const redirectWithoutPostcondition = skill.steps.find(
     (step) =>

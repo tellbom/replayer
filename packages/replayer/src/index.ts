@@ -6,3 +6,4 @@ export * from './assert.js';
 export * from './diagnostic.js';
 export * from './virtual-list.js';
 export * from './semantic-guard.js';
+export * from './carrier-runtime.js';

@@ -39,9 +39,11 @@ export function assertNoUnresolvedExecutableValues(value: unknown): void {
 export function validateExecutionParams(
   definitions: readonly ParamDefinition[],
   values: Record<string, unknown>,
+  reservedInternalNames: readonly string[] = [],
 ): void {
   const declared = new Set(definitions.map((definition) => definition.name));
-  const unknown = Object.keys(values).filter((name) => !declared.has(name));
+  const reserved = new Set(reservedInternalNames);
+  const unknown = Object.keys(values).filter((name) => !declared.has(name) && !reserved.has(name));
   if (unknown.length > 0) {
     throw new UnknownParameterError(
       `传入了技能未声明的参数：${safeList(unknown)}。技能实际声明：${safeList([...declared]) || '无'}。请删除未知参数或重新录制技能。`,
@@ -79,6 +81,17 @@ export function validateExecutionParams(
       throw new InvalidParameterTypeError(
         `参数「${safe(definition.name)}」必须是 boolean，当前类型为 ${safe(Array.isArray(value) ? 'array' : typeof value)}。`,
       );
+    }
+    if (definition.type === 'json' && (typeof value !== 'object' || value === null)) {
+      throw new InvalidParameterTypeError(
+        `参数「${safe(definition.name)}」必须是 object 或 array，当前类型为 ${safe(typeof value)}。`,
+      );
+    }
+    if (definition.type === 'file') {
+      const paths = Array.isArray(value) ? value : [value];
+      if (paths.some((item) => typeof item !== 'string' || item.length === 0)) {
+        throw new InvalidParameterTypeError(`参数「${safe(definition.name)}」必须是文件路径字符串。`);
+      }
     }
   }
 }

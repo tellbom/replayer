@@ -301,7 +301,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
         pageCandidatePools.push({
           ts,
           url,
-          actionIdx: latestNavigationActionIndex(actions, url, ts),
+          actionIdx: latestNavigationActionIndex(actions, canonicalActions, recorderPath, url, ts),
           immutableValues: candidates.map((candidate) => ({
             locator: candidate.locator,
             value: sanitizePageValue(sanitizer, candidate.key, candidate.value),
@@ -344,7 +344,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     [...excludeMatchers, ...probeMatchers],
     () => { void persistPartial('mutating-request-started'); },
     () => activeAction,
-    (request) => persistConsumedPageValues(request, pageCandidatePools, pageSnapshots, actions),
+    (request) => persistConsumedPageValues(
+      request, pageCandidatePools, pageSnapshots, actions, canonicalActions, recorderPath,
+    ),
     sanitizer,
   );
   const partialTimer = setInterval(() => {
@@ -552,6 +554,8 @@ function persistConsumedPageValues(
   pools: PageSnapshot[],
   output: PageSnapshot[],
   actions: RecordedAction[],
+  canonicalActions: CanonicalAction[],
+  recorderPath: 'legacy' | 'canonical',
 ): void {
   const pool = [...pools]
     .filter((candidate) => candidate.ts <= request.requestTs)
@@ -566,7 +570,9 @@ function persistConsumedPageValues(
       snapshot = {
         ts: pool.ts,
         url: pool.url,
-        actionIdx: latestNavigationActionIndex(actions, pool.url, request.requestTs) ?? pool.actionIdx,
+        actionIdx: latestNavigationActionIndex(
+          actions, canonicalActions, recorderPath, pool.url, request.requestTs,
+        ) ?? pool.actionIdx,
         immutableValues: [],
       };
       output.push(snapshot);
@@ -612,7 +618,23 @@ function collectScalarValues(value: unknown, output: Set<string>): void {
   }
 }
 
-function latestNavigationActionIndex(actions: RecordedAction[], url: string, ts: number): number | null {
+function latestNavigationActionIndex(
+  actions: RecordedAction[],
+  canonicalActions: CanonicalAction[],
+  recorderPath: 'legacy' | 'canonical',
+  url: string,
+  ts: number,
+): number | null {
+  if (recorderPath === 'canonical') {
+    for (let index = canonicalActions.length - 1; index >= 0; index -= 1) {
+      const action = canonicalActions[index]!;
+      const navigationUrl = action.effects?.navigation?.url ?? action.after?.page?.url;
+      if (action.kind === 'navigate' && action.timestamp <= ts && navigationUrl === url) {
+        return action.actionIdx;
+      }
+    }
+    return null;
+  }
   for (let index = actions.length - 1; index >= 0; index -= 1) {
     const action = actions[index]!;
     if (action.type === 'navigate' && action.ts <= ts && action.url === url) return index;

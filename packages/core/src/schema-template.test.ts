@@ -66,6 +66,46 @@ const paramDefinitions: ParamDefinition[] = [
 ];
 
 describe('模板引擎', () => {
+  it('accepts frozen lineage and explicit carrier evidence', () => {
+    const parsed = SkillSchema.parse({
+      skill: { id: 'lineage', name: 'lineage', system: 'fixture', baseUrl: 'http://fixture.invalid', entry: 'oa' },
+      params: [{
+        name: 'attachment', type: 'file', required: true,
+        lineage: {
+          source: { kind: 'user-input', actionIdx: 2 },
+          representation: { wire: 'file', hasDisplayValue: false },
+          cardinality: 'single', identity: { controlKey: 'name:attachment', displayName: 'Attachment' },
+        },
+        carrier: { via: 'ui-upload', targetLocator: { strategy: 'css', selector: '#attachment' } },
+      }],
+      steps: [], assertions: [],
+    });
+    expect(parsed.params[0]?.carrier?.via).toBe('ui-upload');
+  });
+
+  it('keeps page-derived values outside the caller parameter signature', () => {
+    const parsed = SkillSchema.parse({
+      skill: { id: 'derived', name: 'derived', system: 'fixture', baseUrl: 'http://fixture.invalid', entry: 'oa' },
+      params: [],
+      internalValues: [{
+        name: 'total', type: 'number',
+        lineage: {
+          source: { kind: 'derived', dependsOn: ['action:0'] },
+          representation: { wire: 'number', hasDisplayValue: false },
+          cardinality: 'single', identity: { controlKey: 'locator:#total', displayName: 'total' },
+        },
+        carrier: {
+          via: 'page-derived',
+          targetLocator: { strategy: 'playwright', selector: '#total', confidence: 'HIGH' },
+        },
+      }],
+      steps: [], assertions: [],
+    });
+
+    expect(parsed.params).toEqual([]);
+    expect(parsed.internalValues).toHaveLength(1);
+  });
+
   it('解析普通参数', () => {
     expect(resolveTemplate('{{reason}}', context)).toBe('版本上线');
   });
@@ -137,6 +177,30 @@ describe('模板引擎', () => {
 });
 
 describe('Skill Schema', () => {
+  it('rejects caller parameters that collide with preflight or step-result namespaces', () => {
+    const resolve = entryResolver(testEntry());
+    expect(() => parseSkill(`
+skill: { id: collision, name: collision, system: fixture, baseUrl: http://localhost, entry: oa }
+params: [{ name: csrf, type: string, required: false }]
+preflight:
+  - name: csrf
+    extract: { type: dom, selector: 'meta[name=csrf]', attribute: content }
+steps: []
+`, resolve)).toThrow(/内部变量.*csrf/);
+    expect(() => parseSkill(`
+skill: { id: collision, name: collision, system: fixture, baseUrl: http://localhost, entry: oa }
+params: [{ name: s1, type: string, required: false }]
+steps:
+  - { id: s1, desc: read, channel: merged, riskLevel: read, hasSideEffect: false }
+  - id: submit
+    desc: submit
+    channel: network
+    riskLevel: read
+    hasSideEffect: false
+    network: { method: GET, url: '/items?value={{s1.value}}' }
+`, resolve)).toThrow(/内部变量.*s1/);
+  });
+
   it('拒绝加载仍含 TODO_UNRESOLVED 的草稿', () => {
     expect(() => parseSkill(`
 skill: { id: unresolved, name: unresolved, system: mock, baseUrl: http://localhost, entry: oa }

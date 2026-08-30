@@ -186,35 +186,35 @@ Run Analyzer unit tests, build, constraints, Phase 0/1 focused E2E, and the 19-c
 - Produces: `ValueLineage`, `ValueSource`, `ValueRepresentation`, `LineageIdentity` exactly as frozen in the Phase 2 spec.
 - Consumes later: Channel Planner consumes one lineage per parameter.
 
-- [ ] **Step 1: Add failing schema and lineage inference tests**
+- [x] **Step 1: Add failing schema and lineage inference tests**
 
 Tests cover different controls with equal values, naming collisions, same-name checkbox group, non-default single checkbox value, conservative enum fallback, complete DOM option map, contextual upstream-linked options, derived mutation, and environment-only request leaf.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `npx vitest run packages/analyzer/src/lineage.test.ts packages/core/src/schema-template.test.ts`.
 
-- [ ] **Step 3: Add frozen lineage types and schema**
+- [x] **Step 3: Add frozen lineage types and schema**
 
 Implement the exact source/representation/cardinality/identity model from `docs/DSH-Phase2-Dataflow.md`; no `constants` contract is added.
 
-- [ ] **Step 4: Implement source identity and eight-level naming**
+- [x] **Step 4: Implement source identity and eight-level naming**
 
 Use action provenance + standard DOM semantics + locator fingerprint. Different sources remain separate; collisions receive suffixes. Request leaf name is level six. Action kind fallback always adds an unresolved diagnostic.
 
-- [ ] **Step 5: Implement checkbox cardinality and value-based distribution**
+- [x] **Step 5: Implement checkbox cardinality and value-based distribution**
 
 Same `name` group with more than one member becomes `multiple enum`; non-default value becomes single enum; insufficient evidence becomes single enum, never boolean. Replay checks values by the controls' recorded value, never array position.
 
-- [ ] **Step 6: Implement enum domain and contextual evidence**
+- [x] **Step 6: Implement enum domain and contextual evidence**
 
 Complete interaction-time DOM options can provide the domain only when independent stability evidence says static. Response mapping is stored as a static label→value table. Add a code comment distinguishing this from forbidden runtime `{{sN[0].value}}` indexing.
 
-- [ ] **Step 7: Implement derived via domMutations and environment refusal**
+- [x] **Step 7: Implement derived via domMutations and environment refusal**
 
 Use the causally owned `DomEffect.locator` as a `page-derived` source/carrier candidate. Do not broaden affected capture. DOM-invisible submit-time values become unresolved with the mandated readable note and cannot load as executable skills.
 
-- [ ] **Step 8: Verify server-stored multi-value and cross-parameter results**
+- [x] **Step 8: Verify server-stored multi-value and cross-parameter results**
 
 Record value A, generate without manual edits, replay value B, then query the fixture service and print the stored JSON. Assert the stored set/value equals B. Also grep generated drafts for forbidden step-result numeric indexing.
 
@@ -238,35 +238,35 @@ Record value A, generate without manual edits, replay value B, then query the fi
 - Produces: `ValueCarrier` with exactly one primary carrier per parameter and optional preplanned UI recovery attached to the owning step.
 - Consumes: ValueLineage and action/request/navigation causality.
 
-- [ ] **Step 1: Add failing planner invariant tests**
+- [x] **Step 1: Add failing planner invariant tests**
 
 Assert zero carriers and duplicate carriers both fail draft validation; runtime cannot invent fallback; preplanned network→UI recovery is allowed only for `not_sent` or proven no-side-effect failure and only when every dependency has a UI carrier.
 
-- [ ] **Step 2: Add failing upload and redirect E2E**
+- [x] **Step 2: Add failing upload and redirect E2E**
 
 Upload records metadata only, replays a different path with `setInputFiles`, queries stored file metadata, and verifies missing path sends no submit. Redirect tests require causal navigation on the mutating step and reject missing postcondition.
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 Run planner unit tests and `e2e/phase2-carriers.spec.ts`; expected failures are missing carrier schema/runtime support.
 
-- [ ] **Step 4: Add carrier model and planner**
+- [x] **Step 4: Add carrier model and planner**
 
 Implement `network-body/header/url`, `ui-fill/select/check/upload`, and `page-derived`. Each parameter has exactly one primary carrier. Any unplanned or unresolved carrier writes `TODO_UNRESOLVED`, which existing Phase 0 load guards reject.
 
-- [ ] **Step 5: Remove runtime carrier invention**
+- [x] **Step 5: Remove runtime carrier invention**
 
 Engine may execute only the primary carrier or a recovery carrier serialized by Analyzer. Preserve four-state outcome and C12 no-retry behavior. Do not weaken merged carrier checks.
 
-- [ ] **Step 6: Implement UI upload**
+- [x] **Step 6: Implement UI upload**
 
 Validate path existence before browser action, call Playwright `setInputFiles`, warn on recorded metadata mismatch, and never build multipart manually.
 
-- [ ] **Step 7: Fix causal redirect planning**
+- [x] **Step 7: Fix causal redirect planning**
 
 Set `expectsRedirect` only when a mutating request/action owns a navigation effect through actionIdx/requestIds lifecycle evidence. Such steps omit HTTP status assertions and require a postcondition. Fill steps cannot receive `expectsRedirect` merely by temporal proximity.
 
-- [ ] **Step 8: Run full A-group and carrier verification**
+- [x] **Step 8: Run full A-group and carrier verification**
 
 Rerun the complete A-group now that enum validation no longer masks the merged gate. Record that the merged carrier guard stops the unsafe path before submission.
 
@@ -279,15 +279,15 @@ Rerun the complete A-group now that enum validation no longer masks the merged g
 **Interfaces:**
 - Produces: GLM-ready evidence and a single bounded Phase 2 branch history.
 
-- [ ] **Step 1: Audit every acceptance item**
+- [x] **Step 1: Audit every acceptance item**
 
 Map V-A-1..8, V-B-1..13, V-C-1..8, and G-2.1..5 to a test command and captured result. List a specific cause for every unrecovered matrix cell.
 
-- [ ] **Step 2: Answer the ten-parameter four-question audit**
+- [x] **Step 2: Answer the ten-parameter four-question audit**
 
 For at least ten generated parameters, report source, representation, cardinality, and carrier from serialized draft evidence.
 
-- [ ] **Step 3: Run final verification**
+- [x] **Step 3: Run final verification**
 
 ```powershell
 npm run build
@@ -298,11 +298,11 @@ npx playwright test --workers=1
 
 Run task-file lint separately. Report existing repository-wide lint baseline separately if it remains outside task scope.
 
-- [ ] **Step 4: Verify repository boundaries**
+- [x] **Step 4: Verify repository boundaries**
 
 Confirm `packages/locator/src/recorder-probe.ts` has no branch diff, framework CI passes, `ir-downgrade.ts` has zero references, no numeric step-result indexing exists, and main checkout user files were never staged or modified.
 
-- [ ] **Step 5: Commit only Phase 2 files**
+- [x] **Step 5: Commit only Phase 2 files**
 
 ```powershell
 git add docs packages e2e/phase2-*.spec.ts e2e/matrix scripts package.json package-lock.json

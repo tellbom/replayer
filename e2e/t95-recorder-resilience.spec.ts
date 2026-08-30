@@ -36,7 +36,9 @@ test('recording survives a navigation that destroys an in-flight page context', 
     },
   });
 
-  expect(session.actions.some((action) => action.text === 'Navigate now')).toBe(true);
+  expect(session.canonicalActions?.some((action) =>
+    action.target?.accessibleName === 'Navigate now' || action.before?.self?.textContent === 'Navigate now',
+  )).toBe(true);
   await expect(readFile(`${outDir}/record.json`, 'utf8')).resolves.toContain('Navigate now');
 });
 
@@ -69,5 +71,7 @@ test('an abnormal recorder exit preserves an atomic incomplete snapshot', async 
     RecordSession & { incomplete: boolean; reason: string };
   expect(partial.incomplete).toBe(true);
   expect(partial.reason).toContain('forced-recorder-failure');
-  expect(partial.actions.some((action) => action.text === 'Keep this action')).toBe(true);
+  expect(partial.canonicalActions?.some((action) =>
+    action.target?.accessibleName === 'Keep this action' || action.before?.self?.textContent === 'Keep this action',
+  )).toBe(true);
 });

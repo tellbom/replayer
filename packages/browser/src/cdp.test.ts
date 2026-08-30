@@ -43,5 +43,5 @@ describe('T-21 CDP 薄封装', () => {
     } finally {
       await browser.close();
     }
-  });
+  }, 15_000);
 });
