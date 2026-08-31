@@ -1,7 +1,7 @@
 # DSH Browser Skill · Phase 3 Cutover 执行报告
 
 日期：2026-08-31
-状态：Phase 3 Gate 通过，待提交
+状态：Phase 3 Gate 通过，已提交
 分支：`codex/phase2-dataflow`
 基线：`846c4dc`
 
@@ -227,6 +227,7 @@ skip 必须逐项列出：A3 rebuild/CSS hash、A8 Vue2 条件未启用、A10 St
 ## 10. 交付边界
 
 - 分支：`codex/phase2-dataflow`；基线 `846c4dc`。
+- 实现提交：`7913b0c`（`refactor: complete canonical recorder cutover`）；完整交付范围为 `846c4dc..HEAD`，本报告最终化提交位于实现提交之后。
 - 主工作区 `E:\replayer` 的既有脏文件未修改、未暂存；所有 Phase 3 改动位于隔离 worktree。
 - 本报告不记录认证口令、Cookie、Authorization 或 bearer token。
-- 未 merge、未 push；最终提交范围与 commit hash 在回归完成后补入。
+- 未 merge、未 push；按交付裁决保留隔离分支供 GLM 复核。
