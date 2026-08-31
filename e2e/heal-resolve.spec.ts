@@ -22,13 +22,13 @@ test('heal-resolve: 字段改名后生成仅定位验证的 candidate', async ({
   const snapshot = await page.evaluate(() => window.__DSH_SNAPSHOT__());
   const candidate = await proposeHeal({
     llm: mockLLM({
-      target: { strategy: 'el-form-item', label: '加班原因', kind: 'textarea' },
+      target: { strategy: 'label', label: '加班原因', kind: 'textarea' },
       evidence: 'textarea "加班原因"',
     }),
     page,
     step: step('reason', '填写事由', 'read', false, {
       action: 'fill',
-      target: { strategy: 'el-form-item', label: '事由', kind: 'textarea' },
+      target: { strategy: 'label', label: '事由', kind: 'textarea' },
       value: '版本上线',
     }),
     error: new Error('找不到表单项: 事由'),

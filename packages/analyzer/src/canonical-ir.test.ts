@@ -68,6 +68,6 @@ function canonicalSession(actions: CanonicalAction[], network: RecordedRequest[]
       startedAt: '2026-08-29T00:00:00.000Z', endedAt: '2026-08-29T00:00:01.000Z',
       baseUrl: 'http://fixture.invalid', userAgent: 'test', entryId: 'fixture',
     },
-    actions: [], canonicalActions: actions, recorderPath: 'canonical', network, pages: [],
+    canonicalActions: actions, network, pages: [],
   };
 }

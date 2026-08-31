@@ -48,6 +48,9 @@ test('T99: unknown shows a banner, waits, and continues after generic probe evid
   await page.goto('/login');
   await page.evaluate(() => history.replaceState({}, '', '/neutral'));
   await page.setContent('<main>neutral page</main>');
+  await page.route('**/neutral', (route) => route.fulfill({
+    status: 200, contentType: 'text/html', body: '<main>neutral page</main>',
+  }));
 
   const handshake = ensureLoggedIn(page, {
     ...auth,

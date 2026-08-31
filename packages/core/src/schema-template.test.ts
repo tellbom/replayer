@@ -106,6 +106,20 @@ describe('模板引擎', () => {
     expect(parsed.internalValues).toHaveLength(1);
   });
 
+  it('rejects the removed params page-derived compatibility shape', () => {
+    expect(() => SkillSchema.parse({
+      skill: { id: 'legacy-derived', name: 'legacy-derived', system: 'fixture', baseUrl: 'http://fixture.invalid', entry: 'oa' },
+      params: [{
+        name: 'total', type: 'number', required: false,
+        carrier: {
+          via: 'page-derived',
+          targetLocator: { strategy: 'playwright', selector: '#total', confidence: 'HIGH' },
+        },
+      }],
+      steps: [], assertions: [],
+    })).toThrow(/page-derived values must be declared in internalValues/);
+  });
+
   it('解析普通参数', () => {
     expect(resolveTemplate('{{reason}}', context)).toBe('版本上线');
   });

@@ -35,6 +35,30 @@ test('Phase 2-0 merges one stable-target pointer sequence across the settle boun
   expect(activations[0]?.raw.eventTypes).toEqual(['pointerdown', 'pointerup', 'click']);
 });
 
+test('canonical settle preserves an IDL value mutation caused by a sibling activation', async ({ page }) => {
+  const actions = await installCanonical(page, 30, `
+    <button id="increment" type="button">Increment</button>
+    <input id="quantity" type="number" value="1">
+    <button id="submit" type="button">Submit</button>
+    <script>
+      increment.addEventListener('click', () => { quantity.value = String(Number(quantity.value) + 1); });
+    </script>
+  `);
+
+  expect(await page.evaluate(() => typeof Reflect.get(window, '__DSH_CANONICAL_FLUSH__'))).toBe('function');
+
+  await page.locator('#increment').click();
+  await page.locator('#submit').click();
+  await flushCanonical(page);
+
+  const activation = actions.find((action) => action.target?.accessibleName === 'Increment');
+  expect(activation?.effects?.domMutations).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      after: expect.objectContaining({ value: '2' }),
+    }),
+  ]));
+});
+
 async function installCanonical(
   page: Page,
   settleMs: number,

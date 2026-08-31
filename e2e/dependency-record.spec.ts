@@ -59,8 +59,20 @@ test('dependency-record: 切换类型后必须重新注入审批人与 token', a
 
 function recording(token: string): RecordSession {
   return {
-    meta: { startedAt: '', endedAt: '', baseUrl: 'http://127.0.0.1:15173', userAgent: 'Chrome' },
-    actions: [{ ts: 1_000, type: 'select' }, { ts: 2_000, type: 'click' }],
+    meta: {
+      startedAt: '', endedAt: '', baseUrl: 'http://127.0.0.1:15173',
+      userAgent: 'Chrome', entryId: 'oa',
+    },
+    canonicalActions: [
+      {
+        id: 'a0', actionIdx: 0, timestamp: 1_000, kind: 'select',
+        raw: { eventTypes: ['change'], trusted: true }, source: 'playwright-probe',
+      },
+      {
+        id: 'a1', actionIdx: 1, timestamp: 2_000, kind: 'activate',
+        raw: { eventTypes: ['click'], trusted: true }, source: 'playwright-probe',
+      },
+    ],
     network: [
       {
         requestId: 'approver',

@@ -70,7 +70,7 @@ function resolveCarrierLocator(page: Page, target: LocatorStrategy): Locator {
     const locator = page.getByText(target.text, { exact: target.exact !== false });
     return target.nth === undefined ? locator : locator.nth(target.nth);
   }
-  throw new Error(`page-derived carrier does not support deprecated strategy ${target.strategy}`);
+  throw new Error('page-derived carrier received an unsupported locator strategy');
 }
 
 function coerceObserved(

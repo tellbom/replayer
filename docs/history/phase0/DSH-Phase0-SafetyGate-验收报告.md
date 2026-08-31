@@ -2,7 +2,7 @@
 
 日期：2026-08-28
 
-执行依据：[DSH-Phase0-SafetyGate.md](DSH-Phase0-SafetyGate.md)
+执行依据：[DSH-Phase0-SafetyGate.md](../../DSH-Phase0-SafetyGate.md)
 
 目标：所有已知“执行成功但提交数据错误”的路径必须在副作用前明确失败。
 

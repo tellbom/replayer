@@ -1,12 +1,13 @@
-import type { RecordedRequest, RecordSession } from '@dsh/core';
+import type { RecordedRequest } from '@dsh/core';
 import { describe, expect, it } from 'vitest';
 
 import { correlate } from './correlate.js';
+import { testSession, type MutableTestSession } from './test-session-fixture.js';
 
 describe('correlate', () => {
   it('uses requestTs instead of a slow response timestamp', () => {
     const session = baseSession();
-    session.actions = [
+    session.events = [
       { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
       { ts: 1_500, type: 'fill', label: '事由', value: '版本上线' },
     ];
@@ -19,7 +20,7 @@ describe('correlate', () => {
 
   it('assigns the overtime approver request to the select action', () => {
     const session = baseSession();
-    session.actions = [
+    session.events = [
       { ts: 1_000, type: 'navigate', url: 'http://oa/overtime/apply' },
       { ts: 2_000, type: 'select', label: '加班类型', value: '工作日加班' },
       { ts: 2_500, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },
@@ -33,7 +34,7 @@ describe('correlate', () => {
 
   it('groups requests outside every action window as orphan', () => {
     const session = baseSession();
-    session.actions = [{ ts: 5_000, type: 'click' }];
+    session.events = [{ ts: 5_000, type: 'click' }];
     session.network = [request('page-init', 1_000, 1_200)];
 
     const result = correlate(session);
@@ -51,7 +52,7 @@ describe('correlate', () => {
 
   it('assigns one request to only one action', () => {
     const session = baseSession();
-    session.actions = [
+    session.events = [
       { ts: 1_000, type: 'click' },
       { ts: 1_100, type: 'fill', value: 'x' },
     ];
@@ -65,7 +66,7 @@ describe('correlate', () => {
   it('detects approverId and approvalToken dependencies and the final submit', () => {
     const token = '<REDACTED:sha256:123456789abc>';
     const session = baseSession();
-    session.actions = [{ ts: 1_000, type: 'select' }, { ts: 2_000, type: 'click' }];
+    session.events = [{ ts: 1_000, type: 'select' }, { ts: 2_000, type: 'click' }];
     session.network = [
       {
         ...request('approver', 1_100, 1_200),
@@ -95,7 +96,7 @@ describe('correlate', () => {
 
   it('ignores repeated weak values but keeps unique ids as dependencies', () => {
     const session = baseSession();
-    session.actions = [{ ts: 1_000, type: 'click' }];
+    session.events = [{ ts: 1_000, type: 'click' }];
     session.network = [
       {
         ...request('serverinfo', 900, 950),
@@ -119,7 +120,7 @@ describe('correlate', () => {
 
   it('keeps orphan requests in temporal order across action steps', () => {
     const session = baseSession();
-    session.actions = [{ ts: 2_000, type: 'click' }];
+    session.events = [{ ts: 2_000, type: 'click' }];
     session.network = [
       request('orphan-init', 1_000, 1_200),
       request('submit', 2_100, 2_200),
@@ -132,7 +133,7 @@ describe('correlate', () => {
 
   it('drops an unsafe dependency from fallback sanitization without aborting analysis', () => {
     const session = baseSession();
-    session.actions = [{ ts: 1_000, type: 'click' }];
+    session.events = [{ ts: 1_000, type: 'click' }];
     const shared = 'same-secret-value';
     session.network = [
       { ...request('source', 1_100, 1_200), responseBody: JSON.stringify({ token: shared }) },
@@ -149,7 +150,7 @@ describe('correlate', () => {
 
   it('uses an observed response value match instead of the nearest fast-paced action', () => {
     const session = baseSession();
-    session.actions = [
+    session.events = [
       { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
       { ts: 1_120, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },
       { ts: 1_240, type: 'fill', label: '事由', value: '版本上线' },
@@ -174,7 +175,7 @@ describe('correlate', () => {
 
   it('does not globally match request values outside the causality window', () => {
     const session = baseSession();
-    session.actions = [
+    session.events = [
       { ts: 1_000, type: 'select', label: '加班类型', value: '工作日加班' },
       { ts: 3_000, type: 'datetime', label: '开始时间', value: '2026-08-18 18:00:00' },
       { ts: 5_000, type: 'fill', label: '事由', value: '版本上线' },
@@ -197,7 +198,7 @@ describe('correlate', () => {
 
   it('marks the time-window fallback as low confidence', () => {
     const session = baseSession();
-    session.actions = [{ ts: 1_000, type: 'click', text: '刷新' }];
+    session.events = [{ ts: 1_000, type: 'click', text: '刷新' }];
     session.network = [{ ...request('telemetry', 1_137, 1_200), postData: '{}' }];
 
     const correlated = correlate(session)[0]?.requests[0]?.correlation;
@@ -209,7 +210,7 @@ describe('correlate', () => {
 
   it('matches a query value when HTTP input precedes the later change event', () => {
     const session = baseSession();
-    session.actions = [{ ts: 1_500, type: 'fill', label: 'Lookup', value: 'Alexandra' }];
+    session.events = [{ ts: 1_500, type: 'fill', label: 'Lookup', value: 'Alexandra' }];
     session.network = [{
       ...request('lookup', 1_100, 1_400), method: 'GET', mutating: false, postData: null,
       url: 'http://example.test/lookup?q=Alexandra',
@@ -224,7 +225,7 @@ describe('correlate', () => {
 
   it('prefers the browser-observed action marker over weak value and time heuristics', () => {
     const session = baseSession();
-    session.actions = [
+    session.events = [
       { ts: 1_000, type: 'fill', label: 'Lookup', value: '1' },
       { ts: 1_100, type: 'click', text: 'Refresh' },
     ];
@@ -247,7 +248,7 @@ describe('correlate', () => {
 
   it('does not use a weak short value to bind an unmarked request', () => {
     const session = baseSession();
-    session.actions = [{ ts: 1_000, type: 'fill', label: 'Lookup', value: '1' }];
+    session.events = [{ ts: 1_000, type: 'fill', label: 'Lookup', value: '1' }];
     session.network = [{
       ...request('listing', 1_100, 1_200), method: 'GET', mutating: false, postData: null,
       url: 'http://example.test/listing?page=1',
@@ -259,13 +260,9 @@ describe('correlate', () => {
 
   it('does not treat weak response scalars as DOM causality evidence', () => {
     const session = baseSession();
-    session.actions = [
+    session.events = [
       {
         ts: 1_000, type: 'click', text: 'open',
-        produces: {
-          scopeId: 'sc1', root: { strategy: 'css', selector: '.panel-0' },
-          kind: 'panel', portaled: false, appearedAfterMs: 10,
-        },
       },
       { ts: 1_200, type: 'click', text: 'submit' },
     ];
@@ -279,13 +276,13 @@ describe('correlate', () => {
   });
 });
 
-function baseSession(): RecordSession {
-  return {
+function baseSession(): MutableTestSession {
+  return testSession({
     meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
-    actions: [],
+    events: [],
     network: [],
     pages: [],
-  };
+  });
 }
 
 function request(id: string, requestTs: number, responseTs: number): RecordedRequest {

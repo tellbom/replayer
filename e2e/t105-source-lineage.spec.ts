@@ -21,7 +21,7 @@ entry:
 `);
 const locatorScript = await readFile('packages/locator/dist/dom-locator.iife.js', 'utf8');
 
-test('T-105 keeps two source lineages separate through UI, network, and stored record', async ({ page }) => {
+test('T-105 keeps two source lineages separate through caller params, network, and stored record', async ({ page }) => {
   await page.addInitScript({ content: locatorScript });
   const stored: Array<{ first: string; second: string }> = [];
   await page.route('http://lineage.test/**', async (route) => {
@@ -44,13 +44,17 @@ test('T-105 keeps two source lineages separate through UI, network, and stored r
   await page.goto('http://lineage.test/form');
 
   const draft = generateDraft(recording());
-  expect(draft.skill.steps.filter((step) => step.ui?.action === 'fill').map((step) => ({
-    target: step.ui?.target,
-    value: step.ui?.value,
+  expect(draft.skill.params.map((param) => ({
+    name: param.name,
+    actionIdx: param.lineage?.source.kind === 'user-input'
+      ? param.lineage.source.actionIdx
+      : undefined,
+    carrier: param.carrier?.via,
   }))).toEqual([
-    { target: { strategy: 'css', selector: '#first' }, value: '{{shared}}' },
-    { target: { strategy: 'css', selector: '#second' }, value: '{{shared_2}}' },
+    { name: 'shared', actionIdx: 0, carrier: 'network-body' },
+    { name: 'shared_2', actionIdx: 1, carrier: 'network-body' },
   ]);
+  expect(draft.skill.steps.filter((step) => step.ui?.action === 'fill')).toEqual([]);
   const context: ExecContext = {
     params: { shared: 'runtime-first', shared_2: 'runtime-second' },
     vars: {}, stepResults: {}, baseUrl: 'http://lineage.test', entry,
@@ -64,8 +68,8 @@ test('T-105 keeps two source lineages separate through UI, network, and stored r
     }
   }
 
-  expect(await page.locator('#first').inputValue()).toBe('runtime-first');
-  expect(await page.locator('#second').inputValue()).toBe('runtime-second');
+  expect(await page.locator('#first').inputValue()).toBe('');
+  expect(await page.locator('#second').inputValue()).toBe('');
   expect(stored).toEqual([{ first: 'runtime-first', second: 'runtime-second' }]);
 
   // Reproduce the pre-fix failure shape: two distinct source lineages were
@@ -100,16 +104,33 @@ function recording(): RecordSession {
       startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:04.000Z',
       baseUrl: 'http://lineage.test', userAgent: 'test', entryId: entry.entry.id,
     },
-    actions: [
+    canonicalActions: [
       {
-        ts: 1_000, type: 'fill', label: 'Field', name: 'shared', value: 'recorded-first',
-        target: { strategy: 'css', selector: '#first' },
+        id: 'a0', actionIdx: 0, timestamp: 1_000, kind: 'edit',
+        target: {
+          accessibleName: 'Field', name: 'shared',
+          locatorEvidence: { generatedSelector: '#first', confidence: 'HIGH' },
+        },
+        after: { self: { value: 'recorded-first' } },
+        raw: { eventTypes: ['input', 'change'], trusted: true }, source: 'playwright-probe',
       },
       {
-        ts: 2_000, type: 'fill', label: 'Field', name: 'shared', value: 'recorded-second',
-        target: { strategy: 'css', selector: '#second' },
+        id: 'a1', actionIdx: 1, timestamp: 2_000, kind: 'edit',
+        target: {
+          accessibleName: 'Field', name: 'shared',
+          locatorEvidence: { generatedSelector: '#second', confidence: 'HIGH' },
+        },
+        after: { self: { value: 'recorded-second' } },
+        raw: { eventTypes: ['input', 'change'], trusted: true }, source: 'playwright-probe',
       },
-      { ts: 3_000, type: 'click', label: 'Submit', target: { strategy: 'css', selector: '#submit' } },
+      {
+        id: 'a2', actionIdx: 2, timestamp: 3_000, kind: 'activate',
+        target: {
+          accessibleName: 'Submit',
+          locatorEvidence: { generatedSelector: '#submit', confidence: 'HIGH' },
+        },
+        raw: { eventTypes: ['click'], trusted: true }, source: 'playwright-probe',
+      },
     ],
     network: [{
       requestId: 'write', requestTs: 3_100, responseTs: 3_200, method: 'POST',

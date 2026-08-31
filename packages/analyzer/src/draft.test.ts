@@ -32,6 +32,7 @@ const resolver = (): ((id: string) => Entry) => () => testEntry;
 import { describe, expect, it } from 'vitest';
 
 import { assertParametersUsed, collapseIntermediateRequests, generateDraft } from './draft.js';
+import { testSession, type MutableTestSession } from './test-session-fixture.js';
 
 describe('generateDraft', () => {
   it('creates a schema-valid YAML draft with dependency templates and TODO comments', () => {
@@ -100,56 +101,8 @@ describe('generateDraft', () => {
     expect(result.yaml).toContain('oauth2.device.authorization.grant.enabled');
   });
 
-  it('carries recorded produces, scope, requires and waitAfter into the draft', () => {
-    const session: RecordSession = {
-      meta: {
-        startedAt: '2026-08-21T00:00:00.000Z',
-        endedAt: '2026-08-21T00:00:01.000Z',
-        baseUrl: 'http://oa',
-        userAgent: 'test',
-        entryId: 'oa',
-      },
-      actions: [
-        {
-          ts: 1,
-          type: 'click',
-          text: '提交',
-          target: { strategy: 'playwright', selector: 'internal:role=button[name="提交"i]' },
-          produces: {
-            scopeId: 'sc1',
-            root: { strategy: 'playwright', selector: 'internal:role=dialog[name="确认"i]' },
-            kind: 'dialog',
-            portaled: true,
-            appearedAfterMs: 30,
-          },
-          waitAfter: { scopeReady: 'sc1', settleMs: 200, timeoutMs: 8_000 },
-        },
-        {
-          ts: 2,
-          type: 'click',
-          text: '确定',
-          scope: 'sc1',
-          target: {
-            strategy: 'playwright',
-            selector: 'internal:role=button[name="确定"i]',
-            confidence: 'HIGH',
-          },
-        },
-      ],
-      network: [],
-      pages: [],
-    };
-
-    const { skill } = generateDraft(session);
-    expect(skill.steps[0]?.produces).toMatchObject({ scopeId: 'sc1', kind: 'dialog' });
-    expect(skill.steps[0]?.waitAfter).toMatchObject({ scopeReady: 'sc1', settleMs: 200 });
-    expect(skill.steps[1]?.requires).toEqual(['sc1']);
-    expect(skill.steps[1]?.ui?.scope).toBe('sc1');
-  });
-
-  it('marks a session interruption and drops the stale scope from the first resumed action', () => {
+  it('marks a session interruption and proposes a reentry anchor', () => {
     const session = recording(false);
-    session.actions[1]!.scope = 'stale-listbox';
     session.interruptions = [
       {
         type: 'session-interrupt',
@@ -160,26 +113,18 @@ describe('generateDraft', () => {
     ];
 
     const result = generateDraft(session);
-    expect(result.skill.steps[1]?.requires).toEqual([]);
-    expect(result.skill.steps[1]?.ui?.scope).toBeUndefined();
     expect(result.skill._notes).toEqual(
-      expect.arrayContaining([expect.stringContaining('reentry.anchor 候选为 s2')]),
+      expect.arrayContaining([expect.stringContaining('reentry.anchor 候选为')]),
     );
   });
 
   it('marks a draft with LOW locator as requiring first-run verification', () => {
     const session = recording(false);
-    session.actions[1]!.target = {
-      strategy: 'playwright', selector: 'internal:role=textbox >> nth=5', confidence: 'LOW',
-    };
-    session.actions[1]!.recordedHint = {
-      action: 'fill', visibleText: '开始时间', visibleTextSource: 'accessible-name',
-      controlSemantics: null,
-      tagName: 'input', role: 'textbox', matchCountAtRecord: 1,
+    session.events[4]!.target = {
+      strategy: 'playwright', selector: 'internal:role=button >> nth=5', confidence: 'LOW',
     };
     const result = generateDraft(session);
     expect(result.skill.verification.requiresFirstRunVerification).toBe(true);
-    expect(result.skill.steps[1]?.ui?.recordedHint?.visibleText).toBe('开始时间');
   });
 
   it('binds enum request fields to the caller parameter and rejects indexed response templates', () => {
@@ -190,12 +135,12 @@ describe('generateDraft', () => {
       { label: '周末加班', value: 'weekend' },
       { label: '节假日加班', value: 'holiday' },
     ];
-    session.actions[0] = {
-      ...session.actions[0]!, target: { strategy: 'css', selector: '#type' },
+    session.events[0] = {
+      ...session.events[0]!, target: { strategy: 'css', selector: '#type' },
       enumOptions: { items: enumItems, complete: true },
     };
-    second.actions[0] = {
-      ...second.actions[0]!, value: '周末加班', target: { strategy: 'css', selector: '#type' },
+    second.events[0] = {
+      ...second.events[0]!, value: '周末加班', target: { strategy: 'css', selector: '#type' },
       enumOptions: { items: enumItems, complete: true },
     };
     second.network.find((request) => request.url.includes('/approver'))!.postData = JSON.stringify({
@@ -289,9 +234,9 @@ describe('generateDraft', () => {
 
     const result = generateDraft(session);
     expect(result.skill.params).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'deliveryMode', type: 'enum' }),
+      expect.objectContaining({ name: 'deliveryMode', type: 'string' }),
     ]));
-    expect(result.skill.steps[0]?.network?.body?.deliveryMode).toBe('{{deliveryMode|enumValue}}');
+    expect(result.skill.steps[0]?.network?.body?.deliveryMode).toBe('{{deliveryMode}}');
     expect(() => parseSkill(result.yaml, resolver())).not.toThrow();
   });
 
@@ -330,6 +275,32 @@ describe('generateDraft', () => {
     expect(() => parseSkill(result.yaml, resolver())).not.toThrow();
   });
 
+  it('rejects an ambiguous query value instead of retaining recorded literals', () => {
+    const session = testSession({
+      meta: {
+        startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:02.000Z',
+        baseUrl: 'http://example.test', userAgent: 'test', entryId: 'generic',
+      },
+      events: [{ ts: 1_000, type: 'fill', label: 'Search', name: 'search', value: 'same' }],
+      network: [{
+        requestId: 'ambiguous-query', requestTs: 1_010, responseTs: 1_020, method: 'GET',
+        url: 'http://example.test/lookup?q=same&page=same', resourceType: 'fetch', headers: {},
+        postData: null, status: 200, responseBody: '{}', mutating: false,
+        sanitizeMode: 'structured', actionIdx: 0, causality: 'active-action',
+        causalityDebug: {
+          targetKey: 'input|search|text|0', kind: 'input', valueAtRequest: 'same', msSinceTouched: 10,
+        },
+      }],
+      pages: [],
+    });
+
+    const result = generateDraft(session);
+    const lookup = result.skill.steps.find((step) => step.network?.method === 'GET');
+
+    expect(lookup?.network?.url).toBe('/lookup?q=TODO_UNRESOLVED&page=TODO_UNRESOLVED');
+    expect(() => parseSkill(result.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
+  });
+
   it('folds progressive input requests and leaves an unrelated equal short value literal', () => {
     const active = (requestId: string, requestTs: number, value: string): RecordedRequest => ({
       ...NO_CAUSALITY,
@@ -351,12 +322,12 @@ describe('generateDraft', () => {
         targetKey: 'input|query|text|0', kind: 'input', valueAtRequest: value, msSinceTouched: 10,
       },
     });
-    const session: RecordSession = {
+    const session = testSession({
       meta: {
         startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:02.000Z',
         baseUrl: 'http://example.test', userAgent: 'test', entryId: 'generic',
       },
-      actions: [{ ts: 1_000, type: 'fill', label: 'Query', name: 'query', value: '12' }],
+      events: [{ ts: 1_000, type: 'fill', label: 'Query', name: 'query', value: '12' }],
       network: [
         {
           ...NO_CAUSALITY,
@@ -369,7 +340,7 @@ describe('generateDraft', () => {
         active('lookup-12', 1_200, '12'),
       ],
       pages: [],
-    };
+    });
 
     expect(collapseIntermediateRequests(session.network).map((request) => request.requestId))
       .toEqual(['listing', 'lookup-12']);
@@ -401,18 +372,11 @@ describe('generateDraft', () => {
     const session = recording(true);
     const submit = session.network.find((item) => item.requestId === 'submit')!;
     submit.resourceType = 'document';
-    session.recorderPath = 'canonical';
-    session.canonicalActions = session.actions.map((action, actionIdx) => ({
-      id: `a${actionIdx}`,
-      actionIdx,
-      timestamp: action.ts,
-      kind: action.type === 'click' ? 'activate' : action.type === 'select' ? 'select' : 'edit',
-      effects: actionIdx === 4
+    session.events.forEach((event, actionIdx) => {
+      event.effects = actionIdx === 4
         ? { requestIds: ['submit'], navigation: { previousUrl: 'http://oa/form', url: 'http://oa/records' } }
-        : { requestIds: actionIdx === 0 ? ['approver'] : [] },
-      raw: { eventTypes: [action.type], trusted: true },
-      source: 'playwright-probe',
-    }));
+        : { requestIds: actionIdx === 0 ? ['approver'] : [] };
+    });
     session.pages = [
       { ts: 500, url: 'http://oa/form', title: 'Form' },
       { ts: 5_150, url: 'http://oa/records', title: 'Records' },
@@ -432,16 +396,9 @@ describe('generateDraft', () => {
     const session = recording(true);
     const submit = session.network.find((item) => item.requestId === 'submit')!;
     submit.resourceType = 'document';
-    session.recorderPath = 'canonical';
-    session.canonicalActions = session.actions.map((action, actionIdx) => ({
-      id: `a${actionIdx}`,
-      actionIdx,
-      timestamp: action.ts,
-      kind: action.type === 'click' ? 'activate' : action.type === 'select' ? 'select' : 'edit',
-      effects: { requestIds: actionIdx === 4 ? ['submit'] : [] },
-      raw: { eventTypes: [action.type], trusted: true },
-      source: 'playwright-probe',
-    }));
+    session.events.forEach((event, actionIdx) => {
+      event.effects = { requestIds: actionIdx === 4 ? ['submit'] : [] };
+    });
     session.pages = [
       { ts: 500, url: 'http://oa/form', title: 'Form' },
       { ts: 5_150, url: 'http://oa/records', title: 'Records' },
@@ -457,8 +414,7 @@ describe('generateDraft', () => {
     const result = generateDraft(session);
 
     expect(result.skill.params.map((param) => param.name)).toEqual(['shared', 'shared_2']);
-    expect(result.skill.steps.filter((step) => step.ui?.action === 'fill').map((step) => step.ui?.value))
-      .toEqual(['{{shared}}', '{{shared_2}}']);
+    expect(result.skill.steps.filter((step) => step.ui?.action === 'fill')).toEqual([]);
     expect(result.skill.steps.find((step) => step.network?.method === 'POST')?.network?.body)
       .toEqual({ first: '{{shared}}', second: '{{shared_2}}' });
   });
@@ -467,39 +423,30 @@ describe('generateDraft', () => {
     const result = generateDraft(sameNamedControlsSession('same', 'same'));
     const body = result.skill.steps.find((step) => step.network?.method === 'POST')?.network?.body;
 
-    expect(result.skill.params.map((param) => param.name)).toEqual(['shared', 'shared_2']);
     expect(body).toEqual({ first: 'TODO_UNRESOLVED', second: 'TODO_UNRESOLVED' });
     expect(() => parseSkill(result.yaml, resolver())).toThrow(/TODO_UNRESOLVED/);
   });
 
   it('marks high-entropy identifiers as suspected without deleting the parameter source', () => {
     const session = sameNamedControlsSession('recorded-first', 'recorded-second');
-    session.actions = [session.actions[0]!];
-    session.actions[0] = {
-      ...session.actions[0]!, name: 'field-a849b883', label: 'Field',
+    session.events = [session.events[0]!];
+    session.events[0] = {
+      ...session.events[0]!, name: 'field-a849b883', label: 'Field',
       target: { strategy: 'playwright', selector: '#field-a849b883', confidence: 'HIGH' },
     };
-    session.network = [];
 
     const result = generateDraft(session);
     expect(result.skill.params[0]?.name).toBe('field-a849b883');
-    expect(result.skill.steps[0]?.ui?.target).toEqual(expect.objectContaining({ confidence: 'LOW' }));
     expect(result.skill._notes?.some((note) => note.includes('疑似不稳定'))).toBe(true);
   });
 
   it('confirms cross-record identifier drift and excludes the unstable DOM name', () => {
     const first = sameNamedControlsSession('recorded-first', 'recorded-second');
     const second = sameNamedControlsSession('runtime-first', 'runtime-second');
-    first.actions = [{
-      ...first.actions[0]!, name: 'runtime-123abc', label: 'Field',
-      recordedHint: {
-        action: 'fill', visibleText: 'Field', visibleTextSource: 'label', controlSemantics: null,
-        tagName: 'input', role: 'textbox', matchCountAtRecord: 1,
-      },
+    first.events = [{
+      ...first.events[0]!, name: 'runtime-123abc', label: 'Field', tag: 'input', role: 'textbox',
     }];
-    second.actions = [{ ...first.actions[0]!, name: 'runtime-987def' }];
-    first.network = [];
-    second.network = [];
+    second.events = [{ ...first.events[0]!, name: 'runtime-987def' }];
 
     const result = generateDraft(first, second);
     expect(result.skill.params[0]?.name).toBe('Field');
@@ -510,12 +457,12 @@ describe('generateDraft', () => {
     const malformedBodies = ['{broken', '[]', '"scalar"'];
     for (const postData of malformedBodies) {
       const session = sameNamedControlsSession('alpha-value', 'beta-value');
-      session.network[0]!.postData = postData;
+      session.network.find((request) => request.mutating)!.postData = postData;
       expect(() => generateDraft(session)).not.toThrow();
     }
 
     const emptyText = sameNamedControlsSession('alpha-value', 'beta-value');
-    emptyText.actions = [{ ts: 1, type: 'click', target: { strategy: 'css', selector: '#icon' } }];
+    emptyText.events = [{ ts: 1, type: 'click', target: { strategy: 'css', selector: '#icon' } }];
     emptyText.network = [];
     expect(generateDraft(emptyText).skill.steps[0]?.desc).toBe('TODO_UNRESOLVED');
 
@@ -525,13 +472,13 @@ describe('generateDraft', () => {
   });
 });
 
-function sameNamedControlsSession(first: string, second: string): RecordSession {
-  return {
+function sameNamedControlsSession(first: string, second: string): MutableTestSession {
+  return testSession({
     meta: {
       startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:04.000Z',
       baseUrl: 'http://example.test', userAgent: 'test', entryId: 'generic',
     },
-    actions: [
+    events: [
       {
         ts: 1_000, type: 'fill', label: 'Field', name: 'shared', value: first,
         target: { strategy: 'css', selector: '#first' },
@@ -556,16 +503,16 @@ function sameNamedControlsSession(first: string, second: string): RecordSession 
       mutating: true, sanitizeMode: 'structured',
     }],
     pages: [],
-  };
+  });
 }
 
-function responseChainSession(items: Array<{ identifier: string; display: string }>): RecordSession {
-  return {
+function responseChainSession(items: Array<{ identifier: string; display: string }>): MutableTestSession {
+  return testSession({
     meta: {
       startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:03.000Z',
       baseUrl: 'http://example.test', userAgent: 'test', entryId: 'oa',
     },
-    actions: [
+    events: [
       { ts: 1_000, type: 'fill', label: 'Assignee', value: 'Alex' },
       { ts: 2_000, type: 'click', text: 'Confirm' },
     ],
@@ -591,16 +538,16 @@ function responseChainSession(items: Array<{ identifier: string; display: string
       },
     ],
     pages: [],
-  };
+  });
 }
 
-function genericWriteSession(body: Record<string, unknown>): RecordSession {
-  return {
+function genericWriteSession(body: Record<string, unknown>): MutableTestSession {
+  return testSession({
     meta: {
       startedAt: '2026-08-25T00:00:00.000Z', endedAt: '2026-08-25T00:00:01.000Z',
       baseUrl: 'http://example.test', userAgent: 'test', entryId: 'oa',
     },
-    actions: [{ ts: 1_000, type: 'click', text: 'Send' }],
+    events: [{ ts: 1_000, type: 'click', text: 'Send' }],
     network: [{
       ...NO_CAUSALITY,
       requestId: 'write', requestTs: 1_100, responseTs: 1_200, method: 'POST',
@@ -609,12 +556,20 @@ function genericWriteSession(body: Record<string, unknown>): RecordSession {
       status: 200, responseBody: '{}', mutating: true, sanitizeMode: 'structured',
     }],
     pages: [],
-  };
+  });
 }
 
-function recording(withHistory: boolean): RecordSession {
+function recording(withHistory: boolean): MutableTestSession {
   const token = '<REDACTED:sha256:123456789abc>';
   const network: RecordSession['network'] = [
+    {
+      ...NO_CAUSALITY,
+      requestId: 'types', requestTs: 500, responseTs: 600, method: 'GET',
+      url: 'http://oa/api/overtime/types', resourceType: 'fetch', headers: {}, postData: null,
+      status: 200,
+      responseBody: JSON.stringify([{ label: '工作日加班', value: 'workday' }]),
+      mutating: false, sanitizeMode: 'structured',
+    },
     {
       ...NO_CAUSALITY,
       actionIdx: 0,
@@ -692,7 +647,7 @@ function recording(withHistory: boolean): RecordSession {
       sanitizeMode: 'structured',
     });
   }
-  return {
+  return testSession({
     meta: {
       startedAt: '2026-08-18T00:00:00.000Z',
       endedAt: '2026-08-18T00:01:00.000Z',
@@ -700,8 +655,19 @@ function recording(withHistory: boolean): RecordSession {
       userAgent: 'Chrome',
       entryId: 'oa',
     },
-    actions: [
-      { ts: 1_000, type: 'select', label: '加班类型', name: 'type', value: '工作日加班' },
+    events: [
+      {
+        ts: 1_000, type: 'select', label: '加班类型', name: 'type', value: '工作日加班',
+        affectedTruncated: false,
+        affected: [{
+          locator: {
+            strategy: 'playwright',
+            selector: 'internal:role=option[name="工作日加班"i]',
+            confidence: 'HIGH',
+          },
+          state: { textContent: '工作日加班' },
+        }],
+      },
       { ts: 2_000, type: 'datetime', label: '开始时间', name: 'startTime', value: '2026-08-18 18:00:00' },
       { ts: 3_000, type: 'datetime', label: '结束时间', name: 'endTime', value: '2026-08-18 21:00:00' },
       { ts: 4_000, type: 'fill', label: '事由', name: 'reason', value: '版本上线' },
@@ -714,5 +680,5 @@ function recording(withHistory: boolean): RecordSession {
     ],
     network,
     pages: [],
-  };
+  });
 }

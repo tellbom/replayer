@@ -13,7 +13,6 @@ test('T-68 A2/A3: 正式录制链路重跑 no-id 六场景并输出完整 option
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
   const session = await record({
-    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('record'),
@@ -60,11 +59,16 @@ test('T-68 A2/A3: 正式录制链路重跑 no-id 六场景并输出完整 option
   });
 
   const results = Object.fromEntries(
-    session.actions
-      .filter((action) => action.type === 'click' && /^(搜索[ABCDF]|提交E)$/.test(action.text ?? ''))
+    session.canonicalActions
+      .filter((action) => action.kind === 'activate'
+        && /^(搜索[ABCDF]|提交E)$/.test(action.after?.self?.textContent ?? ''))
       .map((action) => [
-        action.text,
-        action.target as { strategy: string; selector: string; confidence: 'HIGH' | 'LOW' },
+        action.after?.self?.textContent,
+        {
+          strategy: 'playwright',
+          selector: action.target?.locatorEvidence?.generatedSelector,
+          confidence: action.target?.locatorEvidence?.confidence,
+        },
       ]),
   );
   expect(options).toEqual({ testIdAttributeName: 'data-testid', noCSSId: true });

@@ -105,9 +105,9 @@ function overtimeUiSkill(): Skill {
       uiStep('confirm', 'confirm submission', {
         action: 'click',
         target: {
-          strategy: 'el-dialog-scoped',
-          dialogTitle: '确认提交',
-          inner: { strategy: 'text', text: '确认提交', nth: 1 },
+          strategy: 'role',
+          role: 'button',
+          name: '确认提交',
         },
         waitFor: { selector: '.el-message--success' },
       }),

@@ -23,7 +23,7 @@ describe('dsh diff', () => {
   it('warns when action structures differ', () => {
     const left = session('workday', '版本上线', 'csrf-a');
     const right = session('weekend', '紧急修复', 'csrf-b');
-    right.actions.push({ ts: 2, type: 'click' });
+    right.canonicalActions.push(canonicalAction(1, 'activate'));
     expect(diffRecordings(left, right).warnings[0]).toContain('动作序列结构不一致');
   });
 });
@@ -31,7 +31,11 @@ describe('dsh diff', () => {
 function session(type: string, reason: string, csrf: string): RecordSession {
   return {
     meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
-    actions: [{ ts: 1, type: 'select', name: 'type', value: type }],
+    canonicalActions: [{
+      ...canonicalAction(0, 'select'),
+      target: { name: 'type' },
+      after: { self: { value: type } },
+    }],
     network: [
       {
         actionIdx: null,
@@ -52,5 +56,19 @@ function session(type: string, reason: string, csrf: string): RecordSession {
       },
     ],
     pages: [],
+  };
+}
+
+function canonicalAction(
+  actionIdx: number,
+  kind: RecordSession['canonicalActions'][number]['kind'],
+): RecordSession['canonicalActions'][number] {
+  return {
+    id: `a${actionIdx}`,
+    actionIdx,
+    timestamp: actionIdx + 1,
+    kind,
+    raw: { eventTypes: [kind], trusted: true },
+    source: 'playwright-probe',
   };
 }

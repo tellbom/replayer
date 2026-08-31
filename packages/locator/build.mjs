@@ -9,7 +9,6 @@ await rm('dist/selector-generator.iife.js', { force: true });
 
 const entries = [
   ['dom-locator', 'src/dom-locator.ts'],
-  ['recorder-probe', 'src/recorder-probe.ts'],
   ['canonical-recorder-probe', 'src/canonical-recorder-probe.ts'],
   ['snapshot', 'src/snapshot.ts'],
   ['mutation-tracker', 'src/mutation-tracker.ts'],

@@ -1,7 +1,8 @@
-import type { RecordedRequest, RecordSession } from '@dsh/core';
+import type { RecordedRequest } from '@dsh/core';
 import { describe, expect, it } from 'vitest';
 
 import { detectAuth, detectPreflight } from './preflight.js';
+import { testSession, type MutableTestSession } from './test-session-fixture.js';
 
 describe('detectPreflight', () => {
   it('does not invent a global request or DOM read from header names', () => {
@@ -20,7 +21,7 @@ describe('detectPreflight', () => {
         postData: 'runtimeNonce=fingerprint&userChoice=selected',
       }),
     ];
-    session.actions = [{ ts: 0, type: 'fill', name: 'userChoice', value: 'selected' }];
+    session.events = [{ ts: 0, type: 'fill', name: 'userChoice', value: 'selected' }];
     expect(detectPreflight(session)).toEqual([]);
   });
 
@@ -64,13 +65,13 @@ describe('detectAuth', () => {
   });
 });
 
-function baseSession(): RecordSession {
-  return {
+function baseSession(): MutableTestSession {
+  return testSession({
     meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
-    actions: [],
+    events: [],
     network: [],
     pages: [],
-  };
+  });
 }
 
 function request(overrides: Partial<RecordedRequest>): RecordedRequest {

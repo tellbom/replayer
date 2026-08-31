@@ -64,6 +64,5 @@ test('record-cli: 命令行停止后产出 record.json', async () => {
 
   expect(output).toContain('录制已写入');
   const stored = JSON.parse(await readFile(join(root, 'out', 'record.json'), 'utf8'));
-  expect(stored.actions).toEqual([]);
   expect(stored.canonicalActions).toEqual([expect.objectContaining({ kind: 'navigate' })]);
 });

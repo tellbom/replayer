@@ -1,8 +1,8 @@
 import type {
-  CanonicalAction, LocatorStrategy, ObservableState, RecordedAction, RecordSession, SemanticTarget,
+  CanonicalAction, LocatorStrategy, ObservableState, RecordSession, SemanticTarget,
 } from '@dsh/core';
 
-/** Analyzer-only view of action evidence. It is intentionally not a RecordedAction compatibility shape. */
+/** Analyzer-only projection of canonical action evidence. */
 export interface AnalyzedAction {
   actionIdx: number;
   timestamp: number;
@@ -20,18 +20,15 @@ export interface AnalyzedAction {
   requestIds: string[];
   rawEventTypes: string[];
   unclassifiedReason?: string;
-  legacy?: RecordedAction;
+  enumOptions?: CanonicalAction['enumOptions'];
 }
 
-export type AnalysisSession = Omit<RecordSession, 'actions'> & { actions: AnalyzedAction[] };
+export type AnalysisSession = RecordSession & { actions: AnalyzedAction[] };
 
 export function analysisSession(session: RecordSession): AnalysisSession {
-  const canonical = session.recorderPath === 'canonical' || Array.isArray(session.canonicalActions);
   return {
     ...session,
-    actions: canonical
-      ? (session.canonicalActions ?? []).map(fromCanonical)
-      : session.actions.map((action, index) => fromLegacy(action, index)),
+    actions: session.canonicalActions.map(fromCanonical),
   };
 }
 
@@ -90,33 +87,8 @@ function fromCanonical(action: CanonicalAction): AnalyzedAction {
     ...(cleanText(action.raw?.unclassifiedReason)
       ? { unclassifiedReason: cleanText(action.raw.unclassifiedReason) }
       : {}),
+    ...(action.enumOptions ? { enumOptions: action.enumOptions } : {}),
   };
-}
-
-function fromLegacy(action: RecordedAction, index: number): AnalyzedAction {
-  return {
-    actionIdx: index,
-    timestamp: action.ts,
-    kind: legacyKind(action),
-    ...(action.target ? { locator: action.target } : {}),
-    ...(cleanText(action.label) ? { label: cleanText(action.label) } : {}),
-    ...(cleanText(action.name) ? { name: cleanText(action.name) } : {}),
-    ...(action.value !== undefined ? { value: action.value } : {}),
-    ...(action.checked !== undefined ? { checked: action.checked } : {}),
-    ...(cleanText(action.text) ? { text: cleanText(action.text) } : {}),
-    ...(action.url ? { url: action.url } : {}),
-    requestIds: [],
-    rawEventTypes: [],
-    legacy: action,
-  };
-}
-
-function legacyKind(action: RecordedAction): CanonicalAction['kind'] {
-  if (action.type === 'click') return 'activate';
-  if (action.type === 'fill' || action.type === 'datetime') return 'edit';
-  if (action.type === 'select') return 'select';
-  if (action.type === 'radio' || action.type === 'checkbox') return 'check';
-  return 'navigate';
 }
 
 function scalarValue(value: string | string[] | null | undefined): string | undefined {

@@ -2,14 +2,6 @@ import type { CanonicalAction } from './ir.js';
 
 export type LocatorStrategy =
   | { strategy: 'label'; label: string; kind: ControlKind }
-  /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
-  | { strategy: 'el-form-item'; label: string; kind: ControlKind }
-  /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
-  | { strategy: 'el-option'; text: string; ownerLabel: string }
-  /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
-  | { strategy: 'el-dialog-scoped'; dialogTitle: string; inner: LocatorStrategy }
-  /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
-  | { strategy: 'el-table-cell'; rowAnchorText: string; buttonText: string }
   | { strategy: 'text'; text: string; exact?: boolean; nth?: number }
   | { strategy: 'role'; role: string; name: string }
   | { strategy: 'css'; selector: string }
@@ -75,13 +67,8 @@ export interface RecordSession {
     entryId: string;
     identityChanged?: boolean;
   };
-  actions: RecordedAction[];
-  /** Canonical capture truth source. Present only for recorderPath=canonical. */
-  canonicalActions?: CanonicalAction[];
-  /** Legacy actions are one-way derived shadow data when this is canonical. */
-  recorderPath?: 'legacy' | 'canonical';
-  /** Loss ledger for the temporary canonical-to-legacy shadow derivation. */
-  _notes?: string[];
+  /** Canonical capture truth source. */
+  canonicalActions: CanonicalAction[];
   network: RecordedRequest[];
   pages: { ts: number; url: string; title: string }[];
   interruptions?: SessionInterrupt[];
@@ -117,35 +104,6 @@ export interface SessionInterrupt {
   detectedAt: string;
   resumedAt?: string;
   identityChanged?: boolean;
-}
-
-export interface RecordedAction {
-  ts: number;
-  type: 'click' | 'fill' | 'select' | 'radio' | 'checkbox' | 'datetime' | 'navigate';
-  target?: LocatorStrategy;
-  recordedHint?: RecordedHint;
-  label?: string;
-  name?: string;
-  value?: string;
-  checked?: boolean;
-  text?: string;
-  enumOptions?: {
-    items: Array<{ label: string; value: string }>;
-    complete: boolean;
-    incompleteReason?: 'truncated' | 'dynamic-loading' | 'partial-dom';
-  };
-  url?: string;
-  scope?: string;
-  produces?: ScopeDefinition;
-  waitAfter?: {
-    scopeReady?: string;
-    urlPattern?: string;
-    networkIdle?: boolean;
-    requestUrlPattern?: string;
-    notEmpty?: LocatorStrategy;
-    settleMs?: number;
-    timeoutMs?: number;
-  };
 }
 
 export type SanitizeMode = 'structured' | 'fallback' | 'none';
@@ -280,7 +238,6 @@ declare global {
       confidence: 'HIGH' | 'LOW';
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    __DSH_RECORD__?: (action: any) => void;
     __DSH_ACTIVE_ACTION__?: ActiveAction | null;
     __DSH_ACTIVE_ACTION_UPDATE__?: (action: ActiveAction | null) => void;
     __DSH_RECORD_INITIAL_STATE__?: (state: RecordedFormState) => void;

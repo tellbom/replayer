@@ -2,7 +2,7 @@ import { acquireDSHContext, ensureEntry, probeSession, settleNavigation } from '
 import { CANONICAL_CAPTURE, ENUM_CAPTURE, createSanitizer } from '@dsh/core';
 import type { ActiveAction, CanonicalAction, Entry } from '@dsh/core';
 import type {
-  PageSnapshot, RecordSession, RecordedAction, RecordedFormState, RecordedRequest, SessionInterrupt,
+  PageSnapshot, RecordSession, RecordedFormState, RecordedRequest, SessionInterrupt,
 } from '@dsh/core';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
@@ -25,7 +25,6 @@ export interface RecordOptions {
   onReady?: (page: Page) => Promise<void>;
   /** 从 CLI 已确认的 partial 快照继续；登录与身份仍重新校验。 */
   resumeSession?: RecordSession;
-  recorderPath?: 'legacy' | 'canonical';
   /**
    * 【T-67b】录制期消歧回调。playwright 引擎产物为 LOW（位置依赖）时触发，
    * 传入页面、原元素句柄与局部上下文；回调返回经 Playwright 再验证的
@@ -83,21 +82,17 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   const entrySession = await ensureEntry(page, opts.entry);
   const baseUrl = new URL(page.url()).origin;
 
-  const recorderPath = opts.recorderPath ?? 'canonical';
-  const actions: RecordedAction[] = recorderPath === 'legacy' ? [...(opts.resumeSession?.actions ?? [])] : [];
-  const canonicalActions: CanonicalAction[] = recorderPath === 'canonical'
-    ? [...(opts.resumeSession?.canonicalActions ?? [])]
-    : [];
+  const canonicalActions: CanonicalAction[] = [...(opts.resumeSession?.canonicalActions ?? [])];
   const canonicalActionByIdx = new Map(canonicalActions.map((action) => [action.actionIdx, action]));
+  const refinedCanonicalTargets = new Map<number, CanonicalAction['target']>();
+  const refinedCanonicalActionIndexes = new Set<number>();
   const initialFormState: RecordedFormState[] = [...(opts.resumeSession?.initialFormState ?? [])];
   const pageSnapshots: PageSnapshot[] = [...(opts.resumeSession?.pageSnapshots ?? [])];
   const interruptions: SessionInterrupt[] = [...(opts.resumeSession?.interruptions ?? [])];
   let recordingEnabled = true;
-  const actionByIdx = new Map<number, RecordedAction>();
   const browserActionKeys = new Map<string, number>();
   const latestBrowserActions = new Map<number, number>();
-  const canonicalToBrowserAction = new Map<number, number>();
-  let nextCanonicalActionIdx = actions.length;
+  let nextCanonicalActionIdx = canonicalActions.length;
   let activeAction: ActiveAction | null = null;
   const resolveCanonicalActionIndex = (
     browserActionIdx: number,
@@ -113,144 +108,9 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     const canonical = nextCanonicalActionIdx++;
     if (key !== undefined) browserActionKeys.set(key, canonical);
     latestBrowserActions.set(browserActionIdx, canonical);
-    canonicalToBrowserAction.set(canonical, browserActionIdx);
     return canonical;
   };
-  const mutationTasks = new Map<number, Promise<void>>();
-  const postProcessTasks: Promise<void>[] = [];
   const sanitizer = createSanitizer(opts.entry.entry.additionalSensitivePatterns ?? []);
-  await page.exposeBinding(
-    '__DSH_RECORD__',
-    async (
-      _source,
-      emitted: RecordedAction & { actionIdx: number; activeStartedAt?: number },
-    ) => {
-      if (!recordingEnabled) return;
-      const { actionIdx: browserActionIdx, activeStartedAt, ...action } = emitted;
-      if (action.enumOptions) {
-        action.enumOptions = {
-          ...action.enumOptions,
-          items: action.enumOptions.items.map((item) => ({
-            label: sanitizer.sanitizeText(item.label),
-            value: sanitizer.sanitizeText(item.value),
-          })),
-        };
-      }
-      // 【C19】一次性认证跳转不记录
-      const actionUrl = action.url ?? '';
-      if (actionUrl && excludeMatchers.some((re) => re.test(actionUrl))) return;
-      if (action.type === 'navigate') {
-        browserActionKeys.clear();
-        latestBrowserActions.clear();
-      }
-      const actionIdx = resolveCanonicalActionIndex(browserActionIdx, activeStartedAt);
-      const existingAction = actionByIdx.get(actionIdx);
-      if (existingAction) {
-        Object.assign(existingAction, action);
-        return;
-      }
-      actions.push(action);
-      actionByIdx.set(actionIdx, action);
-      const target = action.target as { strategy?: string; confidence?: string } | undefined;
-      if (target) {
-        const mutationTask = tolerateNavigation(page, () => page.evaluate(async (idx) => {
-          await window.__DSH_MUTATION__.end(idx);
-        }, browserActionIdx)).then(() => undefined);
-        mutationTasks.set(actionIdx, mutationTask);
-      }
-
-      const task = (async () => {
-        if (target) {
-          const producerActionIdx = actionIdx - 1;
-          const producerMutation = mutationTasks.get(producerActionIdx);
-          const producerBrowserActionIdx = canonicalToBrowserAction.get(producerActionIdx);
-          if (producerMutation) {
-            await producerMutation;
-            if (producerBrowserActionIdx === undefined) return;
-            const scoped = await tolerateNavigation(page, () => page.evaluate(
-              ({ producerIdx, currentIdx }) => {
-                const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
-                const current = clicked?.[currentIdx];
-                if (!current?.isConnected) return null;
-                return window.__DSH_MUTATION__.deriveScope(producerIdx, current);
-              },
-              { producerIdx: producerBrowserActionIdx, currentIdx: browserActionIdx },
-            ));
-            if (scoped) {
-              const scopeId = `sc${producerActionIdx + 1}`;
-              const producer = actionByIdx.get(producerActionIdx)!;
-              producer.produces = {
-                scopeId,
-                root: scoped.root.descriptor,
-                kind: scoped.root.kind,
-                portaled: scoped.root.portaled,
-                appearedAfterMs: scoped.root.appearedAfterMs,
-              };
-              producer.waitAfter = { scopeReady: scopeId, settleMs: 200, timeoutMs: 8_000 };
-              action.scope = scopeId;
-              action.target = scoped.target;
-              return;
-            }
-          }
-        }
-
-        if (target?.strategy === 'playwright' && target.confidence === 'LOW') {
-          const promoted = await promoteByAncestor(page, browserActionIdx);
-          if (promoted) {
-            action.target = {
-              strategy: 'playwright',
-              selector: `${promoted.scopeSelector} >> ${promoted.targetSelector}`,
-              confidence: 'HIGH',
-            };
-            return;
-          }
-        }
-
-        // 【T-67b】scope 规则未命中后，LOW 才进入 LLM 消歧。
-        if (
-          opts.onDisambiguation &&
-          target?.strategy === 'playwright' &&
-          target.confidence === 'LOW'
-        ) {
-          try {
-            const disambig = await tolerateNavigation(page, () => page.evaluate((idx) => {
-              const collect = Reflect.get(window, '__DSH_DISAMBIG__');
-              const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
-              const el = clicked[idx];
-              if (typeof collect !== 'function' || !el) return null;
-              return { context: collect(el) };
-            }, browserActionIdx));
-            const pwResult = {
-              selector: (target as { selector: string }).selector,
-              matchCount: -1,
-              confidence: 'LOW' as const,
-            };
-            if (!disambig) return;
-            const scoped = await opts.onDisambiguation!({
-              page,
-              targetElement: await page.evaluateHandle((idx) => {
-                const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
-                return clicked[idx];
-              }, browserActionIdx),
-              pwResult,
-              context: disambig.context,
-            });
-            if (scoped) {
-              action.target = {
-                strategy: 'playwright',
-                selector: scoped,
-                confidence: 'HIGH',
-              } as never;
-            }
-          } catch {
-            // 消歧失败保持原 LOW 产物——回放期 heal 仍可兜底
-          }
-        }
-      })();
-      postProcessTasks.push(task);
-      if (actions.length % 5 === 0) void persistPartial('periodic-action-checkpoint');
-    },
-  );
   await page.exposeBinding(
     '__DSH_ACTIVE_ACTION_UPDATE__',
     (_source, snapshot: ActiveAction | null) => {
@@ -264,26 +124,36 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   );
   await page.exposeBinding(
     '__DSH_CANONICAL_RECORD__',
-    (_source, emitted: CanonicalAction) => {
-      if (!recordingEnabled || recorderPath !== 'canonical') return;
+    async (_source, emitted: CanonicalAction) => {
+      if (!recordingEnabled) return;
       if (emitted.kind === 'navigate') {
         browserActionKeys.clear();
         latestBrowserActions.clear();
       }
       const actionIdx = resolveCanonicalActionIndex(emitted.actionIdx, emitted.timestamp);
-      const normalized = { ...emitted, actionIdx, id: `a${actionIdx}-${emitted.timestamp}` };
+      const base = { ...emitted, actionIdx, id: `a${actionIdx}-${emitted.timestamp}` };
+      let normalized: CanonicalAction;
+      if (refinedCanonicalActionIndexes.has(actionIdx)) {
+        normalized = { ...base, target: refinedCanonicalTargets.get(actionIdx) ?? base.target };
+      } else {
+        normalized = await refineCanonicalTarget(
+          page, base, emitted.actionIdx, opts.onDisambiguation,
+        );
+        refinedCanonicalActionIndexes.add(actionIdx);
+        refinedCanonicalTargets.set(actionIdx, normalized.target);
+      }
       const existing = canonicalActionByIdx.get(actionIdx);
       if (existing) Object.assign(existing, normalized);
       else {
         canonicalActions.push(normalized);
         canonicalActionByIdx.set(actionIdx, normalized);
       }
+      if (canonicalActions.length % 5 === 0) void persistPartial('periodic-action-checkpoint');
     },
   );
   await page.exposeBinding('__DSH_RECORD_INITIAL_STATE__', (_source, state: RecordedFormState) => {
     initialFormState.push(state);
   });
-  const reinjectRecorderProbe = await installRecorderProbe(page, recorderPath);
   const startedAt = opts.resumeSession?.meta.startedAt ?? new Date().toISOString();
   const userAgent = await page.evaluate(() => navigator.userAgent);
   const pageCandidatePools: PageSnapshot[] = [];
@@ -301,7 +171,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
         pageCandidatePools.push({
           ts,
           url,
-          actionIdx: latestNavigationActionIndex(actions, canonicalActions, recorderPath, url, ts),
+          actionIdx: latestNavigationActionIndex(canonicalActions, url, ts),
           immutableValues: candidates.map((candidate) => ({
             locator: candidate.locator,
             value: sanitizePageValue(sanitizer, candidate.key, candidate.value),
@@ -326,9 +196,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       baseUrl,
       userAgent,
       entryId: opts.entry.entry.id,
-      actions,
       canonicalActions,
-      recorderPath,
       initialFormState,
       network: [...previousNetwork, ...networkRecording.records],
       pages,
@@ -345,10 +213,13 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     () => { void persistPartial('mutating-request-started'); },
     () => activeAction,
     (request) => persistConsumedPageValues(
-      request, pageCandidatePools, pageSnapshots, actions, canonicalActions, recorderPath,
+      request, pageCandidatePools, pageSnapshots, canonicalActions,
     ),
     sanitizer,
   );
+  // The canonical probe may emit an initial navigation immediately. Install it only after
+  // checkpoint persistence can safely read the network recorder (notably when resuming at 4n+4 actions).
+  const reinjectRecorderProbe = await installRecorderProbe(page);
   const partialTimer = setInterval(() => {
     void persistPartial('periodic-time-checkpoint');
   }, 10_000);
@@ -362,23 +233,18 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       page,
       entry: opts.entry,
       initialIdentityDigest: entrySession.identityDigest,
-      actions,
+      canonicalActions,
       interruptions,
       networkRecording,
       pages,
       persistPartial,
-      mutationTasks,
-      postProcessTasks,
       onRecordingState(enabled) {
         recordingEnabled = enabled;
       },
       onSessionBoundary() {
-        actionByIdx.clear();
         browserActionKeys.clear();
         latestBrowserActions.clear();
-        canonicalToBrowserAction.clear();
         activeAction = null;
-        mutationTasks.clear();
       },
       onResume: reinjectRecorderProbe,
       signal: monitorAbort.signal,
@@ -393,34 +259,25 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
     clearInterval(partialTimer);
     await persistPartial(error instanceof Error ? error.message : String(error));
     page.off('domcontentloaded', onDomContentLoaded);
-    await Promise.allSettled([...mutationTasks.values()]);
-    await Promise.allSettled(postProcessTasks);
     await networkRecording.stop();
     await lease.release();
     throw error;
   }
   clearInterval(partialTimer);
-  if (recorderPath === 'canonical') {
-    await tolerateNavigation(page, () => page.evaluate(async () => {
-      const flush = Reflect.get(window, '__DSH_CANONICAL_FLUSH__');
-      if (typeof flush === 'function') await flush();
-    }));
-  }
+  await tolerateNavigation(page, () => page.evaluate(async () => {
+    const flush = Reflect.get(window, '__DSH_CANONICAL_FLUSH__');
+    if (typeof flush === 'function') await flush();
+  }));
   await partialWrite;
   page.off('domcontentloaded', onDomContentLoaded);
   await Promise.all([...pageTasks]);
-  await Promise.all([...mutationTasks.values()]);
-  await Promise.all(postProcessTasks);
   const network = [...previousNetwork, ...await networkRecording.stop()];
-  if (recorderPath === 'canonical') {
-    const finalized = finalizeCanonicalActions(
-      canonicalActions,
-      network,
-      opts.entry.entry.additionalSensitivePatterns ?? [],
-    );
-    canonicalActions.splice(0, canonicalActions.length, ...finalized);
-  }
-  await inferAsyncWaits(page, actions, network);
+  const finalized = finalizeCanonicalActions(
+    canonicalActions,
+    network,
+    opts.entry.entry.additionalSensitivePatterns ?? [],
+  );
+  canonicalActions.splice(0, canonicalActions.length, ...finalized);
   const session: RecordSession = {
     meta: {
       startedAt,
@@ -430,9 +287,7 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
       entryId: opts.entry.entry.id,
       ...(identityChanged ? { identityChanged: true } : {}),
     },
-    actions,
-    recorderPath,
-    ...(recorderPath === 'canonical' ? { canonicalActions } : {}),
+    canonicalActions,
     ...(initialFormState.length > 0 ? { initialFormState } : {}),
     network,
     pages,
@@ -444,42 +299,6 @@ export async function record(opts: RecordOptions): Promise<RecordSession> {
   await lease.release();
   void entrySession;
   return session;
-}
-
-async function inferAsyncWaits(
-  page: Page,
-  actions: RecordedAction[],
-  network: RecordSession['network'],
-): Promise<void> {
-  for (const [index, action] of actions.entries()) {
-    if (action.type === 'navigate') continue;
-    const windowEnd = Math.min(actions[index + 1]?.ts ?? Number.POSITIVE_INFINITY, action.ts + 2_000);
-    const requests = network.filter(
-      (request) =>
-        request.requestTs >= action.ts &&
-        request.requestTs < windowEnd &&
-        (request.resourceType === 'xhr' || request.resourceType === 'fetch') &&
-        request.status !== null &&
-        request.status >= 200 &&
-        request.status < 300 &&
-        request.responseBody !== null,
-    );
-
-    for (const request of requests) {
-      const values = responseScalarValues(request.responseBody!);
-      if (values.length === 0) continue;
-      const notEmpty = await findPopulatedFormControl(page, values);
-      if (!notEmpty) continue;
-      const requestUrl = new URL(request.url);
-      action.waitAfter = {
-        ...action.waitAfter,
-        requestUrlPattern: requestUrl.pathname,
-        notEmpty,
-        timeoutMs: action.waitAfter?.timeoutMs ?? 8_000,
-      };
-      break;
-    }
-  }
 }
 
 interface PageValueCandidate {
@@ -553,9 +372,7 @@ function persistConsumedPageValues(
   request: RecordedRequest,
   pools: PageSnapshot[],
   output: PageSnapshot[],
-  actions: RecordedAction[],
   canonicalActions: CanonicalAction[],
-  recorderPath: 'legacy' | 'canonical',
 ): void {
   const pool = [...pools]
     .filter((candidate) => candidate.ts <= request.requestTs)
@@ -570,9 +387,8 @@ function persistConsumedPageValues(
       snapshot = {
         ts: pool.ts,
         url: pool.url,
-        actionIdx: latestNavigationActionIndex(
-          actions, canonicalActions, recorderPath, pool.url, request.requestTs,
-        ) ?? pool.actionIdx,
+        actionIdx: latestNavigationActionIndex(canonicalActions, pool.url, request.requestTs)
+          ?? pool.actionIdx,
         immutableValues: [],
       };
       output.push(snapshot);
@@ -619,81 +435,18 @@ function collectScalarValues(value: unknown, output: Set<string>): void {
 }
 
 function latestNavigationActionIndex(
-  actions: RecordedAction[],
   canonicalActions: CanonicalAction[],
-  recorderPath: 'legacy' | 'canonical',
   url: string,
   ts: number,
 ): number | null {
-  if (recorderPath === 'canonical') {
-    for (let index = canonicalActions.length - 1; index >= 0; index -= 1) {
-      const action = canonicalActions[index]!;
-      const navigationUrl = action.effects?.navigation?.url ?? action.after?.page?.url;
-      if (action.kind === 'navigate' && action.timestamp <= ts && navigationUrl === url) {
-        return action.actionIdx;
-      }
+  for (let index = canonicalActions.length - 1; index >= 0; index -= 1) {
+    const action = canonicalActions[index]!;
+    const navigationUrl = action.effects?.navigation?.url ?? action.after?.page?.url;
+    if (action.kind === 'navigate' && action.timestamp <= ts && navigationUrl === url) {
+      return action.actionIdx;
     }
-    return null;
-  }
-  for (let index = actions.length - 1; index >= 0; index -= 1) {
-    const action = actions[index]!;
-    if (action.type === 'navigate' && action.ts <= ts && action.url === url) return index;
   }
   return null;
-}
-
-function responseScalarValues(body: string): string[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return [];
-  }
-  const values: string[] = [];
-  const visit = (value: unknown): void => {
-    if (typeof value === 'string' || typeof value === 'number') {
-      const text = String(value).trim();
-      if (text) values.push(text);
-      return;
-    }
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    if (value && typeof value === 'object') Object.values(value).forEach(visit);
-  };
-  visit(parsed);
-  return values;
-}
-
-async function findPopulatedFormControl(
-  page: Page,
-  responseValues: string[],
-): Promise<RecordedAction['target'] | null> {
-  return (await tolerateNavigation(page, () => page.evaluate((values) => {
-    const expected = new Set(values);
-    for (const control of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
-      'input, textarea, select',
-    )) {
-      const populated = expected.has(control.value.trim())
-        || (control instanceof HTMLSelectElement && [...control.options].some((option) =>
-          expected.has(option.value) || expected.has(option.textContent?.trim() ?? ''),
-        ));
-      if (!populated) continue;
-      const generate = Reflect.get(window, '__DSH_PWGEN__');
-      if (typeof generate !== 'function') return null;
-      const generated = generate(control) as {
-        selector: string;
-        confidence: 'HIGH' | 'LOW';
-      };
-      return {
-        strategy: 'playwright' as const,
-        selector: generated.selector,
-        confidence: generated.confidence,
-      };
-    }
-    return null;
-  }, responseValues))) ?? null;
 }
 
 /** excludeUrlPatterns 是「字面子串的正则写法」（默认 \\?token= 等），转成 RegExp。 */
@@ -709,13 +462,11 @@ interface SessionMonitorOptions {
   page: Page;
   entry: Entry;
   initialIdentityDigest: string;
-  actions: RecordedAction[];
+  canonicalActions: CanonicalAction[];
   interruptions: SessionInterrupt[];
   networkRecording: ReturnType<typeof startNetworkRecording>;
   pages: RecordSession['pages'];
   persistPartial(reason: string, identityChanged?: boolean): Promise<void>;
-  mutationTasks: Map<number, Promise<void>>;
-  postProcessTasks: Promise<void>[];
   onRecordingState(enabled: boolean): void;
   onSessionBoundary(): void;
   onResume(): Promise<void>;
@@ -744,13 +495,11 @@ async function monitorRecordingSession(
       options.onRecordingState(false);
       options.networkRecording.setEnabled(false);
       await setRecordingState(options.page, false);
-      await Promise.all([...options.mutationTasks.values()]);
-      await Promise.all(options.postProcessTasks);
       options.onSessionBoundary();
 
       const interruption: SessionInterrupt = {
         type: 'session-interrupt',
-        atActionIdx: options.actions.length,
+        atActionIdx: options.canonicalActions.length,
         detectedAt: new Date().toISOString(),
       };
       options.interruptions.push(interruption);
@@ -791,9 +540,7 @@ interface PartialSnapshotInput {
   baseUrl: string;
   userAgent: string;
   entryId: string;
-  actions: RecordedAction[];
   canonicalActions: CanonicalAction[];
-  recorderPath: 'legacy' | 'canonical';
   initialFormState: RecordedFormState[];
   network: RecordSession['network'];
   pages: RecordSession['pages'];
@@ -813,9 +560,7 @@ async function writePartialSnapshot(input: PartialSnapshotInput): Promise<void> 
       entryId: input.entryId,
       ...(input.identityChanged ? { identityChanged: true } : {}),
     },
-    actions: input.recorderPath === 'canonical' ? [] : input.actions,
-    recorderPath: input.recorderPath,
-    ...(input.recorderPath === 'canonical' ? { canonicalActions: input.canonicalActions } : {}),
+    canonicalActions: input.canonicalActions,
     ...(input.initialFormState.length > 0 ? { initialFormState: input.initialFormState } : {}),
     network: input.network,
     pages: input.pages,
@@ -870,15 +615,9 @@ async function showSessionNotice(page: Page, text: string): Promise<void> {
 
 async function installRecorderProbe(
   page: Page,
-  recorderPath: 'legacy' | 'canonical',
 ): Promise<() => Promise<void>> {
   const probePath = fileURLToPath(
-    new URL(
-      recorderPath === 'canonical'
-        ? '../../locator/dist/canonical-recorder-probe.iife.js'
-        : '../../locator/dist/recorder-probe.iife.js',
-      import.meta.url,
-    ),
+    new URL('../../locator/dist/canonical-recorder-probe.iife.js', import.meta.url),
   );
   const probe = await readFile(probePath, 'utf8');
   const pwgenPath = fileURLToPath(
@@ -967,6 +706,64 @@ async function installRecorderProbe(
     );
   }
   return injectCurrentProbe;
+}
+
+async function refineCanonicalTarget(
+  page: Page,
+  action: CanonicalAction,
+  browserActionIdx: number,
+  onDisambiguation: RecordOptions['onDisambiguation'],
+): Promise<CanonicalAction> {
+  const evidence = action.target?.locatorEvidence;
+  if (!evidence || evidence.confidence !== 'LOW') return action;
+  const promoted = await promoteByAncestor(page, browserActionIdx);
+  if (promoted) {
+    return {
+      ...action,
+      target: {
+        ...action.target,
+        locatorEvidence: {
+          ...evidence,
+          generatedSelector: `${promoted.scopeSelector} >> ${promoted.targetSelector}`,
+          confidence: 'HIGH',
+        },
+      },
+    };
+  }
+  if (!onDisambiguation) return action;
+  try {
+    const disambig = await tolerateNavigation(page, () => page.evaluate((idx) => {
+      const collect = Reflect.get(window, '__DSH_DISAMBIG__');
+      const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+      const element = clicked[idx];
+      if (typeof collect !== 'function' || !element) return null;
+      return { context: collect(element) };
+    }, browserActionIdx));
+    if (!disambig) return action;
+    const scoped = await onDisambiguation({
+      page,
+      targetElement: await page.evaluateHandle((idx) => {
+        const clicked = Reflect.get(window, '__dsh_clicked__') as Record<number, Element>;
+        return clicked[idx];
+      }, browserActionIdx),
+      pwResult: {
+        selector: evidence.generatedSelector,
+        matchCount: -1,
+        confidence: 'LOW',
+      },
+      context: disambig.context,
+    });
+    if (!scoped) return action;
+    return {
+      ...action,
+      target: {
+        ...action.target,
+        locatorEvidence: { ...evidence, generatedSelector: scoped, confidence: 'HIGH' },
+      },
+    };
+  } catch {
+    return action;
+  }
 }
 
 async function promoteByAncestor(

@@ -45,7 +45,7 @@ assertions: []
 
 ## 定位器优先级
 
-优先使用 `el-form-item`、`el-option`、`el-dialog-scoped`、`el-table-cell`、稳定 `text`、`role`，最后才用 `css`。不要复制构建 hash 类名或 `nth-child`。对弹窗按钮使用 `el-dialog-scoped`，避免命中页面同名按钮。
+优先使用标准 label、ARIA role/name、稳定文本和 Playwright 语义选择器，最后才使用稳定 CSS。不要依赖组件库私有 class、构建 hash 类名或位置型 `nth-child`。浮层与弹窗应通过 `role=listbox`、`aria-expanded`、`role=dialog` 等标准关系限定作用域。
 
 ## Preflight 与断言
 
@@ -61,6 +61,14 @@ preflight 支持当前 DOM、请求 HTML、请求 JSON 和 regex 提取。Legacy
 - 含该占位符的技能会在产生副作用前拒绝执行，不会提交录制时字面量。
 - 不要把随机数、时间、浏览器特征或 fixture 里的生成方式硬编码进通用技能。
 - 只有业务契约明确允许调用方提供时，才可人工改为公开参数；能够从页面或响应稳定读取时，应显式配置为内部提取值。
+
+### 用户输入与页面派生的边界
+
+- 标准控件的 live IDL `value`/`checked` 来自用户输入或选择，属于 caller parameter 的候选证据。
+- 因用户动作而变化、并被后续请求消费的非表单节点 `textContent` 属于页面派生值候选；它必须有因果动作、稳定 locator 和请求叶子值三方证据，不能因文本相同而全局关联。
+- `page-derived` 是内部变量，不进入调用方参数签名；旧技能或手工编辑若仍传入同名值，回放会在请求发送前拒绝覆盖。
+- 当前只观测标准值载体。没有 locator 证据的纯展示节点（C16 合计文本一类）不会被自动固化，统一生成 `TODO_UNRESOLVED`。这是明确的不支持边界，不得用业务字段名或组件库 class 绕过。
+- 录制时看到的 `enumOptions` 只证明“当时的选项集合”，不自动证明静态全集；跨录制变化或上游动作导致变化时必须视为 contextual。
 
 ## 发布检查
 

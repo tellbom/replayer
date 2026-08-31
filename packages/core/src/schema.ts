@@ -22,26 +22,6 @@ export const ControlKindSchema: z.ZodType<ControlKind> = z.enum([
 export const LocatorStrategySchema: z.ZodType<LocatorStrategy> = z.lazy(() =>
   z.discriminatedUnion('strategy', [
     z.object({ strategy: z.literal('label'), label: z.string(), kind: ControlKindSchema }),
-    /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
-    z.object({ strategy: z.literal('el-form-item'), label: z.string(), kind: ControlKindSchema }),
-    /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
-    z.object({
-      strategy: z.literal('el-option'),
-      text: z.string(),
-      ownerLabel: z.string(),
-    }),
-    /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
-    z.object({
-      strategy: z.literal('el-dialog-scoped'),
-      dialogTitle: z.string(),
-      inner: LocatorStrategySchema,
-    }),
-    /** @deprecated TODO(Phase 3): remove the legacy framework-named strategy. */
-    z.object({
-      strategy: z.literal('el-table-cell'),
-      rowAnchorText: z.string(),
-      buttonText: z.string(),
-    }),
     z.object({
       strategy: z.literal('text'),
       text: z.string(),
@@ -423,6 +403,15 @@ export const ParamSchema = z.object({
   lineage: ValueLineageSchema.optional(),
   carrier: ValueCarrierSchema.optional(),
   recoveryCarrier: ValueCarrierSchema.optional(),
+}).superRefine((param, context) => {
+  for (const field of ['carrier', 'recoveryCarrier'] as const) {
+    if (param[field]?.via !== 'page-derived') continue;
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [field, 'via'],
+      message: 'page-derived values must be declared in internalValues, not params',
+    });
+  }
 });
 
 export type ParamDefinition = z.infer<typeof ParamSchema>;

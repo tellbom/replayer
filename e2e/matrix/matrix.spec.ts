@@ -16,6 +16,8 @@ import { CELLS, type CellSpec } from './cells';
 
 test.setTimeout(300_000);
 
+const EXPECTED_SAFE_STOPS = new Set(['agroup', 'c16', 'v6']);
+
 interface ReplayAttempt {
   ok: boolean;
   result?: {
@@ -256,8 +258,8 @@ entry:
         });
         summary.record = {
           ok: true,
-          actions: session.actions.length,
-          actionTypes: session.actions.map((action) => action.type),
+          actions: session.canonicalActions.length,
+          actionTypes: session.canonicalActions.map((action) => action.kind),
         };
       } catch (error) {
         summary.record = {
@@ -379,6 +381,14 @@ entry:
           );
           expect(summary.verification2.status, summary.verification2.differences.join('\n')).not.toBe('fail');
         }
+      }
+
+      if (EXPECTED_SAFE_STOPS.has(spec.cell)) {
+        expect(reportedSuccess(summary.replay1), `${spec.cell} 应在发送前安全中止`).toBe(false);
+        expect(reportedSuccess(summary.replay2), `${spec.cell} 跨参数回放应在发送前安全中止`).toBe(false);
+      } else {
+        expect(summary.verification1?.status, `${spec.cell} 原参数必须逐字段落库一致`).toBe('pass');
+        expect(summary.verification2?.status, `${spec.cell} 跨参数必须逐字段落库一致`).toBe('pass');
       }
     } finally {
       await writeFile(join(outDir, 'summary.json'), JSON.stringify(summary, null, 2), 'utf8');

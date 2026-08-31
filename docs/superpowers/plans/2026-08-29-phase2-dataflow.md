@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, npm workspaces, Zod, Vitest, Playwright, browser-injected dependency-free TypeScript.
 
-**Spec:** `docs/DSH-Phase2-Dataflow.md`
+**Spec:** `docs/history/phase2/DSH-Phase2-Dataflow.md`
 
 ## Global Constraints
 

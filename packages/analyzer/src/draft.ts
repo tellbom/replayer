@@ -87,6 +87,18 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   const correlated = correlate(collapsedSession);
   const identifierStability = analyzeIdentifierStability(session, secondSession);
   const paramCandidates = detectParams(session, secondSession);
+  const analyzed = analysisSession(session).actions;
+  for (const candidate of paramCandidates) {
+    const index = candidate.sourceIndexes.length === 1 ? candidate.sourceIndexes[0] : undefined;
+    if (index === undefined || !identifierStability.confirmed.has(index)) continue;
+    const action = analyzed.find((item) => item.actionIdx === index);
+    const semanticName = normalizeVariableName(action?.label ?? action?.semanticTarget?.accessibleName);
+    if (!semanticName) continue;
+    const used = paramCandidates
+      .filter((item) => item !== candidate)
+      .map((item) => item.definition.name);
+    candidate.definition.name = uniqueVariableName(semanticName, used);
+  }
   const params = paramCandidates.map((candidate) => candidate.definition);
   const internalValues = detectInternalValues(session);
   const planningParams: Skill['params'] = [
@@ -95,7 +107,13 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   ];
   const paramBindings = new Map<number, Skill['params'][number]>();
   for (const candidate of paramCandidates) {
-    candidate.sourceIndexes.forEach((index) => paramBindings.set(index, candidate.definition));
+    if (candidate.sourceIndexes.length !== 1) continue;
+    candidate.sourceIndexes.forEach((index) => {
+      // A direct interaction binding is discovered before response-derived wire
+      // fields. Keep it as the action's caller-facing parameter; later fields are
+      // still parameterized by their explicit network-body carrier.
+      if (!paramBindings.has(index)) paramBindings.set(index, candidate.definition);
+    });
   }
   const enumEvidenceNotes = paramCandidates.flatMap((candidate) => {
     if (candidate.enumStatus === 'contextual') {
@@ -108,28 +126,12 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   });
   const items: DraftItem[] = [];
   const interruptionIndexes = new Set(session.interruptions?.map((item) => item.atActionIdx) ?? []);
-  const networkOwnedScopes = new Set(
-    correlated.flatMap((producer, producerIndex) => {
-      const scopeId = producer.action?.legacy?.produces?.scopeId;
-      if (!scopeId || producer.requests.length > 0) return [];
-      const consumer = correlated
-        .slice(producerIndex + 1)
-        .find((candidate) => candidate.action?.legacy?.scope === scopeId);
-      return consumer?.requests.some((request) => request.mutating) ? [scopeId] : [];
-    }),
-  );
   for (const step of correlated) {
     const recordedAction = step.action;
     const actionIndex = recordedAction?.actionIdx ?? -1;
-    if (recordedAction?.legacy?.produces && networkOwnedScopes.has(recordedAction.legacy.produces.scopeId)) {
-      continue;
-    }
-    const stableAction = recordedAction
+    const action = recordedAction
       ? withIdentifierConfidence(recordedAction, actionIndex, identifierStability)
       : null;
-    const action = stableAction?.legacy?.scope && networkOwnedScopes.has(stableAction.legacy.scope)
-      ? { ...stableAction, legacy: { ...stableAction.legacy, scope: undefined } }
-      : stableAction;
     const afterSessionInterrupt = interruptionIndexes.has(actionIndex);
     if (step.requests.length === 0 && action) {
       items.push({
@@ -195,7 +197,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   const usedParams = params.filter((param) => steps.some((step) => [
     step.network?.url, step.network?.headers, step.network?.body, step.ui?.value,
   ].some((value) => containsParameterTemplate(value, param.name))));
-  if (session.recorderPath === 'canonical') assertPlannedCarriers(usedParams);
+  assertPlannedCarriers(usedParams);
   const unusedParamNotes = params
     .filter((param) => !usedParams.includes(param))
     .map((param) => `参数 ${param.name} 无可靠引用，已从 draft 参数声明中移除。`);
@@ -261,28 +263,7 @@ export function generateDraft(session: RecordSession, secondSession?: RecordSess
   };
   const skill = SkillSchema.parse(raw);
   assertNoIndexedResponseTemplates(skill);
-  assertNoDeprecatedDraftStrategies(skill);
   return { skill, yaml: renderDraftYaml(skill, Boolean(postcondition)) };
-}
-
-export function assertNoDeprecatedDraftStrategies(skill: Skill): void {
-  const deprecated = new Set([
-    ['el', 'form', 'item'].join('-'),
-    ['el', 'option'].join('-'),
-    ['el', 'dialog', 'scoped'].join('-'),
-    ['el', 'table', 'cell'].join('-'),
-  ]);
-  const pending: unknown[] = [skill.steps];
-  while (pending.length > 0) {
-    const value = pending.pop();
-    if (Array.isArray(value)) { pending.push(...value); continue; }
-    if (!value || typeof value !== 'object') continue;
-    const record = value as Record<string, unknown>;
-    if (typeof record.strategy === 'string' && deprecated.has(record.strategy)) {
-      throw new Error(`new draft contains deprecated locator strategy: ${record.strategy}`);
-    }
-    pending.push(...Object.values(record));
-  }
 }
 
 export function assertParametersUsed(skill: Skill): void {
@@ -305,7 +286,7 @@ export function assertParametersUsed(skill: Skill): void {
 
 function assertRecordSession(session: RecordSession): void {
   if (!session || typeof session !== 'object' || !session.meta
-    || !Array.isArray(session.actions) || !Array.isArray(session.network)
+    || !Array.isArray(session.canonicalActions) || !Array.isArray(session.network)
     || !Array.isArray(session.pages)) {
     throw new TypeError('input is not a RecordSession');
   }
@@ -414,7 +395,6 @@ function draftStep(
         item.action,
         paramBindings.get(item.sourceActionIndex),
         pageScoped.extractsByAction.get(item.sourceActionIndex),
-        item.afterSessionInterrupt,
       )
     : undefined;
   const network = request && !browserMultipart
@@ -450,9 +430,6 @@ function draftStep(
     ...(item.expectsRedirect ? { expectsRedirect: true } : {}),
     ...(network ? { network } : {}),
     ...(ui ? { ui } : {}),
-    ...(item.action?.legacy?.scope && !item.afterSessionInterrupt ? { requires: [item.action.legacy.scope] } : {}),
-    ...(item.action?.legacy?.produces ? { produces: item.action.legacy.produces } : {}),
-    ...(item.action?.legacy?.waitAfter ? { waitAfter: item.action.legacy.waitAfter } : {}),
     ...(request?.correlation
       ? {
           _correlation: {
@@ -525,17 +502,14 @@ function uiAction(
   action: AnalyzedAction,
   param: Skill['params'][number] | undefined,
   extracts: Record<string, string> | undefined,
-  discardScope = false,
 ): unknown {
   if (param?.carrier && param.carrier.via.startsWith('network-')) return undefined;
   const name = param?.name;
   const value = name ? `{{${name}}}` : action.value;
   const common = {
-    ...(genericDraftTarget(action) ? { target: genericDraftTarget(action) } : {}),
+    ...(action.locator ? { target: action.locator } : {}),
     ...(action.label ? { label: action.label } : {}),
     ...(value !== undefined ? { value } : {}),
-    ...(action.legacy?.scope && !discardScope ? { scope: action.legacy.scope } : {}),
-    ...(action.legacy?.recordedHint ? { recordedHint: action.legacy.recordedHint } : {}),
     ...(extracts && Object.keys(extracts).length > 0 ? { extract: extracts } : {}),
   };
   if (action.kind === 'select') return { action: 'selectOption', ...common };
@@ -555,18 +529,6 @@ function uiAction(
       : undefined;
   }
   return undefined;
-}
-
-function genericDraftTarget(action: AnalyzedAction): AnalyzedAction['locator'] | undefined {
-  const strategy = action.locator?.strategy;
-  const deprecated = new Set([
-    ['el', 'form', 'item'].join('-'), ['el', 'option'].join('-'),
-    ['el', 'dialog', 'scoped'].join('-'), ['el', 'table', 'cell'].join('-'),
-  ]);
-  if (!strategy || !deprecated.has(strategy)) return action.locator;
-  return action.label
-    ? { strategy: 'label', label: action.label, kind: action.kind === 'select' ? 'select' : 'input' }
-    : undefined;
 }
 
 function dependencyExtracts(
@@ -636,7 +598,15 @@ function parameterizeUrl(
     }
     return _match;
   });
-  if (matches.length !== 1) return url;
+  if (matches.length === 0) return url;
+  if (matches.length > 1) {
+    const ambiguous = new Set(matches.map(({ prefix, encoded }) => `${prefix}\u0000${encoded}`));
+    return url.replace(/([?&][^=&#]+=)([^&#]*)/g, (match, prefix: string, encoded: string) => {
+      return ambiguous.has(`${prefix}\u0000${encoded}`)
+        ? `${prefix}TODO_UNRESOLVED`
+        : match;
+    });
+  }
   const matched = matches[0]!;
   return url.replace(/([?&][^=&#]+=)([^&#]*)/g, (match, prefix: string, encoded: string) => {
     return prefix === matched.prefix && encoded === matched.encoded
@@ -971,32 +941,10 @@ function inferPostcondition(
 
 function isRedirectingSubmission(session: RecordSession, request: RecordedRequest): boolean {
   if (!request.mutating || request.resourceType !== 'document') return false;
-  if (session.recorderPath !== 'canonical' && !session.canonicalActions) {
-    const nextActionTs = analysisSession(session).actions
-      .find((action) => action.timestamp > request.requestTs)?.timestamp;
-    const before = [...session.pages]
-      .filter((page) => page.ts <= request.requestTs)
-      .sort((left, right) => right.ts - left.ts)[0];
-    const after = [...session.pages]
-      .filter((page) => page.ts >= request.requestTs && (nextActionTs === undefined || page.ts < nextActionTs))
-      .sort((left, right) => left.ts - right.ts)[0];
-    if (!after) return false;
-    return !before || withoutHash(before.url) !== withoutHash(after.url);
-  }
-  const owner = session.canonicalActions?.find((action) =>
+  const owner = session.canonicalActions.find((action) =>
     action.effects?.requestIds?.includes(request.requestId),
   );
   return owner?.effects?.navigation !== undefined;
-}
-
-function withoutHash(url: string): string {
-  try {
-    const parsed = new URL(url);
-    parsed.hash = '';
-    return parsed.href;
-  } catch {
-    return url;
-  }
 }
 
 function safeObjectBody(request: RecordedRequest): Record<string, unknown> {

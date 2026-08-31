@@ -20,8 +20,6 @@ for (const path of walk(packages)) {
   const lines = readFileSync(path, 'utf8').split(/\r?\n/);
   lines.forEach((line, index) => {
     if (!patterns.some((pattern) => pattern.test(line))) return;
-    const annotation = lines.slice(Math.max(0, index - 2), index + 1).join(' ');
-    if (/@deprecated/.test(annotation) && /TODO\(Phase 3\)/.test(annotation)) return;
     violations.push(`${path}:${index + 1}: ${line.trim()}`);
   });
 }

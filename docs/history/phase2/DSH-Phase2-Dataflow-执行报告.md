@@ -126,7 +126,7 @@ C12 的 caller value 为 boolean，source 为用户对标准 `role=switch` 的�
 | C14.approverId | user-input | string | single | network-body |
 | B1.benefit | user-input | json | multiple | network-body |
 
-- Silent Wrong Success：**0**。正式定义和验证方法已写入 `docs/DSH-Phase0-SafetyGate.md`。
+- Silent Wrong Success：**0**。正式定义和验证方法见 [DSH-Phase0-SafetyGate.md](../../DSH-Phase0-SafetyGate.md)。
 - TODO_UNRESOLVED 提交：**0**。C16、V6、A 组均在发送前中止，服务端新增记录为 0。
 - 成功证据覆盖：**16/16** 可回放格位均有逐字段对照；未验证成功格位 **0**。
 - C8/C11 的旧“HTTP 成功但数据错误”现在由矩阵断言直接捕获，不能被 200/`ok=true` 掩盖。

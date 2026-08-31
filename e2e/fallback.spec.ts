@@ -92,6 +92,7 @@ test('Phase 0 [long-term]: merged dependency blocks a not_sent network step from
     onConfirm: async () => { confirmations += 1; return true; },
   })).rejects.toBeInstanceOf(ChannelCarrierMissingError);
   expect(confirmations).toBe(1);
+  expect(await submissionCount(profileDir)).toBe(0);
 });
 
 test('fallback: drop_response resolves by postcondition without replay', async ({ browserName }, testInfo) => {
@@ -240,9 +241,9 @@ function fallbackSubmitStep(url: string): Step {
     ui: {
       action: 'click',
       target: {
-        strategy: 'el-dialog-scoped',
-        dialogTitle: '确认提交',
-        inner: { strategy: 'text', text: '确认提交', nth: 1 },
+        strategy: 'role',
+        role: 'button',
+        name: '确认提交',
       },
       waitFor: { selector: '.el-message--success' },
       preAction: {
@@ -333,6 +334,24 @@ function debugStep(): Step {
     hasSideEffect: false,
     network: { method: 'GET', url: '/api/_debug/submissions', contentType: 'json' },
   };
+}
+
+async function submissionCount(profileDir: string): Promise<number> {
+  const { chromium } = await import('playwright');
+  const context = await chromium.launchPersistentContext(profileDir, {
+    channel: 'chrome', headless: true,
+  });
+  try {
+    const page = context.pages()[0] ?? await context.newPage();
+    await page.goto(`${baseUrl}/home`);
+    return page.evaluate(() =>
+      fetch('/api/_debug/submissions?_nodelay=1', { credentials: 'include' })
+        .then((response) => response.json())
+        .then((body: { count: number }) => body.count),
+    );
+  } finally {
+    await context.close();
+  }
 }
 
 function debugCount(result: StepResult | undefined): number {

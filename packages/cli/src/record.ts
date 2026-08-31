@@ -32,7 +32,6 @@ interface RecordCliOptions {
   /** 【T-67b】启用录制期 LLM 消歧（仅 LOW 置信产物触发） */
   disambiguate: boolean;
   forceTakeover?: boolean;
-  recorderPath: 'legacy' | 'canonical';
 }
 
 export function configureRecordCommand(program: Command): void {
@@ -46,7 +45,6 @@ export function configureRecordCommand(program: Command): void {
     .option('--channel <channel>', '浏览器通道：chrome 或 msedge', 'chrome')
     .option('--state-dir <directory>', '会话状态目录', './.dsh')
     .option('--force-takeover', '显式关闭已知常驻浏览器后自行启动（会丢失会话）')
-    .option('--recorder-path <path>', '录制路径：canonical 或 legacy', 'canonical')
     .option('--disambiguate', 'LOW 置信定位产物触发 LLM 局部上下文消歧（需 DSH_LLM_* 配置）')
     .action(runRecord);
 }
@@ -85,7 +83,6 @@ export async function runRecord(options: RecordCliOptions): Promise<void> {
     cdpEndpoint,
     onDisambiguation,
     resumeSession,
-    recorderPath: options.recorderPath,
   });
   process.stdout.write(`录制已写入 ${options.out}/record.json\n`);
 }
@@ -110,7 +107,8 @@ async function loadConfirmedPartial(path: string): Promise<import('@dsh/core').R
     prompt.close();
   }
   const parsed = JSON.parse(text) as Partial<import('@dsh/core').RecordSession>;
-  if (!parsed.meta || !Array.isArray(parsed.actions) || !Array.isArray(parsed.network) || !Array.isArray(parsed.pages)) {
+  if (!parsed.meta || !Array.isArray(parsed.canonicalActions)
+      || !Array.isArray(parsed.network) || !Array.isArray(parsed.pages)) {
     throw new Error('record.partial.json 结构无效，无法恢复');
   }
   return parsed as import('@dsh/core').RecordSession;

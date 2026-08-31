@@ -16,7 +16,6 @@ test('T-72 同名 section 按钮由规则化祖先提升为 HIGH，且不调用 
   let llmCalls = 0;
 
   const session = await record({
-    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir,
     outDir: testInfo.outputPath('record'),
@@ -50,14 +49,17 @@ test('T-72 同名 section 按钮由规则化祖先提升为 HIGH，且不调用 
     },
   });
 
-  const action = session.actions.find((candidate) => candidate.type === 'click' && candidate.text === '搜索');
+  const action = session.canonicalActions.find((candidate) =>
+    candidate.kind === 'activate'
+      && candidate.target?.locatorEvidence?.generatedSelector.includes('加班区'),
+  );
   console.log(JSON.stringify({ originalConfidence, ancestorCandidate, action, llmCalls }));
   expect(originalConfidence).toBe('LOW');
-  expect(action?.target).toMatchObject({ strategy: 'playwright', confidence: 'HIGH' });
-  expect(action?.target?.strategy === 'playwright' ? action.target.selector : '').toContain(
+  expect(action?.target?.locatorEvidence?.confidence).toBe('HIGH');
+  expect(action?.target?.locatorEvidence?.generatedSelector ?? '').toContain(
     'section:has-text("加班区")',
   );
-  expect(action?.target?.strategy === 'playwright' ? action.target.selector : '').toContain(
+  expect(action?.target?.locatorEvidence?.generatedSelector ?? '').toContain(
     'internal:role=button[name="搜索"i]',
   );
   expect(llmCalls).toBe(0);

@@ -48,7 +48,7 @@ describe('ValueLineage inference', () => {
 function session(actions: CanonicalAction[]): RecordSession {
   return {
     meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture.invalid', userAgent: '', entryId: 'fixture' },
-    actions: [], canonicalActions: actions, recorderPath: 'canonical', network: [], pages: [],
+    canonicalActions: actions, network: [], pages: [],
   };
 }
 

@@ -6,6 +6,11 @@ export interface CanonicalAction {
   timestamp: number;
   kind: 'activate' | 'edit' | 'select' | 'check' | 'key' | 'upload' | 'navigate' | 'unknown';
   target?: SemanticTarget;
+  enumOptions?: {
+    items: Array<{ label: string; value: string }>;
+    complete: boolean;
+    incompleteReason?: 'truncated' | 'dynamic-loading' | 'partial-dom';
+  };
   before?: ObservableState;
   after?: ObservableState;
   effects?: {

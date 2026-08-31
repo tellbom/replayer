@@ -348,6 +348,8 @@ Phase 0 完成的判据，三条全部满足：
 
 ### G-0.1 · Silent Wrong Success = 0
 
+> Phase 3 最终状态：该守卫继续有效，并以 Canonical IR 单一路径执行；旧 `RecordSession.actions` 与 legacy recorder 已删除，不再是守卫输入。
+
 正式定义：
 
 ```

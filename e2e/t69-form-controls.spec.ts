@@ -12,7 +12,6 @@ test('T-69 G1-G5: no-id 表单控件走正式录制链路', async ({ browserName
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
   const session = await record({
-    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('record'),
@@ -78,17 +77,23 @@ test('T-69 G1-G5: no-id 表单控件走正式录制链路', async ({ browserName
   });
 
   const results = Object.fromEntries(
-    session.actions
-      .filter((action) => action.type === 'fill' && action.value?.endsWith('-value'))
+    session.canonicalActions
+      .filter((action) => typeof action.after?.self?.value === 'string'
+        && action.after.self.value.endsWith('-value'))
       .map((action) => [
-        action.value!.slice(0, 2).toUpperCase(),
-        action.target as { strategy: string; selector: string; confidence: 'HIGH' | 'LOW' },
+        (action.after?.self?.value as string).slice(0, 2).toUpperCase(),
+        {
+          strategy: 'playwright',
+          selector: action.target?.locatorEvidence?.generatedSelector,
+          confidence: action.target?.locatorEvidence?.confidence,
+        },
       ]),
   );
-  const g5 = session.actions.find((action) => action.value === 'g5-approve')?.target as {
-    strategy: string;
-    selector: string;
-    confidence: 'HIGH' | 'LOW';
+  const g5Action = session.canonicalActions.find((action) => action.after?.self?.value === 'g5-approve');
+  const g5 = {
+    strategy: 'playwright',
+    selector: g5Action?.target?.locatorEvidence?.generatedSelector,
+    confidence: g5Action?.target?.locatorEvidence?.confidence,
   };
 
   expect(Object.keys(results)).toHaveLength(4);

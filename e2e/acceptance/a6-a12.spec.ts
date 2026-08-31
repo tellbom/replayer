@@ -156,11 +156,11 @@ test('A12 非法 locator/action 被 Schema 护栏拦截并重试', async ({ page
   });
   const llm = mockLLM([
     { target: { strategy: 'javascript', code: 'submit()' }, evidence: '"加班原因"' },
-    { target: { strategy: 'el-form-item', label: '加班原因', kind: 'textarea' }, evidence: '"加班原因"' },
+    { target: { strategy: 'label', label: '加班原因', kind: 'textarea' }, evidence: '"加班原因"' },
   ]);
   await expect(proposeHeal({
     llm, page,
-    step: healStep('a12', 'fill', { strategy: 'el-form-item', label: '事由', kind: 'textarea' }, false),
+    step: healStep('a12', 'fill', { strategy: 'label', label: '事由', kind: 'textarea' }, false),
     error: new Error('定位失败'), snapshot: await page.evaluate(() => window.__DSH_SNAPSHOT__()),
   })).resolves.toMatchObject({ resolveVerified: true });
   expect(() => parseSkill(`skill: { id: bad, name: bad, system: oa, baseUrl: http://oa }
@@ -178,8 +178,8 @@ function labelVariant(
   action: NonNullable<Step['ui']>['action'],
 ) {
   return {
-    old: { strategy: 'el-form-item', label: oldLabel, kind } as LocatorStrategy,
-    target: { strategy: 'el-form-item', label: newLabel, kind } as LocatorStrategy,
+    old: { strategy: 'label', label: oldLabel, kind } as LocatorStrategy,
+    target: { strategy: 'label', label: newLabel, kind } as LocatorStrategy,
     action,
     evidence: `"${newLabel}"`,
     mutate: async () => page.locator('.el-form-item__label').filter({ hasText: oldLabel }).evaluate(

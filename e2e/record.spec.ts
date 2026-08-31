@@ -50,8 +50,7 @@ test('record e2e: 脚本化加班流程产出完整录制', async () => {
   const stored: RecordSession = JSON.parse(
     await readFile(join(root, 'out', 'record.json'), 'utf8'),
   );
-  expect(stored.actions).toEqual([]);
-  const canonical = stored.canonicalActions ?? [];
+  const canonical = stored.canonicalActions;
   const overtimeStart = canonical.findLastIndex(
     (action) => action.kind === 'navigate' && action.effects?.navigation?.url.endsWith('/overtime/apply'),
   );
@@ -65,9 +64,8 @@ test('record e2e: 脚本化加班流程产出完整录制', async () => {
     'activate',
     'activate',
   ]);
-  expect(stored.recorderPath).toBe('canonical');
-  expect(stored.canonicalActions?.length).toBeGreaterThan(0);
-  expect(stored.canonicalActions?.every((action) => action.raw.eventTypes.length > 0)).toBe(true);
+  expect(stored.canonicalActions.length).toBeGreaterThan(0);
+  expect(stored.canonicalActions.every((action) => action.raw.eventTypes.length > 0)).toBe(true);
   const approver = stored.network.find((request) => request.url.includes('/overtime/approver'));
   const submit = stored.network.find((request) => request.url.includes('/overtime/submit'));
   expect(approver?.sanitizeMode).toBe('structured');

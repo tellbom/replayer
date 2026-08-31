@@ -35,22 +35,27 @@ export function diffRecordings(left: RecordSession, right: RecordSession): Recor
   const warnings: string[] = [];
   const candidates: DiffEntry[] = [];
   const fixed: string[] = [];
-  const leftTypes = left.actions.map((action) => action.type);
-  const rightTypes = right.actions.map((action) => action.type);
+  const leftTypes = left.canonicalActions.map((action) => action.kind);
+  const rightTypes = right.canonicalActions.map((action) => action.kind);
   if (JSON.stringify(leftTypes) !== JSON.stringify(rightTypes)) {
     warnings.push(`动作序列结构不一致: ${leftTypes.join(' → ')} ≠ ${rightTypes.join(' → ')}`);
   }
 
-  const actionCount = Math.min(left.actions.length, right.actions.length);
+  const actionCount = Math.min(left.canonicalActions.length, right.canonicalActions.length);
   for (let index = 0; index < actionCount; index += 1) {
-    const leftAction = left.actions[index];
-    const rightAction = right.actions[index];
-    if (!leftAction || !rightAction || leftAction.value === rightAction.value) continue;
+    const leftAction = left.canonicalActions[index];
+    const rightAction = right.canonicalActions[index];
+    const leftValue = canonicalValue(leftAction);
+    const rightValue = canonicalValue(rightAction);
+    if (!leftAction || !rightAction || leftValue === rightValue) continue;
     candidates.push({
       path: `action[${index}].value`,
-      left: leftAction.value,
-      right: rightAction.value,
-      suggestedParam: actionParamName(leftAction.name, leftAction.type),
+      left: leftValue,
+      right: rightValue,
+      suggestedParam: actionParamName(
+        leftAction.target?.name ?? leftAction.target?.accessibleName,
+        leftAction.kind,
+      ),
     });
   }
 
@@ -146,6 +151,11 @@ function dynamicHeaders(
 
 function actionParamName(name: string | undefined, type: string): string {
   return name?.trim() || type;
+}
+
+function canonicalValue(action: RecordSession['canonicalActions'][number] | undefined): unknown {
+  const state = action?.after?.self;
+  return state?.value ?? state?.checked ?? state?.textContent;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

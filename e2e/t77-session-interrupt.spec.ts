@@ -78,7 +78,6 @@ test('T-77: 同身份登录后续录，登录动作不入库且断点后 scope �
     });
     let scenario!: Promise<void>;
     const session = await record({
-      recorderPath: 'legacy',
       entry: entry(),
       profileDir: fixture.profile,
       outDir: fixture.out,
@@ -158,10 +157,15 @@ test('T-77: 同身份登录后续录，登录动作不入库且断点后 scope �
     expect(session.interruptions?.[0]?.resumedAt).toBeTruthy();
     expect(session.interruptions?.[0]?.atActionIdx).toBeGreaterThanOrEqual(8);
     expect(session.meta.identityChanged).toBeUndefined();
-    expect(session.actions.some((action) => action.text === '中断前动作7')).toBe(true);
-    expect(session.actions.some((action) => action.text === '续录动作')).toBe(true);
+    expect(session.canonicalActions.some((action) => actionEvidence(action).includes('中断前动作7')))
+      .toBe(true);
+    expect(session.canonicalActions.some((action) => actionEvidence(action).includes('续录动作')))
+      .toBe(true);
     expect(
-      session.actions.some((action) => action.value === 'tester' || action.text === '登录'),
+      session.canonicalActions.some((action) => {
+        const evidence = actionEvidence(action);
+        return evidence.includes('tester') || evidence.includes('登录');
+      }),
     ).toBe(false);
     expect(session.network.some((request) => request.url.includes('/api/login'))).toBe(false);
     await expect(readFile(join(fixture.out, 'record.partial.json'), 'utf8')).rejects.toThrow();
@@ -176,7 +180,6 @@ test('T-77: 换身份登录立即中止并保留 partial 录制', async () => {
   try {
     let scenario!: Promise<void>;
     const session = await record({
-      recorderPath: 'legacy',
       entry: entry(),
       profileDir: fixture.profile,
       outDir: fixture.out,
@@ -228,9 +231,13 @@ test('T-77: 换身份登录立即中止并保留 partial 录制', async () => {
 
     expect(session.meta.identityChanged).toBe(true);
     expect(session.interruptions?.[0]).toMatchObject({ identityChanged: true });
-    expect(session.actions.some((action) => action.text === '应保留动作7')).toBe(true);
+    expect(session.canonicalActions.some((action) => actionEvidence(action).includes('应保留动作7')))
+      .toBe(true);
     expect(
-      session.actions.some((action) => action.value === 'other-user' || action.text === '登录'),
+      session.canonicalActions.some((action) => {
+        const evidence = actionEvidence(action);
+        return evidence.includes('other-user') || evidence.includes('登录');
+      }),
     ).toBe(false);
     const partial = JSON.parse(
       await readFile(join(fixture.out, 'record.partial.json'), 'utf8'),
@@ -310,4 +317,13 @@ async function reservePort(): Promise<number> {
 async function closePersistentContext(context: BrowserContext): Promise<void> {
   await Promise.all(context.pages().map((page) => page.close()));
   await context.close();
+}
+
+function actionEvidence(action: RecordSession['canonicalActions'][number]): string[] {
+  const value = action.after?.self?.value;
+  return [
+    action.target?.accessibleName,
+    typeof value === 'string' ? value : undefined,
+    action.after?.self?.textContent,
+  ].filter((item): item is string => Boolean(item));
 }

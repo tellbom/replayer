@@ -76,7 +76,7 @@ function session(): RecordSession {
       userAgent: 'Chrome',
       entryId: 'oa',
     },
-    actions: [],
+    canonicalActions: [],
     network: [],
     pages: [],
   };

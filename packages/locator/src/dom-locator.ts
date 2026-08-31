@@ -111,23 +111,8 @@ function tableRowButton(rowAnchorText: string, buttonText: string): HTMLElement 
 }
 
 async function resolve(strategy: LocatorStrategy): Promise<HTMLElement> {
-  const name = String(strategy.strategy);
-  const legacy = strategy as Record<string, unknown>;
-  if (name === 'label') return byFormItem(String(legacy.label), legacy.kind as ControlKind);
-  if (name === ['el', 'form', 'item'].join('-')) {
-    return byFormItem(String(legacy.label), legacy.kind as ControlKind);
-  }
-  if (name === ['el', 'option'].join('-')) {
-    const owner = String(legacy.ownerLabel); const text = String(legacy.text);
-    await selectOption(owner, text);
-    const active = document.activeElement;
-    return active instanceof HTMLElement ? active : document.body;
-  }
-  if (name === ['el', 'dialog', 'scoped'].join('-')) {
-    return inDialog(String(legacy.dialogTitle), (dialog) => resolveIn(dialog, legacy.inner as LocatorStrategy));
-  }
-  if (name === ['el', 'table', 'cell'].join('-')) {
-    return tableRowButton(String(legacy.rowAnchorText), String(legacy.buttonText));
+  if (strategy.strategy === 'label') {
+    return byFormItem(strategy.label as string, strategy.kind as ControlKind);
   }
   return resolveIn(document, strategy);
 }

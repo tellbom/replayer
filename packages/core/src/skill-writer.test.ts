@@ -44,7 +44,7 @@ steps:
     hasSideEffect: false
     ui:
       action: fill
-      target: { strategy: el-form-item, label: 事由, kind: textarea }
+      target: { strategy: label, label: 事由, kind: textarea }
       value: test
 assertions: []
 `;
@@ -56,8 +56,8 @@ describe('commitHeal', () => {
     await writeFile(path, yaml, 'utf8');
     const updated = await commitHeal(path, {
       stepId: 's1',
-      oldTarget: { strategy: 'el-form-item', label: '事由', kind: 'textarea' },
-      newTarget: { strategy: 'el-form-item', label: '加班原因', kind: 'textarea' },
+      oldTarget: { strategy: 'label', label: '事由', kind: 'textarea' },
+      newTarget: { strategy: 'label', label: '加班原因', kind: 'textarea' },
       resolveVerified: true,
       actionVerified: true,
       requiresConfirm: false,

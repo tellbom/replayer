@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Playwright, Vitest, esbuild browser IIFEs, Zod/YAML, npm workspaces.
 
-**Spec:** `docs/DSH-Phase1-Foundation.md`
+**Spec:** `docs/history/phase1/DSH-Phase1-Foundation.md`
 
 ## Global Constraints
 

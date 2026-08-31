@@ -82,6 +82,18 @@ describe('T-73 iframe 定位契约', () => {
   });
 });
 
+describe('Phase 3 locator cutover', () => {
+  it.each(['el-form-item', 'el-option', 'el-dialog-scoped', 'el-table-cell'])(
+    'rejects removed locator strategy %s',
+    (strategy) => {
+      expect(() => LocatorStrategySchema.parse({
+        strategy, label: 'legacy', kind: 'input', text: 'legacy', dialogTitle: 'legacy',
+        inner: { strategy: 'text', text: 'legacy' }, rowAnchorText: 'legacy', buttonText: 'legacy',
+      })).toThrow();
+    },
+  );
+});
+
 describe('T-79 LOW 与 Skill 验证契约', () => {
   it('保留 LOW recordedHint 并默认进入 draft', () => {
     const skill = SkillSchema.parse({

@@ -61,18 +61,9 @@ export interface ReplayOptions {
 /** 回放统一入口；各执行器按任务顺序接入此编排。 */
 export async function replay(skill: Skill, opts: ReplayOptions): Promise<RunResult> {
   assertNoUnresolvedExecutableValues(skill);
-  const legacyInternalValues = skill.params
-    .filter((param) => param.carrier?.via === 'page-derived')
-    .map((param) => ({
-      name: param.name,
-      type: param.type,
-      lineage: param.lineage!,
-      carrier: param.carrier!,
-    }));
-  const internalValues = [...(skill.internalValues ?? []), ...legacyInternalValues];
-  const publicParams = skill.params.filter((param) => param.carrier?.via !== 'page-derived');
+  const internalValues = skill.internalValues ?? [];
   const internalNames = internalValues.map((value) => value.name);
-  validateExecutionParams(publicParams, opts.params, internalNames);
+  validateExecutionParams(skill.params, opts.params, internalNames);
   refreshVerification(skill);
   if (skill.verification.status === 'needs_rerecord') {
     throw new SkillNeedsRerecordError(

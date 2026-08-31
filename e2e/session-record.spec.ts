@@ -27,7 +27,6 @@ test('recording-session: 停止信号后写出完整 RecordSession', async () =>
   expect(stored.meta.startedAt).toBeTruthy();
   expect(stored.meta.endedAt).toBeTruthy();
   expect(stored.meta.userAgent).toContain('Chrome');
-  expect(stored.actions).toEqual([]);
   expect(stored.canonicalActions).toEqual([
     expect.objectContaining({
       kind: 'navigate', effects: { navigation: { url: 'http://127.0.0.1:15173/home' } },

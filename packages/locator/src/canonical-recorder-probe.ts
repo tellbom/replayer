@@ -22,6 +22,8 @@ const settleMs = Number(Reflect.get(window, '__DSH_CANONICAL_SETTLE_MS__')) || 8
 let nextActionIdx = 0;
 let pending: PendingAction | null = null;
 let recentlyClosed: { action: PendingAction; closedAt: number } | null = null;
+const capturedElements: Record<number, Element> = {};
+Reflect.set(window, '__dsh_clicked__', capturedElements);
 
 function targetKey(element: Element): string {
   const container = element.closest('form, fieldset, [role="group"], [role="radiogroup"]')
@@ -59,6 +61,7 @@ function onRawEvent(event: Event): void {
       semanticTargetAtStart: semanticTarget(semanticElement),
       before: observableState(target), eventTypes: [], trusted: true,
     };
+    capturedElements[pending.actionIdx] = target;
     const mutation = Reflect.get(window, '__DSH_MUTATION__') as { begin?: (index: number) => void };
     mutation.begin?.(pending.actionIdx);
   }
@@ -102,6 +105,7 @@ async function emit(action: PendingAction, domMutations: unknown[] = []): Promis
   const evidenceTarget = action.optionTarget ?? action.lastEventTarget;
   const after = observableState(action.target, evidenceTarget);
   const kind = classify(action.eventTypes, action.target, evidenceTarget);
+  const enumOptions = captureEnumOptions(action.target, evidenceTarget);
   const record = Reflect.get(window, '__DSH_CANONICAL_RECORD__');
   if (typeof record !== 'function') return;
   await Promise.resolve(record({
@@ -110,6 +114,7 @@ async function emit(action: PendingAction, domMutations: unknown[] = []): Promis
     timestamp: action.startedAt,
     kind,
     target: action.semanticTargetAtStart,
+    ...(enumOptions ? { enumOptions } : {}),
     before: action.before,
     after: {
       ...(after as Record<string, unknown>),
@@ -306,10 +311,93 @@ function normalized(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function captureEnumOptions(
+  target: Element,
+  rawTarget: Element,
+): {
+  items: Array<{ label: string; value: string }>;
+  complete: boolean;
+  incompleteReason?: 'truncated' | 'dynamic-loading' | 'partial-dom';
+} | undefined {
+  let elements: Element[] = [];
+  let incompleteReason: 'dynamic-loading' | 'partial-dom' | undefined;
+  if (target instanceof HTMLSelectElement) {
+    elements = [...target.options];
+  } else {
+    const listbox = rawTarget.closest('[role="listbox"]');
+    if (!listbox) return undefined;
+    elements = [...listbox.querySelectorAll('[role="option"]')];
+    if (elements.length === 0) return undefined;
+    const declaredSize = Math.max(...elements.map((item) => Number(item.getAttribute('aria-setsize')) || 0));
+    incompleteReason = listbox.getAttribute('aria-busy') === 'true'
+      ? 'dynamic-loading'
+      : declaredSize > elements.length ? 'partial-dom' : undefined;
+  }
+  const items = elements.map((item) => ({
+    label: normalized(item.getAttribute('aria-label') ?? item.textContent),
+    value: item instanceof HTMLOptionElement
+      ? item.value
+      : item.getAttribute('value') ?? normalized(item.textContent),
+  }));
+  const maxOptions = Number(Reflect.get(window, '__DSH_ENUM_MAX_OPTIONS__'));
+  if (!Number.isInteger(maxOptions) || maxOptions <= 0) {
+    return { items: [], complete: false, incompleteReason: 'partial-dom' };
+  }
+  if (items.length > maxOptions) {
+    return { items: items.slice(0, maxOptions), complete: false, incompleteReason: 'truncated' };
+  }
+  return incompleteReason
+    ? { items, complete: false, incompleteReason }
+    : { items, complete: true };
+}
+
+const initialStateSeen = new WeakSet<Element>();
+function scanInitialFormState(): void {
+  const recordInitial = Reflect.get(window, '__DSH_RECORD_INITIAL_STATE__');
+  if (typeof recordInitial !== 'function') return;
+  for (const element of document.querySelectorAll(
+    'select, input[type="radio"]:checked, input[type="checkbox"]:checked',
+  )) {
+    if (!(element instanceof HTMLSelectElement) && !(element instanceof HTMLInputElement)) continue;
+    if (initialStateSeen.has(element)) continue;
+    const evidence = semanticTarget(element).locatorEvidence as {
+      generatedSelector?: string;
+      confidence?: 'HIGH' | 'LOW';
+    } | undefined;
+    if (!evidence?.generatedSelector) continue;
+    initialStateSeen.add(element);
+    const target = semanticTarget(element);
+    const type = element instanceof HTMLSelectElement
+      ? 'select'
+      : element.type as 'radio' | 'checkbox';
+    void Promise.resolve(recordInitial({
+      ts: Date.now(),
+      type,
+      target: {
+        strategy: 'playwright',
+        selector: evidence.generatedSelector,
+        confidence: evidence.confidence,
+      },
+      label: target.neighborhood && typeof target.neighborhood === 'object'
+        ? (target.neighborhood as { labelText?: string }).labelText
+        : target.accessibleName,
+      name: element.getAttribute('name') || undefined,
+      value: element.value,
+      text: element instanceof HTMLSelectElement
+        ? element.selectedOptions[0]?.textContent?.trim()
+        : target.accessibleName,
+      checked: element instanceof HTMLInputElement ? element.checked : undefined,
+    })).catch(() => undefined);
+  }
+}
+
 for (const type of [
   'pointerdown', 'pointerup', 'click', 'beforeinput', 'input', 'change', 'keydown',
   'compositionstart', 'compositionend', 'focus', 'blur', 'drop',
 ]) document.addEventListener(type, onRawEvent, true);
+
+Reflect.set(window, '__DSH_INITIAL_FORM_STATE__', scanInitialFormState);
+startInitialFormStateObservation();
 
 Reflect.set(window, '__DSH_CANONICAL_FLUSH__', flush);
 queueMicrotask(() => {
@@ -324,3 +412,13 @@ queueMicrotask(() => {
     raw: { eventTypes: ['framenavigated'], trusted: true }, source: 'playwright-probe',
   })).catch(() => undefined);
 });
+
+function startInitialFormStateObservation(): void {
+  const root = document.documentElement;
+  if (!root) {
+    document.addEventListener('DOMContentLoaded', startInitialFormStateObservation, { once: true });
+    return;
+  }
+  new MutationObserver(scanInitialFormState).observe(root, { childList: true, subtree: true });
+  queueMicrotask(scanInitialFormState);
+}

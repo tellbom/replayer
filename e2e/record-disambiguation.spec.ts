@@ -18,7 +18,6 @@ test('真 LOW 场景（双同名按钮）触发回调并替换为 scoped HIGH', 
   let stop!: () => void;
   const stopSignal = new Promise<void>((r) => { stop = r; });
   const session = await record({
-    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('rec-low'),
@@ -50,14 +49,15 @@ test('真 LOW 场景（双同名按钮）触发回调并替换为 scoped HIGH', 
   expect(calls.length).toBe(1);
   expect(calls[0]).toContain('nth');
   // 替换后 target 为 scoped selector 且 confidence=HIGH
-  const click = session.actions.find(
-    (a) => a.type === 'click' && (a.target as { selector?: string })?.selector?.includes('重复钮'),
+  const click = session.canonicalActions.find(
+    (action) => action.kind === 'activate'
+      && action.target?.locatorEvidence?.generatedSelector.includes('重复钮'),
   );
   expect(click).toBeTruthy();
-  const target = click!.target as { strategy: string; selector: string; confidence: string };
-  expect(target.strategy).toBe('playwright');
-  expect(target.selector).toContain('[data-test-scope="order"]');
-  expect(target.confidence).toBe('HIGH');
+  expect(click!.target?.locatorEvidence).toMatchObject({
+    generatedSelector: expect.stringContaining('[data-test-scope="order"]'),
+    confidence: 'HIGH',
+  });
 });
 
 test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browserName }, testInfo) => {
@@ -70,7 +70,6 @@ test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browser
   let stop!: () => void;
   const stopSignal = new Promise<void>((r) => { stop = r; });
   const session = await record({
-    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('rec'),
@@ -94,21 +93,23 @@ test('LOW 触发消歧回调并替换 target；HIGH 不触发', async ({ browser
     },
   });
 
-  const clicks = session.actions.filter((a) => a.type === 'click' && a.target);
+  const clicks = session.canonicalActions.filter((action) =>
+    action.kind === 'activate' && action.target?.locatorEvidence,
+  );
   expect(clicks.length).toBeGreaterThanOrEqual(1);
   for (const click of clicks) {
-    const target = click.target as { strategy: string; selector: string; confidence?: string };
-    expect(target.strategy).toBe('playwright');
     // 「提交」在 Mock 页全局唯一文案 → HIGH → 不应触发回调；
     // 若页面其他按钮导致 LOW → 回调替换后 confidence 升为 HIGH
-    expect(target.confidence ?? 'HIGH').toBe('HIGH');
+    expect(click.target?.locatorEvidence?.confidence).toBe('HIGH');
   }
   // 回调触发记录（此页面若全 HIGH 则为 0——两种结果都如实输出）
   console.log('disambiguation calls:', JSON.stringify(calls));
 
   // record.json 落盘内容与内存一致
   const disk = JSON.parse(await readFile(testInfo.outputPath('rec/record.json'), 'utf8'));
-  expect(disk.actions.filter((a: { type: string }) => a.type === 'click').length).toBe(clicks.length);
+  expect(disk.canonicalActions.filter((action: { kind: string; target?: unknown }) =>
+    action.kind === 'activate' && action.target,
+  ).length).toBe(clicks.length);
 });
 
 test('快速连续点击的两个 LOW 动作分别持有自己的 oracle', async ({ browserName }, testInfo) => {
@@ -121,7 +122,6 @@ test('快速连续点击的两个 LOW 动作分别持有自己的 oracle', async
   let stop!: () => void;
   const stopSignal = new Promise<void>((resolve) => { stop = resolve; });
   await record({
-    recorderPath: 'legacy',
     entry: oaEntry,
     profileDir: profile,
     outDir: testInfo.outputPath('rec-race'),

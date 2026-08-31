@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { detectParams } from './params.js';
 import { generateDraft } from './draft.js';
+import { testSession, type MutableTestSession } from './test-session-fixture.js';
 
 const NO_CAUSALITY = {
   actionIdx: null,
@@ -13,13 +14,19 @@ const NO_CAUSALITY = {
 describe('detectParams', () => {
   it('uses the standard DOM name instead of a business-label dictionary', () => {
     const session = recording('工作日加班', 'unused');
-    session.actions = [{ ts: 1, type: 'select', label: '请假类型', name: 'type', value: '年假' }];
+    session.events = [{ ts: 1, type: 'select', label: '请假类型', name: 'type', value: '年假' }];
     session.network = [{
       ...NO_CAUSALITY,
       requestId: 'types', requestTs: 0.5, responseTs: 0.8, method: 'GET',
       url: 'http://oa/api/leave/types', resourceType: 'fetch', headers: {}, postData: null,
       status: 200, responseBody: JSON.stringify([{ label: '年假', value: 'annual' }]),
       mutating: false, sanitizeMode: 'structured',
+    }, {
+      ...NO_CAUSALITY,
+      actionIdx: 0, causality: 'active-action', requestId: 'write', requestTs: 2, responseTs: 3,
+      method: 'POST', url: 'http://oa/api/write', resourceType: 'fetch',
+      headers: { 'content-type': 'application/json' }, postData: '{"type":"年假"}',
+      status: 200, responseBody: '{}', mutating: true, sanitizeMode: 'structured',
     }];
 
     expect(detectParams(session)[0]?.definition.name).toBe('type');
@@ -37,8 +44,11 @@ describe('detectParams', () => {
     expect(candidates.find((item) => item.definition.name === 'type')?.definition).toEqual(
       expect.objectContaining({
         type: 'enum',
-        values: [{ label: '工作日加班', value: 'workday' }],
-        enumMap: { 工作日加班: 'workday' },
+        values: [
+          { label: '工作日加班', value: 'workday' },
+          { label: '周末加班', value: 'weekend' },
+        ],
+        enumMap: { 工作日加班: 'workday', 周末加班: 'weekend' },
       }),
     );
     expect(candidates.find((item) => item.definition.name === 'startTime')?.definition.type).toBe(
@@ -76,7 +86,7 @@ describe('detectParams', () => {
     });
 
     const type = detectParams(session).find((item) => item.definition.name === 'type')?.definition;
-    expect(type?.enumMap).toEqual({ 工作日加班: 'workday' });
+    expect(type?.enumMap).toBeUndefined();
   });
 
   it('freezes a complete DOM option set only after cross-record stability evidence', () => {
@@ -86,12 +96,12 @@ describe('detectParams', () => {
       { label: '工作日加班', value: 'workday' },
       { label: '周末加班', value: 'weekend' },
     ];
-    first.actions[0] = {
-      ...first.actions[0]!, target: { strategy: 'css', selector: '#kind' },
+    first.events[0] = {
+      ...first.events[0]!, target: { strategy: 'css', selector: '#kind' },
       enumOptions: { items, complete: true },
     };
-    second.actions[0] = {
-      ...second.actions[0]!, target: { strategy: 'css', selector: '#kind' },
+    second.events[0] = {
+      ...second.events[0]!, target: { strategy: 'css', selector: '#kind' },
       enumOptions: { items, complete: true },
     };
 
@@ -103,25 +113,25 @@ describe('detectParams', () => {
   it('V-108-8: marks an upstream-linked changed option set contextual instead of freezing it', () => {
     const first = recording('工作日加班', 'first-reason');
     const second = recording('纽约', 'second-reason');
-    first.actions[0] = {
-      ...first.actions[0]!, target: { strategy: 'css', selector: '#kind' },
+    first.events[0] = {
+      ...first.events[0]!, target: { strategy: 'css', selector: '#kind' },
       enumOptions: {
         items: [{ label: '工作日加班', value: 'workday' }, { label: '周末加班', value: 'weekend' }],
         complete: true,
       },
     };
-    second.actions[0] = {
-      ...second.actions[0]!, target: { strategy: 'css', selector: '#kind' },
+    second.events[0] = {
+      ...second.events[0]!, target: { strategy: 'css', selector: '#kind' },
       enumOptions: {
         items: [{ label: '纽约', value: 'nyc' }, { label: '旧金山', value: 'sfo' }],
         complete: true,
       },
     };
-    first.actions.unshift({
+    first.events.unshift({
       ts: 0.5, type: 'select', value: 'scope-a',
       target: { strategy: 'css', selector: '#upstream' },
     });
-    second.actions.unshift({
+    second.events.unshift({
       ts: 0.5, type: 'select', value: 'scope-b',
       target: { strategy: 'css', selector: '#upstream' },
     });
@@ -135,12 +145,11 @@ describe('detectParams', () => {
 
   it('accepts response options only with recorded response-to-control evidence and no variable context', () => {
     const session = recording('工作日加班', 'reason');
-    session.actions.unshift({
+    session.events.unshift({
       ts: 0.4, type: 'click', target: { strategy: 'css', selector: '#load' },
-      waitAfter: { notEmpty: { strategy: 'css', selector: '#kind' } },
     });
-    session.actions[1] = {
-      ...session.actions[1]!, target: { strategy: 'css', selector: '#kind' }, text: '工作日加班',
+    session.events[1] = {
+      ...session.events[1]!, target: { strategy: 'css', selector: '#kind' }, text: '工作日加班',
     };
     session.network = [{
       ...NO_CAUSALITY,
@@ -152,7 +161,7 @@ describe('detectParams', () => {
         { label: '工作日加班', value: 'workday' }, { label: '周末加班', value: 'weekend' },
       ]),
       mutating: false, sanitizeMode: 'structured',
-    }];
+    }, ...session.network.filter((request) => request.mutating)];
 
     expect(detectParams(session).find((item) => item.definition.name === 'type')?.definition.enumMap)
       .toEqual({ 工作日加班: 'workday', 周末加班: 'weekend' });
@@ -160,22 +169,65 @@ describe('detectParams', () => {
 
   it('keeps distinct DOM sources separate when names and recorded values collide', () => {
     const session = recording('one', 'two');
-    session.actions = [
+    session.events = [
       { ts: 1, type: 'fill', name: 'shared', value: 'same', target: { strategy: 'css', selector: '#first' } },
       { ts: 2, type: 'fill', name: 'shared', value: 'same', target: { strategy: 'css', selector: '#second' } },
     ];
-    session.network = [];
+    session.network = [{
+      ...NO_CAUSALITY,
+      actionIdx: 1, causality: 'active-action', requestId: 'write', requestTs: 3, responseTs: 4,
+      method: 'POST', url: 'http://oa/api/write', resourceType: 'fetch',
+      headers: { 'content-type': 'application/json' },
+      postData: '{"first":"same","second":"same"}', status: 200, responseBody: '{}',
+      mutating: true, sanitizeMode: 'structured',
+    }];
 
-    expect(detectParams(session).map((item) => item.definition.name)).toEqual([
-      'shared',
-      'shared_2',
-    ]);
+    expect(detectParams(session).map((item) => item.definition.name)).toEqual(['shared', 'shared_2']);
+  });
+
+  it('keeps distinct request fields when one source supplies multiple wire representations', () => {
+    const session = testSession({
+      meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture', userAgent: '', entryId: 'fixture' },
+      pages: [],
+      events: [{ ts: 1, type: 'fill', value: 'same', target: { strategy: 'css', selector: '#editor' } }],
+      network: [{
+        ...NO_CAUSALITY, actionIdx: 0, causality: 'active-action', requestId: 'write',
+        requestTs: 2, responseTs: 3, method: 'POST', url: 'http://fixture/write',
+        resourceType: 'fetch', headers: { 'content-type': 'application/json' },
+        postData: '{"html":"same","text":"same"}', status: 200, responseBody: '{}',
+        mutating: true, sanitizeMode: 'structured',
+      }],
+    });
+
+    expect(detectParams(session).map((item) => item.definition.name)).toEqual(['html', 'text']);
+  });
+
+  it('names an aggregate request value by its wire field instead of a scalar editor name', () => {
+    const session = testSession({
+      meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture', userAgent: '', entryId: 'fixture' },
+      pages: [],
+      events: [{
+        ts: 1, type: 'fill', name: 'tagInput', value: 'second',
+        target: { strategy: 'css', selector: '#tag-input' },
+      }],
+      network: [{
+        ...NO_CAUSALITY, actionIdx: 0, causality: 'active-action', requestId: 'write',
+        requestTs: 2, responseTs: 3, method: 'POST', url: 'http://fixture/write',
+        resourceType: 'fetch', headers: { 'content-type': 'application/json' },
+        postData: '{"tags":["first","second"]}', status: 200, responseBody: '{}',
+        mutating: true, sanitizeMode: 'structured',
+      }],
+    });
+
+    expect(detectParams(session)[0]?.definition).toEqual(expect.objectContaining({
+      name: 'tags', type: 'json',
+    }));
   });
 
   it('models a request value found only in a causally owned non-form DOM mutation as internal page-derived', () => {
     const session: RecordSession = {
       meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture', userAgent: '', entryId: 'fixture' },
-      actions: [], recorderPath: 'canonical', pages: [],
+      pages: [],
       canonicalActions: [{
         id: 'a0', actionIdx: 0, timestamp: 1, kind: 'activate',
         target: {
@@ -216,7 +268,7 @@ describe('detectParams', () => {
   it('treats a causally changed standard form value as caller input, not page-derived', () => {
     const session: RecordSession = {
       meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture', userAgent: '', entryId: 'fixture' },
-      actions: [], recorderPath: 'canonical', pages: [],
+      pages: [],
       canonicalActions: [{
         id: 'a0', actionIdx: 0, timestamp: 1, kind: 'activate',
         target: { tag: 'button', role: 'button', accessibleName: '18', locatorEvidence: { generatedSelector: '#day18', confidence: 'HIGH' } },
@@ -245,11 +297,11 @@ describe('detectParams', () => {
   it('maps canonical DOM option labels to a unique context-free response value set', () => {
     const session: RecordSession = {
       meta: { startedAt: '', endedAt: '', baseUrl: 'http://fixture', userAgent: '', entryId: 'fixture' },
-      actions: [], recorderPath: 'canonical', pages: [],
+      pages: [],
       canonicalActions: [{
         id: 'a0', actionIdx: 0, timestamp: 20, kind: 'select',
         target: {
-          role: 'combobox', accessibleName: 'Choice',
+          role: 'combobox', accessibleName: 'Choice', name: 'searchText',
           locatorEvidence: { generatedSelector: '#choice', confidence: 'HIGH' },
         },
         after: {
@@ -295,17 +347,39 @@ describe('detectParams', () => {
   });
 });
 
-function recording(type: string, reason: string): RecordSession {
-  return {
+function recording(type: string, reason: string): MutableTestSession {
+  return testSession({
     meta: { startedAt: '', endedAt: '', baseUrl: 'http://oa', userAgent: 'Chrome', entryId: 'oa' },
-    actions: [
-      { ts: 1, type: 'select', label: '加班类型', name: 'type', value: type },
+    events: [
+      {
+        ts: 1, type: 'select', label: '加班类型', name: 'type', value: type,
+        affectedTruncated: false,
+        affected: [
+          {
+            locator: { strategy: 'playwright', selector: 'internal:role=option[name="工作日加班"i]', confidence: 'HIGH' },
+            state: { textContent: '工作日加班' },
+          },
+          {
+            locator: { strategy: 'playwright', selector: 'internal:role=option[name="周末加班"i]', confidence: 'HIGH' },
+            state: { textContent: '周末加班' },
+          },
+        ],
+      },
       { ts: 2, type: 'datetime', label: '开始时间', name: 'startTime', value: '2026-08-18 18:00:00' },
       { ts: 3, type: 'datetime', label: '结束时间', name: 'endTime', value: '2026-08-18 21:00:00' },
       { ts: 4, type: 'fill', label: '事由', name: 'reason', value: reason },
       { ts: 5, type: 'fill', label: 'csrfToken', value: 'secret' },
     ],
     network: [
+      {
+        ...NO_CAUSALITY,
+        requestId: 'types', requestTs: 0.2, responseTs: 0.4, method: 'GET',
+        url: 'http://oa/api/overtime/types', resourceType: 'fetch', headers: {}, postData: null,
+        status: 200, responseBody: JSON.stringify([
+          { label: '工作日加班', value: 'workday' }, { label: '周末加班', value: 'weekend' },
+        ]),
+        mutating: false, sanitizeMode: 'structured',
+      },
       {
         ...NO_CAUSALITY,
         actionIdx: 0,
@@ -329,7 +403,23 @@ function recording(type: string, reason: string): RecordSession {
         mutating: true,
         sanitizeMode: 'structured',
       },
+      {
+        ...NO_CAUSALITY,
+        actionIdx: 4,
+        causality: 'active-action',
+        causalityDebug: {
+          targetKey: 'button|submit||0', kind: 'click', valueAtRequest: null, msSinceTouched: 10,
+        },
+        requestId: 'submit', requestTs: 5.1, responseTs: 5.2, method: 'POST',
+        url: 'http://oa/api/overtime/submit', resourceType: 'fetch',
+        headers: { 'content-type': 'application/json' },
+        postData: JSON.stringify({
+          type: type === '工作日加班' ? 'workday' : 'weekend',
+          startTime: '2026-08-18 18:00:00', endTime: '2026-08-18 21:00:00', reason,
+        }),
+        status: 200, responseBody: '{}', mutating: true, sanitizeMode: 'structured',
+      },
     ],
     pages: [],
-  };
+  });
 }

@@ -24,14 +24,14 @@ test('heal-execute: read/fill 修复成功后写回且 YAML 可解析', async ({
     id: 'reason', desc: '填写事由', channel: 'ui', riskLevel: 'read', hasSideEffect: false,
     ui: {
       action: 'fill',
-      target: { strategy: 'el-form-item', label: '事由', kind: 'textarea' },
+      target: { strategy: 'label', label: '事由', kind: 'textarea' },
       value: '版本上线',
     },
   });
   const { path } = await skillFile(skill);
   const candidate = healCandidate('reason',
-    { strategy: 'el-form-item', label: '事由', kind: 'textarea' },
-    { strategy: 'el-form-item', label: '加班原因', kind: 'textarea' }, false);
+    { strategy: 'label', label: '事由', kind: 'textarea' },
+    { strategy: 'label', label: '加班原因', kind: 'textarea' }, false);
 
   await expect(executeHeal({
     page, skill, skillPath: path, candidate, context: context(), reason: '字段改名',
